@@ -1,0 +1,231 @@
+{
+  "id": "air",
+  "version": "0.2.0",
+  "name": "AIR criteria",
+  "reportSchema": "0.2",
+  "principles": [
+    "Assess the work on its own logic and evidence. Do not score author credentials, institutional affiliation, reputation, or identity.",
+    "Untested is not the same as wrong. Physics defines what works. Absence of prior testing is not evidence of failure.",
+    "A result that challenges a known law is not an automatic fail. Score how well the work itself accounts for the clash, and open an issue so the account can be checked.",
+    "Logical and philosophical works are not penalised for being non-physical. Judge them on the rigour of the reasoning inside their class.",
+    "Quote the record. A score without a passage is an unsupported score. State your confidence on every criterion.",
+    "Estimated money figures are AI estimates with explicit assumptions. They are not facts and not investment advice.",
+    "This reading is an AI assessment. It can be wrong. It is not a formal journal peer review, not a certification, and not an endorsement."
+  ],
+  "scale": {
+    "min": 0,
+    "max": 10,
+    "labels": {
+      "0": "0–2: the criterion is largely unmet",
+      "5": "5–6: a fair attempt, still thin",
+      "9": "9–10: careful, complete, and easy to check"
+    }
+  },
+  "recommendationCategories": [
+    {
+      "id": "encourage",
+      "label": "Encourage further development",
+      "meaning": "The core idea is clear and the support is strong enough to build on, with only modest gaps."
+    },
+    {
+      "id": "revise",
+      "label": "Promising, needs revision",
+      "meaning": "Worth continued work. Specific gaps should be closed before a reader relies on the claims."
+    },
+    {
+      "id": "major-revision",
+      "label": "Major revision required",
+      "meaning": "The record has a real subject, but evidence, feasibility, or consistency is not yet strong enough."
+    },
+    {
+      "id": "not-ready",
+      "label": "Not ready for reliance",
+      "meaning": "Central claims are unclear, untested in a way the text hides, or contradicted by the record's own account."
+    }
+  ],
+  "ideaCriterionIds": ["impact", "global-goals"],
+  "criteria": [
+    {
+      "id": "impact",
+      "name": "Impact",
+      "description": "Scale and breadth of benefit for markets, society, or the public interest, if the claims held.",
+      "weight": 1.4,
+      "guidance": "Score the pathway from the claim to a benefit someone can name. A grand benefit with no connecting mechanism scores below a smaller benefit the text actually traces. Quote the sentence that states who benefits.",
+      "bands": [
+        { "min": 0, "max": 2, "label": "No stated benefit, or a benefit with no link to the claim." },
+        { "min": 3, "max": 4, "label": "A narrow or vague benefit." },
+        { "min": 5, "max": 6, "label": "A plausible benefit for a defined group." },
+        { "min": 7, "max": 8, "label": "A wide benefit with a traceable pathway." },
+        { "min": 9, "max": 10, "label": "A broad public or market benefit, scoped and connected to the claim." }
+      ]
+    },
+    {
+      "id": "feasibility",
+      "name": "Feasibility",
+      "description": "Whether a stranger could see a path to build, run, or test the claim with the materials, steps, and constraints the record gives.",
+      "weight": 1.3,
+      "guidance": "Weigh this beside impact. Do not treat a hard problem as a failed one. Score the path that is written down: parts, skills, cost drivers, and the next experiment. Missing steps that the conclusion depends on lower the score.",
+      "bands": [
+        { "min": 0, "max": 2, "label": "No path from claim to a build or a test." },
+        { "min": 3, "max": 4, "label": "A sketch with essential steps missing." },
+        { "min": 5, "max": 6, "label": "A partial path a specialist could continue." },
+        { "min": 7, "max": 8, "label": "Steps, constraints, and a next test are written down." },
+        { "min": 9, "max": 10, "label": "A stranger could follow the path with the public record." }
+      ]
+    },
+    {
+      "id": "world-class",
+      "name": "Physical or metaphysical class",
+      "description": "What kind of claim this is, and how viable and testable it is inside that class.",
+      "weight": 1,
+      "guidance": "Classify as physical-testable, physical-not-yet-testable, logical-mathematical, or metaphysical-philosophical. Then score rigour inside that class. A proof is not marked down for lacking a laboratory. A physical device is not marked up for using philosophical language. State the class in ontologyClass.",
+      "bands": [
+        { "min": 0, "max": 2, "label": "The class is unclear, or the reasoning inside it does not hold." },
+        { "min": 3, "max": 4, "label": "Class is named but the standard for that class is barely met." },
+        { "min": 5, "max": 6, "label": "Class is clear and the reasoning is adequate for it." },
+        { "min": 7, "max": 8, "label": "The work meets the usual standard of its class." },
+        { "min": 9, "max": 10, "label": "The class is explicit and the reasoning is tight enough to check." }
+      ]
+    },
+    {
+      "id": "testability",
+      "name": "Objective viability and testability",
+      "description": "Whether there is a clear test, measurement, derivation, or observation that would prove or falsify the claim.",
+      "weight": 1.3,
+      "guidance": "Untested is not the same as wrong. Score the presence of a decisive check, not whether that check has already been run. A logical claim is testable by counterexample or derivation. Quote the passage that says what would count as failure.",
+      "bands": [
+        { "min": 0, "max": 2, "label": "Nothing in the record could show the claim to be wrong." },
+        { "min": 3, "max": 4, "label": "A check is hinted at but not specified." },
+        { "min": 5, "max": 6, "label": "A check is described, with gaps in measure or stopping rule." },
+        { "min": 7, "max": 8, "label": "A reader could run or follow a decisive check." },
+        { "min": 9, "max": 10, "label": "The falsifier is explicit, measurable, and matched to the claim." }
+      ]
+    },
+    {
+      "id": "simulation",
+      "name": "Simulation evidence",
+      "description": "Quality and quantity of reported simulations: how many, how many passed, methods and tools, and whether inputs or code are public.",
+      "weight": 0.9,
+      "guidance": "Count only simulations the record reports. If the work is not the kind that uses simulation, say so, score the honesty of that choice, and do not invent runs. Fill simulation.reported, simulation.passed, methods, and inputsAvailable. Unknown counts are null, not zero.",
+      "bands": [
+        { "min": 0, "max": 2, "label": "Simulations are claimed with no count, method, or result." },
+        { "min": 3, "max": 4, "label": "A run is mentioned without enough detail to judge it." },
+        { "min": 5, "max": 6, "label": "Some runs, tools, or results are described." },
+        { "min": 7, "max": 8, "label": "Counts, outcomes, and tools are stated, with partial inputs." },
+        { "min": 9, "max": 10, "label": "Counts, pass results, tools, and inputs or code are public." }
+      ]
+    },
+    {
+      "id": "physics",
+      "name": "Physics consistency",
+      "description": "How the account sits against known laws and current understanding, and how well the work addresses any clash.",
+      "weight": 1.3,
+      "guidance": "Name the laws you actually used, such as conservation of energy, momentum, thermodynamics, or electromagnetism. Classify as CONSISTENT, EXTENDS, or CHALLENGES. CHALLENGES is not an automatic fail: score how completely the work accounts for the clash, for example by identifying the energy source. Quote both the claim and the accounting. Put the class in physics.classification.",
+      "bands": [
+        { "min": 0, "max": 2, "label": "A clash with a named law is left unaddressed." },
+        { "min": 3, "max": 4, "label": "A possible clash is noted weakly, or units and laws are muddled." },
+        { "min": 5, "max": 6, "label": "Consistent enough, or a challenge with a partial account." },
+        { "min": 7, "max": 8, "label": "Laws are named and the account matches them, or a challenge is met with a clear accounting." },
+        { "min": 9, "max": 10, "label": "A careful match to named laws, with the passages a physicist can check." }
+      ]
+    },
+    {
+      "id": "estimated-value",
+      "name": "Estimated project value",
+      "description": "An AI estimate of market disruption, addressable market, units that could be sold, value per unit, and overall financial benefit.",
+      "weight": 0.7,
+      "guidance": "Always label this as an AI estimate. Give low, central, and high ranges. List the assumptions. Default confidence is low. If the record has no market facts, say the figures are not grounded and keep the ranges wide or mark them as not estimated. Never present a figure as a fact or as investment advice.",
+      "bands": [
+        { "min": 0, "max": 2, "label": "A money claim with no assumption a reader can see." },
+        { "min": 3, "max": 4, "label": "A vague market story." },
+        { "min": 5, "max": 6, "label": "A benefit is scoped, with thin market evidence." },
+        { "min": 7, "max": 8, "label": "Ranges and assumptions are explicit and tied to the record." },
+        { "min": 9, "max": 10, "label": "Ranges, units, and assumptions are public and easy to revise." }
+      ]
+    },
+    {
+      "id": "global-goals",
+      "name": "Global goals alignment",
+      "description": "Which documented public goals the work addresses, how directly, and what contribution the record itself supports.",
+      "weight": 1.1,
+      "guidance": "Use only the goals in criteria/global-goals.json. For each goal set a level: none, indirect, partial, or direct. Quote the passage that creates the link. Do not award direct alignment for a slogan. A work that addresses none of these goals can still score well on other criteria; say that plainly.",
+      "bands": [
+        { "min": 0, "max": 2, "label": "A goal is claimed with no link in the text." },
+        { "min": 3, "max": 4, "label": "A loose or indirect link to one goal." },
+        { "min": 5, "max": 6, "label": "One goal is addressed in part, with a passage." },
+        { "min": 7, "max": 8, "label": "One or more goals are addressed directly and the limit of that claim is stated." },
+        { "min": 9, "max": 10, "label": "Direct links, with a bounded estimate of contribution a reader can check." }
+      ]
+    },
+    {
+      "id": "clarity",
+      "name": "Clarity of claims",
+      "description": "A reader can point to what is claimed, for whom, and under which conditions.",
+      "weight": 0.4,
+      "guidance": "Look for an explicit claim and what would count as it being wrong. Quote that sentence.",
+      "bands": [
+        { "min": 0, "max": 2, "label": "No proposition a reader can restate." },
+        { "min": 3, "max": 4, "label": "The claim is cloudy or unbounded." },
+        { "min": 5, "max": 6, "label": "The claim can be restated, with fuzzy edges." },
+        { "min": 7, "max": 8, "label": "Claim, scope, and conditions are clear." },
+        { "min": 9, "max": 10, "label": "A stranger can point to the sentence that carries the claim." }
+      ]
+    },
+    {
+      "id": "consistency",
+      "name": "Internal consistency",
+      "description": "Numbers, units, and derivations agree with each other across the record.",
+      "weight": 0.5,
+      "guidance": "Check units and whether a later section contradicts an earlier one. If there are no quantities, score the consistency of the qualitative claims and say so.",
+      "bands": [
+        { "min": 0, "max": 2, "label": "The record contradicts itself on a point the conclusion needs." },
+        { "min": 3, "max": 4, "label": "Units or steps conflict and are not resolved." },
+        { "min": 5, "max": 6, "label": "Mostly consistent, with a loose end." },
+        { "min": 7, "max": 8, "label": "Numbers and claims agree across the files you read." },
+        { "min": 9, "max": 10, "label": "Units, derivations, and later sections match." }
+      ]
+    },
+    {
+      "id": "evidence-labelling",
+      "name": "Evidence and speculation",
+      "description": "Observations, calculations, and speculation are labelled as what they are.",
+      "weight": 0.5,
+      "guidance": "A reader should be able to tell a measurement from a hypothesis from a hope. Penalise results language used for unrun experiments.",
+      "bands": [
+        { "min": 0, "max": 2, "label": "Hope is written as a result." },
+        { "min": 3, "max": 4, "label": "Labels slip on claims the conclusion needs." },
+        { "min": 5, "max": 6, "label": "Most claims are labelled, with one blur." },
+        { "min": 7, "max": 8, "label": "Evidence and speculation are easy to separate." },
+        { "min": 9, "max": 10, "label": "Every strong conclusion is marked as measured, derived, or still open." }
+      ]
+    },
+    {
+      "id": "availability",
+      "name": "Data and code availability",
+      "description": "The artefacts needed to check the work are public, or their absence is explained.",
+      "weight": 0.4,
+      "guidance": "Use the Zenodo files and the text. A public file that does not match the claim is not availability.",
+      "bands": [
+        { "min": 0, "max": 2, "label": "The check depends on artefacts that are missing and unexplained." },
+        { "min": 3, "max": 4, "label": "Files exist but do not match the claim." },
+        { "min": 5, "max": 6, "label": "Some of the needed files are public." },
+        { "min": 7, "max": 8, "label": "A reader can find the data or code the claim uses." },
+        { "min": 9, "max": 10, "label": "Data, code, or a justified absence is public and identified." }
+      ]
+    },
+    {
+      "id": "limitations",
+      "name": "Limitations",
+      "description": "The record says how it could fail and what it does not show.",
+      "weight": 0.4,
+      "guidance": "Look for limits and alternative explanations. A limitation that only asks for more funding scores low.",
+      "bands": [
+        { "min": 0, "max": 2, "label": "No limit is stated where the claim is strong." },
+        { "min": 3, "max": 4, "label": "A limit is decorative." },
+        { "min": 5, "max": 6, "label": "A real limit is named, without a consequence." },
+        { "min": 7, "max": 8, "label": "Limits are specific and tied to the claim." },
+        { "min": 9, "max": 10, "label": "The record says what it does not show and what would falsify it." }
+      ]
+    }
+  ]
+}

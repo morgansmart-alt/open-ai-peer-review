@@ -1,0 +1,118 @@
+{
+  "id": "air",
+  "version": "0.1.0",
+  "name": "AIR Peer Review Criteria",
+  "principles": [
+    "Assess the work on its own logic and evidence. Do not score author credentials, institutional affiliation, reputation, or identity.",
+    "Be constructive, specific, and actionable. Every criticism should say what would resolve it.",
+    "Label evidence and speculation separately. Do not treat a confident tone as support.",
+    "Quote the record. A score without a passage is an unsupported score.",
+    "This reading is an AI assessment against a public criteria set. It is not a formal journal peer review and it is not an endorsement."
+  ],
+  "scale": {
+    "min": 1,
+    "max": 5,
+    "labels": {
+      "1": "Serious concerns — the criterion is largely unmet",
+      "2": "Weak — present in part, with important gaps",
+      "3": "Adequate — a fair attempt, still thin in places",
+      "4": "Strong — clear, supported, and usable",
+      "5": "Exemplary — careful, complete, and easy to check"
+    }
+  },
+  "recommendationCategories": [
+    {
+      "id": "encourage",
+      "label": "Encourage further development",
+      "meaning": "The core idea is clear and the support is strong enough to build on, with only modest gaps."
+    },
+    {
+      "id": "revise",
+      "label": "Promising, needs revision",
+      "meaning": "Worth continued work. Specific gaps should be closed before a reader relies on the claims."
+    },
+    {
+      "id": "major-revision",
+      "label": "Major revision required",
+      "meaning": "The record has a real subject, but evidence, method, or consistency is not yet strong enough."
+    },
+    {
+      "id": "not-ready",
+      "label": "Not ready for reliance",
+      "meaning": "Central claims are unclear, unsupported, or contradicted by the record's own numbers."
+    }
+  ],
+  "ideaCriterionIds": ["novelty-context", "potential-impact"],
+  "criteria": [
+    {
+      "id": "clarity",
+      "name": "Clarity of claims",
+      "description": "A reader can point to what is being claimed, for whom, and under which conditions.",
+      "weight": 1.2,
+      "guidance": "Look for an explicit claim, scope, and what would count as the claim being wrong. Vague aspiration without a proposition scores low. Quote the sentences that state the claim."
+    },
+    {
+      "id": "novelty-context",
+      "name": "Novelty and context",
+      "description": "The work says what is new and how that sits against prior public work.",
+      "weight": 1.1,
+      "guidance": "Credit a clear delta from prior work. Do not require famous citations, but do expect the record to locate itself. Prior-work silence is a gap, not proof of originality."
+    },
+    {
+      "id": "potential-impact",
+      "name": "Potential impact",
+      "description": "If the claims held, the change for practice, knowledge, or design would matter.",
+      "weight": 1,
+      "guidance": "Score the stated impact pathway, not the prestige of the field. Grand impact with no mechanism connecting claim to consequence should not score as high as a smaller, traceable one."
+    },
+    {
+      "id": "methodology",
+      "name": "Methodology and reproducibility",
+      "description": "Someone else could retrace the method: materials, steps, assumptions, and what was measured.",
+      "weight": 1.3,
+      "guidance": "Reward procedures, parameters, and data paths that a stranger could follow. Penalise missing steps that the conclusion depends on. Code or a worked example counts when the claim is computational."
+    },
+    {
+      "id": "consistency",
+      "name": "Internal consistency",
+      "description": "Numbers, units, and derivations agree with each other across the record.",
+      "weight": 1.3,
+      "guidance": "Check units, orders of magnitude, and whether a later section contradicts an earlier equation. Cite both passages when they disagree. If the record has no quantities, say so and score the consistency of its qualitative claims."
+    },
+    {
+      "id": "evidence-labelling",
+      "name": "Evidence and speculation",
+      "description": "Observations, calculations, and speculation are labelled as what they are.",
+      "weight": 1.2,
+      "guidance": "High scores mean a reader can tell a measurement from a hypothesis from a hope. Penalise results language used for unrun experiments or unverified models."
+    },
+    {
+      "id": "availability",
+      "name": "Data and code availability",
+      "description": "The artefacts needed to check the work are public, or their absence is justified.",
+      "weight": 1,
+      "guidance": "Use the Zenodo files and the text. A public file that does not match the claim is not availability. Private data with a clear reason can still score adequately."
+    },
+    {
+      "id": "limitations",
+      "name": "Limitations and falsifiability",
+      "description": "The record says how it could fail and what it does not show.",
+      "weight": 1.1,
+      "guidance": "Look for limits, alternative explanations, and a check that could falsify the central claim. A limitation section that only asks for more funding scores low."
+    },
+    {
+      "id": "ethics",
+      "name": "Ethics and safety",
+      "description": "Foreseeable harm, dual use, and effects on people or environments are faced directly.",
+      "weight": 0.9,
+      "guidance": "Scale the bar to the claim. A methods note on a harmless dataset needs less than a proposal for medical, environmental, or high-stakes deployment. Do not invent harms the work does not imply."
+    },
+    {
+      "id": "presentation",
+      "name": "Presentation",
+      "description": "Structure, language, figures, and file organisation let a reader check the work.",
+      "weight": 0.7,
+      "guidance": "Score navigability and precision of language. Do not score prestige or polish that does not affect understanding. Note which file holds which part of the argument when the record has several files."
+    }
+  ]
+}

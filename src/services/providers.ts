@@ -1,0 +1,139 @@
+import { keySlot } from "../domain/assessors.ts"
+import type { AssessorProfile, ProviderSettings } from "../domain/types.ts"
+
+export interface ChatRequest {
+  model: string
+  system: string
+  user: string
+  json: boolean
+  signal?: AbortSignal
+}
+
+export function resolvedModel(profile: AssessorProfile, settings: ProviderSettings): string {
+  return settings.models[profile.id]?.trim() || profile.defaultModel
+}
+
+export function resolvedBaseUrl(profile: AssessorProfile, settings: ProviderSettings): string {
+  const slot = keySlot(profile)
+  return (settings.baseUrls[slot] || settings.baseUrls[profile.provider] || profile.defaultBaseUrl).replace(/\/$/, "")
+}
+
+export function resolvedKey(profile: AssessorProfile, settings: ProviderSettings): string {
+  return settings.keys[keySlot(profile)]?.trim() || settings.keys[profile.provider]?.trim() || ""
+}
+
+function clipError(status: number, body: string): string {
+  const cleaned = body.replace(/sk-[a-zA-Z0-9_-]{8,}/g, "[redacted]").slice(0, 280)
+  if (status === 401 || status === 403) return "The provider refused that API key."
+  if (status === 429) return "The provider rate-limited this key. Wait a moment and try again."
+  if (status === 404) return "The provider did not recognise that model or URL. Check the model id and base URL."
+  return `The provider returned ${status}. ${cleaned}`
+}
+
+async function postJson(url: string, headers: Record<string, string>, body: unknown, signal?: AbortSignal): Promise<string> {
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal,
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error
+    throw new Error(
+      "The browser could not complete this call. If the provider blocks cross-origin requests, point the OpenAI-compatible base URL at a host that allows them (OpenRouter and xAI do).",
+    )
+  }
+  const text = await response.text()
+  if (!response.ok) throw new Error(clipError(response.status, text))
+  return text
+}
+
+function openAiCompatible(baseUrl: string, key: string, request: ChatRequest, extraHeaders: Record<string, string> = {}): Promise<string> {
+  return postJson(
+    `${baseUrl}/chat/completions`,
+    {
+      authorization: `Bearer ${key}`,
+      "content-type": "application/json",
+      ...extraHeaders,
+    },
+    {
+      model: request.model,
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: request.system },
+        { role: "user", content: request.user },
+      ],
+      ...(request.json ? { response_format: { type: "json_object" } } : {}),
+    },
+    request.signal,
+  ).then((raw) => {
+    const parsed = JSON.parse(raw) as { choices?: { message?: { content?: string } }[] }
+    const content = parsed.choices?.[0]?.message?.content
+    if (!content) throw new Error("The provider returned an empty completion.")
+    return content
+  })
+}
+
+async function anthropic(baseUrl: string, key: string, request: ChatRequest): Promise<string> {
+  const raw = await postJson(
+    `${baseUrl}/v1/messages`,
+    {
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+      "content-type": "application/json",
+    },
+    {
+      model: request.model,
+      max_tokens: 4096,
+      temperature: 0.2,
+      system: request.system,
+      messages: [{ role: "user", content: request.user }],
+    },
+    request.signal,
+  )
+  const parsed = JSON.parse(raw) as { content?: { type?: string; text?: string }[] }
+  const text = parsed.content?.find((block) => block.type === "text")?.text ?? parsed.content?.[0]?.text
+  if (!text) throw new Error("Claude returned an empty message.")
+  return text
+}
+
+async function gemini(baseUrl: string, key: string, request: ChatRequest): Promise<string> {
+  const raw = await postJson(
+    `${baseUrl}/models/${encodeURIComponent(request.model)}:generateContent`,
+    {
+      "x-goog-api-key": key,
+      "content-type": "application/json",
+    },
+    {
+      systemInstruction: { parts: [{ text: request.system }] },
+      contents: [{ role: "user", parts: [{ text: request.user }] }],
+      generationConfig: {
+        temperature: 0.2,
+        ...(request.json ? { responseMimeType: "application/json" } : {}),
+      },
+    },
+    request.signal,
+  )
+  const parsed = JSON.parse(raw) as { candidates?: { content?: { parts?: { text?: string }[] } }[] }
+  const text = parsed.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("")
+  if (!text) throw new Error("Gemini returned an empty message.")
+  return text
+}
+
+export async function completeChat(profile: AssessorProfile, settings: ProviderSettings, request: ChatRequest): Promise<string> {
+  const key = resolvedKey(profile, settings)
+  if (!key) throw new Error(`Add a ${profile.name} API key first, or switch on demo mode.`)
+  const baseUrl = resolvedBaseUrl(profile, settings)
+  const model = request.model || resolvedModel(profile, settings)
+  const ready = { ...request, model }
+  if (profile.provider === "anthropic") return anthropic(baseUrl, key, ready)
+  if (profile.provider === "gemini") return gemini(baseUrl, key, ready)
+  const headers: Record<string, string> =
+    profile.provider === "openrouter"
+      ? { "HTTP-Referer": "https://air-peer-review.local", "X-Title": "AIR Peer Review" }
+      : {}
+  return openAiCompatible(baseUrl, key, ready, headers)
+}
