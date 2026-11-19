@@ -37,7 +37,7 @@ export function Leaderboard() {
       .map(([keyword]) => keyword)
   }, [air.db])
 
-  if (!air.ready) return <p className="px-4 py-8 text-sm text-ink-soft">Opening the board…</p>
+  if (!air.ready && air.db.reviews.length === 0) return <p className="px-4 py-8 text-sm text-ink-soft">Opening the board…</p>
   if (!method) return null
 
   return (
@@ -86,7 +86,7 @@ export function Leaderboard() {
       </div>
       <div className="no-print mb-3 flex flex-wrap gap-2">
         {keywords.map((keyword) => (
-          <button key={keyword} type="button" className="rounded-full border border-line px-3 py-1 text-xs text-ink-soft hover:border-teal" onClick={() => setQuery(keyword)}>
+          <button key={keyword} type="button" aria-pressed={query.trim().toLowerCase() === keyword.toLowerCase()} className="rounded-full border border-line px-3 py-1 text-xs text-ink-soft hover:border-teal" onClick={() => setQuery(keyword)}>
             {keyword}
           </button>
         ))}
@@ -99,18 +99,18 @@ export function Leaderboard() {
             <caption className="sr-only">AIR leaderboard. Scores are AI assessments, not formal peer review.</caption>
             <thead>
               <tr className="text-left text-xs uppercase tracking-wide text-ink-soft">
-                <th className="sticky-col left-0 z-10 px-3 py-3">#</th>
-                <th className="sticky-col left-10 z-10 min-w-64 px-3 py-3">Work</th>
+                <th scope="col" className="sticky-col left-0 z-10 px-3 py-3">#</th>
+                <th scope="col" className="sticky-col left-10 z-10 min-w-64 px-3 py-3">Work</th>
                 {methods
                   .filter((item) => item.id === "panel" || item.id === "idea" || air.profiles.some((profile) => profile.id === item.id))
                   .map((item) => (
-                    <th key={item.id} className="px-2 py-3" aria-sort={item.id === method.id ? "descending" : "none"}>
+                    <th key={item.id} scope="col" className="px-2 py-3" aria-sort={item.id === method.id ? "descending" : "none"}>
                       <button type="button" className={cx("underline-offset-2 hover:underline", item.id === method.id && "font-semibold text-teal-deep")} onClick={() => setMethodId(item.id)}>
                         {item.label}
                       </button>
                     </th>
                   ))}
-                <th className="px-3 py-3">Trust</th>
+                <th scope="col" className="px-3 py-3">Trust</th>
               </tr>
             </thead>
             {rows.map((row, index) => (

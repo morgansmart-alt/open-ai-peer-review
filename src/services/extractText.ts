@@ -1,14 +1,15 @@
-import { getDocument, GlobalWorkerOptions } from "pdfjs-dist"
-import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url"
 import { extensionOf } from "./zenodo.ts"
 import { decodeText, textFromMarkup } from "./textTools.ts"
 
-let workerReady = false
+let pdfjsPromise: Promise<typeof import("pdfjs-dist")> | null = null
 
-function ensureWorker(): void {
-  if (workerReady) return
-  GlobalWorkerOptions.workerSrc = workerUrl
-  workerReady = true
+function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
+  pdfjsPromise ??= import("pdfjs-dist").then(async (pdfjs) => {
+    const worker = await import("pdfjs-dist/build/pdf.worker.min.mjs?url")
+    pdfjs.GlobalWorkerOptions.workerSrc = worker.default
+    return pdfjs
+  })
+  return pdfjsPromise
 }
 
 export interface ExtractedDocument {
@@ -22,7 +23,7 @@ export interface ExtractedDocument {
 const PAGE_CAP = 40
 
 export async function extractPdf(data: ArrayBuffer): Promise<{ text: string; pages: number; note?: string }> {
-  ensureWorker()
+  const { getDocument } = await loadPdfjs()
   const pdf = await getDocument({ data: new Uint8Array(data), useSystemFonts: true }).promise
   const pageCount = pdf.numPages
   const limit = Math.min(pageCount, PAGE_CAP)

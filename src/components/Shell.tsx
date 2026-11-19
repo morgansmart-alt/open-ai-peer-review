@@ -46,7 +46,7 @@ export function Shell({ children }: { children: ReactNode }) {
                 {link.label}
               </NavLink>
             ))}
-            <button type="button" className="rounded-full px-3 py-1.5 text-sm text-ink-soft hover:text-ink" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+            <button type="button" className="rounded-full px-3 py-1.5 text-sm text-ink-soft hover:text-ink" aria-pressed={theme === "dark"} onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
               {theme === "dark" ? "Light" : "Dark"}
             </button>
             <button type="button" className="rounded-full px-3 py-1.5 text-sm text-ink-soft hover:text-ink" onClick={() => air.setKeysOpen(true)}>

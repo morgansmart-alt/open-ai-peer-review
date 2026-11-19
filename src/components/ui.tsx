@@ -4,6 +4,7 @@ export function ExternalLink({ href, className, children }: { href: string; clas
   return (
     <a href={href} className={className} target="_blank" rel="noopener noreferrer">
       {children}
+      <span className="sr-only"> (opens in a new tab)</span>
     </a>
   )
 }

@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://morgansmart-alt.github.io/open-ai-peer-review/sitemap.xml
