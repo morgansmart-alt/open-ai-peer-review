@@ -51,6 +51,15 @@ function spend(): string | null {
   return null
 }
 
+const PRIVATE_PAYLOAD_KEYS = new Set(["conversationLinks", "privateLinks", "chatUrl", "chatNote"])
+
+/** Drop private chat addresses before a row is stored. The count stays. */
+export function publicPayload<T>(value: T): T {
+  return JSON.parse(
+    JSON.stringify(value, (key, item) => (PRIVATE_PAYLOAD_KEYS.has(key) ? undefined : item)),
+  ) as T
+}
+
 function upsertLocal(review: StoredReview): void {
   const db = loadLocalDatabase()
   db.reviews = [...db.reviews.filter((item) => item.id !== review.id), review]
@@ -60,7 +69,7 @@ function upsertLocal(review: StoredReview): void {
 export async function publishReview(mode: BackendMode, review: StoredReview): Promise<string | null> {
   const limited = spend()
   if (limited) return limited
-  if (mode === "local" || review.mock) {
+  if (mode === "local" || review.mock || review.sample) {
     if (mode === "supabase" && review.mock) {
       const overlay = loadOverlay()
       overlay.reviews = [...overlay.reviews.filter((item) => item.id !== review.id), review]
@@ -85,7 +94,7 @@ export async function publishReview(mode: BackendMode, review: StoredReview): Pr
     custom_criteria: review.customCriteria,
     output_hash: review.outputHash,
     private_context_count: review.privateContextCount ?? 0,
-    payload: review,
+    payload: publicPayload(review),
   }
   const { error } = await sb.from("air_reviews").insert(row)
   if (error && /private_context_count/i.test(error.message)) {
@@ -119,7 +128,7 @@ export async function publishNode(mode: BackendMode, node: NodeSubmission): Prom
     review_id: node.reviewId,
     node_id: node.nodeId,
     private_context_count: node.privateContextCount ?? 0,
-    payload: node,
+    payload: publicPayload(node),
   }
   const { error } = await sb.from("air_nodes").insert(row)
   if (error && /private_context_count/i.test(error.message)) {
@@ -154,7 +163,7 @@ export async function publishIssues(mode: BackendMode, issues: IssueThread[], mo
       id: issue.id,
       doi: issue.doi,
       record_version: issue.recordVersion,
-      payload: issue,
+      payload: publicPayload(issue),
       updated_at: issue.updatedAt,
     })),
   )
@@ -177,7 +186,7 @@ export async function saveIssue(mode: BackendMode, issue: IssueThread): Promise<
   if (!sb) return "The shared board is not configured."
   const { error } = await sb
     .from("air_issues")
-    .update({ payload: issue, updated_at: issue.updatedAt })
+    .update({ payload: publicPayload(issue), updated_at: issue.updatedAt })
     .eq("id", issue.id)
   if (error) {
     const overlay = loadOverlay()
@@ -203,7 +212,7 @@ export async function publishClaim(mode: BackendMode, claim: AuthorClaim): Promi
   }
   const sb = client()
   if (!sb) return "The shared board is not configured."
-  const { error } = await sb.from("air_claims").upsert({ id: claim.id, doi: claim.doi, payload: claim })
+  const { error } = await sb.from("air_claims").upsert({ id: claim.id, doi: claim.doi, payload: publicPayload(claim) })
   if (error) return error.message
   return null
 }

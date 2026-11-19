@@ -29,7 +29,7 @@ export function HomePage() {
         <p className="mt-4 text-sm font-medium text-ink">Example rows are sample data, not judgements of real work.</p>
         <p className="mt-2 text-sm text-ink-soft">
           {air.mode === "supabase"
-            ? "Shared board connected. Published readings are stored without API keys."
+            ? "This is the shared global board. Readings you publish are stored for everyone, without API keys. Example rows stay labelled as samples and are not written to the shared board."
             : "This board lives in your browser, with sample rows so you can see the shape of it. Sample rows are not judgements of real work. Connect Supabase when you want a board other people share."}
           {air.backendError ? ` Shared board unavailable: ${air.backendError}` : ""}
         </p>

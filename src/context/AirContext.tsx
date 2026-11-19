@@ -75,7 +75,7 @@ export function AirProvider({ children }: { children: ReactNode }) {
     const overlay = loadOverlay()
     void tick
     if (!ready) return emptyDatabase()
-    if (mode === "supabase") return mergeDatabases(remote, overlay)
+    if (mode === "supabase") return mergeDatabases(mergeDatabases(sampleDatabase(), remote), overlay)
     return mergeDatabases(sampleDatabase(), local)
   }, [mode, remote, tick, ready])
 

@@ -19,7 +19,8 @@ create table if not exists air_reviews (
   payload jsonb not null,
   -- Count only. Private chat URLs are never stored here.
   private_context_count integer not null default 0,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint air_reviews_payload_size check (pg_column_size(payload) < 262144 and private_context_count between 0 and 10)
 );
 
 create index if not exists air_reviews_record_idx on air_reviews (doi, record_version, assessor_id);
@@ -31,7 +32,8 @@ create table if not exists air_nodes (
   payload jsonb not null,
   private_context_count integer not null default 0,
   created_at timestamptz not null default now(),
-  unique (review_id, node_id)
+  unique (review_id, node_id),
+  constraint air_nodes_payload_size check (pg_column_size(payload) < 131072 and private_context_count between 0 and 10)
 );
 
 create table if not exists air_issues (
@@ -39,7 +41,8 @@ create table if not exists air_issues (
   doi text not null,
   record_version text not null,
   payload jsonb not null,
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint air_issues_payload_size check (pg_column_size(payload) < 262144)
 );
 
 create index if not exists air_issues_record_idx on air_issues (doi, record_version);
@@ -48,7 +51,8 @@ create table if not exists air_claims (
   id text primary key,
   doi text not null,
   payload jsonb not null,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint air_claims_payload_size check (pg_column_size(payload) < 65536)
 );
 
 alter table air_reviews enable row level security;
@@ -73,3 +77,24 @@ create policy air_claims_update on air_claims for update using (true) with check
 -- Existing projects created before private context counts:
 alter table air_reviews add column if not exists private_context_count integer not null default 0;
 alter table air_nodes add column if not exists private_context_count integer not null default 0;
+
+-- Payload size limits. Private chat URLs are not part of payload.
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'air_reviews_payload_size') then
+    alter table air_reviews add constraint air_reviews_payload_size
+      check (pg_column_size(payload) < 262144 and private_context_count between 0 and 10);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'air_nodes_payload_size') then
+    alter table air_nodes add constraint air_nodes_payload_size
+      check (pg_column_size(payload) < 131072 and private_context_count between 0 and 10);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'air_issues_payload_size') then
+    alter table air_issues add constraint air_issues_payload_size
+      check (pg_column_size(payload) < 262144);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'air_claims_payload_size') then
+    alter table air_claims add constraint air_claims_payload_size
+      check (pg_column_size(payload) < 65536);
+  end if;
+end $$;

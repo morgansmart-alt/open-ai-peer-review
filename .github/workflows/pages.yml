@@ -28,9 +28,10 @@ jobs:
         run: npm run build
         env:
           VITE_BASE: /open-ai-peer-review/
-          # Shared board stays off until these are set in the repository.
-          VITE_SUPABASE_URL: ""
-          VITE_SUPABASE_ANON_KEY: ""
+          # Public anon values, also in .env.production. RLS is the access control.
+          # Never put a service-role key here.
+          VITE_SUPABASE_URL: https://lotswxboafsenmszijpf.supabase.co
+          VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvdHN3eGJvYWZzZW5tc3ppanBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUxMTM0MDEsImV4cCI6MjExMDY4OTQwMX0.K0zYMdv3vkBMXiL4PePWemwodcDactb8rcZJc2cmi5w
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

@@ -149,7 +149,7 @@ To share them, create a free [Supabase](https://supabase.com) project and run [`
 cp .env.example .env.local
 ```
 
-Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. Use the anon key only. Never put the service-role key in the frontend. Rebuild. The anon key is public by design. Row level security allows public reads and inserts of review results, and updates of issue threads. It does not allow deletes of readings.
+Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. Use the anon key only. Never put the service-role key in the frontend. Rebuild. The anon key is public by design. Row level security allows public reads and inserts of review results, and updates of issue threads and author claims. It does not allow deletes of readings. Payload size checks cap reviews and issues at 256 KiB, nodes at 128 KiB, and claims at 64 KiB.
 
 The tables store the review payload: scores, rationale, model id, criteria version, DOI, record version, timestamp, output hash, node verdicts, and issue rounds. There is no key column.
 
@@ -159,7 +159,7 @@ Supabase’s free tier is enough for a small public board. Turn on the project�
 
 The public site is [https://morgansmart-alt.github.io/open-ai-peer-review/](https://morgansmart-alt.github.io/open-ai-peer-review/).
 
-[`.github/workflows/pages.yml`](.github/workflows/pages.yml) builds on every push to `main` and deploys the `dist/` folder. The production base path is `/open-ai-peer-review/`. Supabase variables are left empty, so the hosted board stays in each visitor’s browser. Hash routes (`/#/review`) need no server rewrite.
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml) builds on every push to `main` and deploys the `dist/` folder. The production base path is `/open-ai-peer-review/`. The hosted site is the shared global board. [`.env.production`](.env.production) and the workflow both set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. Those are public anon values; row level security is what protects the database. Never put a service-role key in this repository. Hash routes (`/#/review`) need no server rewrite.
 
 `npm run build` uses that base path. For a host at the domain root, build with `VITE_BASE=/ npm run build`.
 
@@ -194,7 +194,7 @@ The page posts `{ source: "open-ai-peer-review", type: "air-embed-height", heigh
 
 ## Deploy anywhere else
 
-Upload `dist/` to Cloudflare Pages or Netlify the same way. `public/_redirects` is included for Netlify. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` at build time only when you want the shared board. Leave them empty for the local demo.
+Upload `dist/` to Cloudflare Pages or Netlify the same way. `public/_redirects` is included for Netlify. The GitHub Pages build already sets the public anon values. For another host, set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` at build time only when you want the shared board. Leave them empty for a local demo. Never use a service-role key.
 
 ## Tests
 
