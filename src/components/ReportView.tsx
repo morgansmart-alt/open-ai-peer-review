@@ -68,6 +68,11 @@ export function ReportView({
           Overall {shown(report.overallScore).toFixed(0)} / 100 · Idea {shown(report.ideaScore).toFixed(0)} / 100
           {criteria.version.startsWith("0.1") ? " · AIR v0.1" : ""}
         </p>
+        {report.reading && (
+          <p className="mt-1 text-sm text-ink-soft">
+            Read {report.reading.pagesRead} of {report.reading.pagesTotal} pages · {report.reading.chunksSummarised} sections summarised · coverage {report.reading.coverage}
+          </p>
+        )}
         {check.mismatch && (
           <p className="mt-2 text-sm text-bad">
             Scoring mismatch, needs re-check. {check.reason}

@@ -319,8 +319,47 @@ export async function fetchRelatedSnippets(record: ZenodoRecord): Promise<Relate
   return snippets
 }
 
-export function isTextualFile(file: ZenodoFile): boolean {
-  return ["pdf", "md", "markdown", "txt", "text", "docx", "html", "htm", "py", "csv", "json", "r", "ipynb"].includes(file.extension)
+export const READABLE_EXTENSIONS = new Set([
+  "pdf",
+  "txt",
+  "text",
+  "md",
+  "markdown",
+  "csv",
+  "tsv",
+  "json",
+  "yaml",
+  "yml",
+  "html",
+  "htm",
+  "tex",
+  "latex",
+  "bib",
+  "py",
+  "js",
+  "mjs",
+  "cjs",
+  "ts",
+  "tsx",
+  "jsx",
+  "r",
+  "c",
+  "h",
+  "cpp",
+  "cc",
+  "f",
+  "f90",
+  "f95",
+  "for",
+  "jl",
+  "xml",
+  "ipynb",
+  "docx",
+  "zip",
+])
+
+export function isTextualFile(file: Pick<ZenodoFile, "extension">): boolean {
+  return READABLE_EXTENSIONS.has(file.extension)
 }
 
 const SELECTION_FILE_CAP = 4
@@ -346,7 +385,7 @@ function leadingIndex(file: ZenodoFile): number | null {
 }
 
 export function defaultFileSelection(files: ZenodoFile[]): string[] {
-  const readable = files.filter((file) => isTextualFile(file) && file.size > 0 && file.size <= SELECTION_FILE_BYTES)
+  const readable = files.filter((file) => isTextualFile(file) && file.extension !== "zip" && ((file.size > 0 && file.size <= SELECTION_FILE_BYTES) || (file.size === 0 && file.extension === "pdf")))
   const readme = readable.find(isReadmeFile)
   const manuscripts = readable
     .filter((file) => file.extension === "pdf" && !isSupplementFile(file))

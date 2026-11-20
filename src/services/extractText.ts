@@ -1,4 +1,5 @@
-import { extensionOf } from "./zenodo.ts"
+import { textFromDocx, textFromZip } from "./zipText.ts"
+import { extensionOf, READABLE_EXTENSIONS } from "./zenodo.ts"
 import { decodeText, textFromMarkup } from "./textTools.ts"
 
 let pdfjsPromise: Promise<typeof import("pdfjs-dist")> | null = null
@@ -15,18 +16,36 @@ function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
 export interface ExtractedDocument {
   filename: string
   text: string
-  kind: "pdf" | "docx" | "text" | "unsupported"
+  kind: "pdf" | "docx" | "text" | "zip" | "unsupported"
   note?: string
   pages?: number
+  pagesRead?: number
+  pagesTotal?: number
 }
 
-const PAGE_CAP = 40
+/** Safety ceiling so a huge scan cannot freeze the tab. Shorter PDFs are read in full. */
+export const PDF_PAGE_CEILING = 500
+const PDF_BATCH = 8
 
-export async function extractPdf(data: ArrayBuffer): Promise<{ text: string; pages: number; note?: string }> {
+export function pagesToRead(total: number): number {
+  return Math.min(Math.max(0, total), PDF_PAGE_CEILING)
+}
+
+export function scannedPdfNote(text: string, pagesRead: number): string | undefined {
+  if (pagesRead <= 0) return undefined
+  const trimmed = text.trim()
+  if (trimmed.length >= 80 && trimmed.length / pagesRead >= 40) return undefined
+  return "This PDF looks scanned/image-only and has little extractable text."
+}
+
+export async function extractPdf(
+  data: ArrayBuffer,
+  onProgress?: (message: string) => void,
+): Promise<{ text: string; pages: number; pagesRead: number; note?: string }> {
   const { getDocument } = await loadPdfjs()
   const pdf = await getDocument({ data: new Uint8Array(data), useSystemFonts: true }).promise
   const pageCount = pdf.numPages
-  const limit = Math.min(pageCount, PAGE_CAP)
+  const limit = pagesToRead(pageCount)
   const parts: string[] = []
   for (let pageNumber = 1; pageNumber <= limit; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber)
@@ -37,42 +56,54 @@ export async function extractPdf(data: ArrayBuffer): Promise<{ text: string; pag
       .replace(/[ \t]{2,}/g, " ")
       .trim()
     if (line) parts.push(line)
+    if (pageNumber % PDF_BATCH === 0) {
+      onProgress?.(`Reading page ${pageNumber} of ${pageCount}…`)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
   }
-  return {
-    text: parts.join("\n\n"),
-    pages: pageCount,
-    note: pageCount > PAGE_CAP ? `Read the first ${PAGE_CAP} of ${pageCount} pages.` : undefined,
-  }
+  const text = parts.join("\n\n")
+  const notes = [
+    pageCount > limit ? `Read ${limit} of ${pageCount} pages so the tab stays responsive.` : "",
+    scannedPdfNote(text, limit) ?? "",
+  ].filter(Boolean)
+  return { text, pages: pageCount, pagesRead: limit, note: notes.join(" ") || undefined }
 }
 
-export async function extractDocx(data: ArrayBuffer): Promise<string> {
-  const mammoth = await import("mammoth")
-  const result = await mammoth.extractRawText({ arrayBuffer: data })
-  return result.value.trim()
-}
-
-export async function extractDocument(filename: string, data: ArrayBuffer): Promise<ExtractedDocument> {
+export async function extractDocument(filename: string, data: ArrayBuffer, onProgress?: (message: string) => void): Promise<ExtractedDocument> {
   const extension = extensionOf(filename)
   try {
     if (extension === "pdf") {
-      const pdf = await extractPdf(data)
+      const pdf = await extractPdf(data, onProgress)
+      const scanned = scannedPdfNote(pdf.text, pdf.pagesRead)
       if (!pdf.text.trim()) {
-        return { filename, text: "", kind: "pdf", pages: pdf.pages, note: "This PDF has no extractable text. It may be scanned images." }
+        return {
+          filename,
+          text: "",
+          kind: "pdf",
+          pages: pdf.pages,
+          pagesRead: pdf.pagesRead,
+          pagesTotal: pdf.pages,
+          note: scanned ?? "This PDF has no extractable text.",
+        }
       }
-      return { filename, text: pdf.text, kind: "pdf", pages: pdf.pages, note: pdf.note }
+      return { filename, text: pdf.text, kind: "pdf", pages: pdf.pages, pagesRead: pdf.pagesRead, pagesTotal: pdf.pages, note: pdf.note }
     }
     if (extension === "docx") {
-      const text = await extractDocx(data)
+      const text = await textFromDocx(data)
       return { filename, text, kind: "docx", note: text ? undefined : "The document had no readable text." }
     }
-    if (["md", "markdown", "txt", "text", "html", "htm", "py", "csv", "json", "r", "ipynb"].includes(extension)) {
+    if (extension === "zip") {
+      const text = await textFromZip(data)
+      return { filename, text, kind: "zip", note: text ? undefined : "This zip has no readable text or code files." }
+    }
+    if (READABLE_EXTENSIONS.has(extension)) {
       return { filename, text: textFromMarkup(filename, decodeText(data)), kind: "text" }
     }
     return {
       filename,
       text: "",
       kind: "unsupported",
-      note: "AIR reads PDF, Markdown, text, HTML, and DOCX. This file was skipped.",
+      note: "AIR could not read this file as text. PDF, Office, source, and data files are supported.",
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not read this file."
@@ -85,7 +116,7 @@ export async function downloadArrayBuffer(url: string): Promise<ArrayBuffer> {
   try {
     response = await fetch(url)
   } catch {
-    throw new Error("The browser blocked or could not finish this file download. Zenodo's API content links allow cross-origin reads; if a mirror does not, use the link labelled content on the record.")
+    throw new Error("The file host blocked the browser (CORS). Drop the PDF or text file beside the DOI and the review can still run.")
   }
   if (response.status === 401 || response.status === 403) {
     throw new Error("This file is restricted or embargoed, so AIR cannot read it.")

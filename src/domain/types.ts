@@ -143,6 +143,13 @@ export interface ReviewReport {
   simulation?: SimulationEvidence
   valueEstimate?: ValueEstimate
   goals?: GoalAlignment[]
+  /** How much of the selected files this reading actually covered. */
+  reading?: {
+    pagesRead: number
+    pagesTotal: number
+    chunksSummarised: number
+    coverage: "full" | "partial"
+  }
 }
 
 export interface StoredReview {

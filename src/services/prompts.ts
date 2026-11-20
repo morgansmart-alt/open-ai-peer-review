@@ -3,7 +3,7 @@ import { globalGoals } from "../domain/goals.ts"
 import type { ConversationLink } from "../domain/conversationLinks.ts"
 import type { CriteriaSet, MajorIssue, ReviewReport } from "../domain/types.ts"
 import type { RelatedSnippet, ZenodoRecord } from "./zenodo.ts"
-import { chunkText } from "./textTools.ts"
+import { anchorExcerpts, sectionsFor } from "./textTools.ts"
 
 export function reviewSystemPrompt(criteria: CriteriaSet): string {
   return [
@@ -94,15 +94,12 @@ export function reviewUserPrompt(record: ZenodoRecord, criteria: CriteriaSet, pa
 export function buildPacket(record: ZenodoRecord, documents: { filename: string; text: string }[], summaries: string[] | null): string {
   const fileList = record.files.map((file) => `- ${file.key} (${file.size} bytes)`).join("\n")
   const description = record.description.slice(0, 4000)
+  const full = documents.map((document) => document.text).join("\n\n")
   const body = summaries
-    ? [
-        "Section summaries:",
-        ...summaries.map((summary, index) => `Section ${index + 1}: ${summary}`),
-        "",
-        "Opening excerpts:",
-        ...documents.map((document) => `## ${document.filename}\n${document.text.slice(0, 1800)}`),
-      ].join("\n\n")
-    : documents.map((document) => `## ${document.filename}\n${document.text}`).join("\n\n").slice(0, 28_000)
+    ? ["Section digest covering the whole text, in order:", ...summaries, "", "Verbatim excerpts from the beginning, the middle, and the end:", anchorExcerpts(full)].join("\n\n")
+    : full.length <= 28_000
+      ? documents.map((document) => `## ${document.filename}\n${document.text}`).join("\n\n")
+      : `The text is longer than one call. These excerpts keep the beginning, the middle, and the end.\n\n${anchorExcerpts(full)}`
   return [`Description:\n${description}`, `Files:\n${fileList || "- none"}`, body].join("\n\n")
 }
 
@@ -112,18 +109,15 @@ export function shouldSummarize(documents: { text: string }[]): boolean {
 }
 
 export function chunksFor(documents: { filename: string; text: string }[]): { label: string; text: string }[] {
-  const chunks: { label: string; text: string }[] = []
-  for (const document of documents) {
-    for (const [index, chunk] of chunkText(document.text).entries()) {
-      chunks.push({ label: `${document.filename} part ${index + 1}`, text: chunk })
-      if (chunks.length >= 8) return chunks
-    }
-  }
-  return chunks
+  return sectionsFor(documents)
 }
 
 export function summarySystemPrompt(): string {
-  return "Summarise this section for a later peer review. Preserve numbers, units, named claims, and one or two short verbatim quotes. Note any contradiction. Plain text, under 350 words."
+  return "Summarise this section for a later peer review. Preserve numbers, units, equations, named claims, limitations, and open questions, plus one or two short verbatim quotes. Note where this section sits in the document. Plain text, under 350 words."
+}
+
+export function reduceSystemPrompt(): string {
+  return "Combine these section notes into one digest for a peer review. Cover every section you are given, including the last ones. Keep numbers, equations, named claims, limitations, and one short verbatim quote from each section. Plain text."
 }
 
 export function sourceCheckPrompt(

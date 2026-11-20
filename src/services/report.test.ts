@@ -111,12 +111,15 @@ describe("validateReport", () => {
 })
 
 describe("chunkText", () => {
-  it("keeps a short text whole and caps a long one", () => {
+  it("keeps a short text whole and covers a long one from start to end", () => {
     expect(chunkText("Short note.")).toEqual(["Short note."])
-    const long = Array.from({ length: 40 }, (_, index) => `Paragraph ${index}. ${"word ".repeat(80)}`).join("\n\n")
+    const long = Array.from({ length: 80 }, (_, index) => `Paragraph ${index}. ${"word ".repeat(80)}`).join("\n\n")
     const chunks = chunkText(long, 3000)
-    expect(chunks.length).toBeGreaterThan(1)
-    expect(chunks.length).toBeLessThanOrEqual(8)
+    expect(chunks.length).toBeGreaterThan(8)
+    expect(chunks[0]).toContain("Paragraph 0")
+    expect(chunks[chunks.length - 1]).toContain("Paragraph 79")
+    const covered = chunks.join(" ").replace(/\s+/g, " ")
+    expect(covered).toContain("Paragraph 20")
   })
 })
 

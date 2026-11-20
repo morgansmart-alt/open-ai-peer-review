@@ -10,29 +10,85 @@ export function textFromMarkup(filename: string, raw: string): string {
   return raw.replace(/^\uFEFF/, "").trim()
 }
 
-export function chunkText(text: string, size = 12_000): string[] {
+/** Sections grow past this size only so a very long text still fits in SECTION_CAP pieces. */
+export const SECTION_CHARS = 12_000
+export const SECTION_CAP = 80
+
+export interface TextSection {
+  label: string
+  text: string
+}
+
+export interface ReadingCoverage {
+  pagesRead: number
+  pagesTotal: number
+  chunksSummarised: number
+  coverage: "full" | "partial"
+}
+
+/** Split on paragraph and sentence boundaries. The pieces together cover the whole text. */
+export function chunkText(text: string, size = SECTION_CHARS): string[] {
   const clean = text.replace(/\r\n/g, "\n").trim()
   if (!clean) return []
-  if (clean.length <= size) return [clean]
+  const target = Math.max(size, Math.ceil(clean.length / SECTION_CAP))
+  if (clean.length <= target) return [clean]
   const chunks: string[] = []
   let cursor = 0
-  while (cursor < clean.length && chunks.length < 8) {
-    let end = Math.min(clean.length, cursor + size)
+  while (cursor < clean.length) {
+    let end = Math.min(clean.length, cursor + target)
     if (end < clean.length) {
       const paragraph = clean.lastIndexOf("\n\n", end)
       const sentence = clean.lastIndexOf(". ", end)
-      const splitAt = paragraph > cursor + size * 0.5 ? paragraph : sentence > cursor + size * 0.5 ? sentence + 1 : end
-      end = splitAt
+      const splitAt = paragraph > cursor + target * 0.5 ? paragraph : sentence > cursor + target * 0.5 ? sentence + 1 : end
+      end = Math.max(cursor + 1, splitAt)
     }
     const piece = clean.slice(cursor, end).trim()
     if (piece) chunks.push(piece)
+    if (end <= cursor) break
     cursor = end
   }
-  if (cursor < clean.length && chunks.length > 0) {
-    const last = chunks[chunks.length - 1]
-    chunks[chunks.length - 1] = `${last}\n\n[Further text was left out of this packet so the reading stays within a few calls.]`
-  }
   return chunks
+}
+
+export function sectionsFor(documents: { filename: string; text: string }[]): TextSection[] {
+  const sections: TextSection[] = []
+  for (const document of documents) {
+    const parts = chunkText(document.text)
+    parts.forEach((text, index) => {
+      const label = parts.length === 1 ? document.filename : `${document.filename} · section ${index + 1} of ${parts.length}`
+      sections.push({ label, text })
+    })
+  }
+  return sections
+}
+
+export function anchorExcerpts(text: string): string {
+  const clean = text.replace(/\s+/g, " ").trim()
+  if (!clean) return ""
+  if (clean.length <= 2100) return clean
+  const take = 700
+  const mid = Math.floor(clean.length / 2)
+  return [`Beginning: ${clean.slice(0, take)}`, `Middle: ${clean.slice(mid - Math.floor(take / 2), mid + Math.ceil(take / 2))}`, `End: ${clean.slice(-take)}`].join("\n\n")
+}
+
+export function readingCoverage(documents: readonly Record<string, unknown>[], chunksSummarised: number): ReadingCoverage {
+  let pagesRead = 0
+  let pagesTotal = 0
+  let partial = false
+  for (const document of documents) {
+    const total = Number(document.pagesTotal ?? document.pages ?? 0)
+    const read = Number(document.pagesRead ?? (total > 0 ? total : 0))
+    pagesRead += read
+    pagesTotal += total
+    if (total > 0 && read < total) partial = true
+  }
+  return { pagesRead, pagesTotal, chunksSummarised, coverage: partial ? "partial" : "full" }
+}
+
+export function bundleItems<T>(items: T[], size: number): T[][] {
+  const groups: T[][] = []
+  for (let index = 0; index < items.length; index += size) groups.push(items.slice(index, index + size))
+  return groups
 }
 
 export function pickQuotes(text: string, count: number): string[] {

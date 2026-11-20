@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import { PrivateLinksField, emptyLinkDraft, type LinkDraft } from "../components/PrivateLinks.tsx"
 import { collectConversationLinks, saveSubmissionLinks } from "../domain/conversationLinks.ts"
@@ -17,14 +17,16 @@ import { runReview } from "../services/review.ts"
 import { downloadArrayBuffer, extractDocument, type ExtractedDocument } from "../services/extractText.ts"
 import {
   defaultFileSelection,
+  extensionOf,
   fetchZenodoRecord,
   filesAreRestricted,
   formatBytes,
   formatRecordStamp,
   isTextualFile,
-  parseRecordRef,
+  type ZenodoFile,
   type ZenodoRecord,
 } from "../services/zenodo.ts"
+import { isPublishedDoi, parseAnyRef, resolvePublishedDoi } from "../services/works.ts"
 
 interface PanelResult {
   assessorId: string
@@ -48,6 +50,8 @@ export function ReviewPage() {
   const [optIn, setOptIn] = useState(false)
   const [acks, setAcks] = useState<Record<string, boolean>>({})
   const [linkDrafts, setLinkDrafts] = useState<LinkDraft[]>([emptyLinkDraft()])
+  const [downloadNote, setDownloadNote] = useState<string | null>(null)
+  const localBytes = useRef(new Map<string, ArrayBuffer>())
   const [published, setPublished] = useState(false)
   const acknowledged = publishNotices.every((notice) => acks[notice.id])
 
@@ -56,22 +60,69 @@ export function ReviewPage() {
     if (initial) setInput(initial)
   }, [params])
 
+  function rememberLocal(file: ZenodoFile, bytes: ArrayBuffer) {
+    localBytes.current.set(file.key, bytes)
+  }
+
+  async function attachLocalFiles(list: FileList | File[]) {
+    const additions: ZenodoFile[] = []
+    for (const file of [...list]) {
+      const bytes = await file.arrayBuffer()
+      const addition = { key: file.name, size: file.size, downloadUrl: "", extension: extensionOf(file.name) }
+      rememberLocal(addition, bytes)
+      additions.push(addition)
+    }
+    if (additions.length === 0) return
+    setRecord((current) => {
+      if (!current) {
+        const first = additions[0]
+        return {
+          id: "local",
+          conceptId: "local",
+          doi: "",
+          conceptDoi: "",
+          title: first?.key ?? "Local text",
+          creators: [],
+          description: "",
+          descriptionHtml: "",
+          keywords: [],
+          version: "",
+          recordVersion: "local",
+          license: "",
+          publicationDate: "",
+          related: [],
+          resourceType: "Local file",
+          access: { record: "local", files: "local" },
+          files: additions,
+          htmlUrl: "",
+        }
+      }
+      const files = [...current.files.filter((file) => !additions.some((addition) => addition.key === file.key)), ...additions]
+      return { ...current, files }
+    })
+    setSelected((current) => [...new Set([...current, ...additions.map((file) => file.key)])])
+    setDownloadNote(null)
+    setError(null)
+  }
+
   async function loadRecord(raw?: string) {
-    const parsed = parseRecordRef(raw ?? input)
+    const parsed = parseAnyRef(raw ?? input)
     if (!parsed) {
-      setError("Paste a Zenodo link or a DOI like 10.5281/zenodo.18916931.")
+      setError("Paste a Zenodo link, a DOI such as 10.5281/zenodo.18916931, or an arXiv DOI.")
       return
     }
     setBusy(true)
     setError(null)
-    setStatus("Fetching the Zenodo record…")
+    setDownloadNote(null)
+    setStatus(parsed.kind === "zenodo" ? "Fetching the Zenodo record…" : "Looking up that DOI…")
     setResults([])
     setPublished(false)
     setDocs([])
     try {
-      const next = await fetchZenodoRecord(parsed.recordId)
+      const next = parsed.kind === "zenodo" ? await fetchZenodoRecord(parsed.recordId) : await resolvePublishedDoi(parsed.doi)
       setRecord(next)
       setSelected(defaultFileSelection(next.files))
+      setDownloadNote(next.files.length === 0 ? "No open file was linked for this DOI. Drop the PDF below. Publishing still needs the DOI." : null)
       setStatus(null)
     } catch (caught) {
       setRecord(null)
@@ -91,16 +142,14 @@ export function ReviewPage() {
       if (!file || have.has(file.key)) continue
       setStatus(`Reading ${index + 1} of ${wanted.length}: ${file.key}`)
       try {
-        const bytes = await downloadArrayBuffer(file.downloadUrl)
-        const extracted = await extractDocument(file.key, bytes)
+        const bytes = localBytes.current.get(file.key) ?? (file.downloadUrl ? await downloadArrayBuffer(file.downloadUrl) : null)
+        if (!bytes) throw new Error(`${file.key} has no download link. Drop the file from your computer.`)
+        const extracted = await extractDocument(file.key, bytes, setStatus)
         next.push(extracted)
       } catch (caught) {
-        next.push({
-          filename: file.key,
-          text: "",
-          kind: "text",
-          note: caught instanceof Error ? caught.message : "Could not download this file.",
-        })
+        const note = caught instanceof Error ? caught.message : "Could not download this file."
+        if (/CORS|blocked|drop the/i.test(note)) setDownloadNote(note)
+        next.push({ filename: file.key, text: "", kind: "text", note })
       }
     }
     setDocs(next)
@@ -129,9 +178,15 @@ export function ReviewPage() {
     setError(null)
     saveSubmissionLinks(record.doi, record.recordVersion, collected.links)
     try {
-      const extracted = await ensureDocs()
-      const documents = extracted.filter((doc) => selected.includes(doc.filename) && doc.text.trim())
-      const report = await runFreeScreening({
+    const extracted = await ensureDocs()
+    const documents = extracted.filter((doc) => selected.includes(doc.filename) && doc.text.trim())
+    if (documents.length === 0) {
+      setError(extracted.find((doc) => doc.note)?.note ?? "None of the selected files had readable text.")
+      setBusy(false)
+      setStatus(null)
+      return
+    }
+    const report = await runFreeScreening({
         kind,
         criteria: air.criteria,
         record,
@@ -208,6 +263,12 @@ export function ReviewPage() {
     saveSubmissionLinks(record.doi, record.recordVersion, collected.links)
     const extracted = await ensureDocs()
     const documents = extracted.filter((doc) => selected.includes(doc.filename) && doc.text.trim())
+    if (documents.length === 0) {
+      setError(extracted.find((doc) => doc.note)?.note ?? "None of the selected files had readable text.")
+      setBusy(false)
+      setStatus(null)
+      return
+    }
     const panel: PanelResult[] = []
     await Promise.all(
       assessors.map(async (assessorId) => {
@@ -270,6 +331,10 @@ export function ReviewPage() {
     const ready = results.flatMap((result) => (result.stored ? [result.stored] : []))
     if (!acknowledged || !optIn) {
       setError("Read the four notices and tick them, then tick publish. Nothing is shared until you do.")
+      return
+    }
+    if (!record || !isPublishedDoi(record.doi)) {
+      setError("Publishing to the leaderboard needs a published DOI. This reading stays in this browser.")
       return
     }
     for (const review of ready) {
@@ -347,6 +412,28 @@ export function ReviewPage() {
           Try 10.5281/zenodo.18916931
         </button>
       </form>
+      <div className="mt-4 rounded-2xl border border-line bg-white/40 p-3">
+        <p className="text-sm">Zenodo is the main path. A ranked publication still needs a published DOI. If a host blocks the file, or you have the PDF locally, drop it here.</p>
+        <label className="mt-2 block text-xs text-ink-soft">
+          PDF, text, source, data, DOCX, or a small zip
+          <input
+            className="mt-1 block w-full text-sm"
+            type="file"
+            multiple
+            accept=".pdf,.txt,.md,.csv,.tsv,.json,.yaml,.yml,.html,.tex,.bib,.py,.js,.ts,.r,.c,.f90,.jl,.docx,.zip"
+            onChange={(event) => {
+              const files = event.target.files
+              if (files) void attachLocalFiles(files)
+              event.target.value = ""
+            }}
+          />
+        </label>
+      </div>
+      {downloadNote && (
+        <div className="mt-4">
+          <Banner>{downloadNote}</Banner>
+        </div>
+      )}
       {error && (
         <div className="mt-4">
           <Banner tone="error">{error}</Banner>
@@ -384,7 +471,7 @@ export function ReviewPage() {
             <fieldset className="file-fieldset mt-4" disabled={restricted}>
               <legend className="text-sm font-medium">Files to read</legend>
               <p className="mt-1 text-xs text-ink-soft">
-                The main manuscript is preselected, with a README when the record has one. Supplementary files stay unticked. Images and archives are skipped. A long paper is summarised in sections before it is scored.
+                The main manuscript is preselected, with a README when the record has one. Supplementary files and zips stay unticked until you choose them. A long paper is read in full, then summarised in sections.
               </p>
               <p className="mt-1 text-xs font-medium text-ink">
                 {selected.length} of {record.files.length} files · {formatBytes(record.files.filter((file) => selected.includes(file.key)).reduce((total, file) => total + file.size, 0))} selected
@@ -405,7 +492,7 @@ export function ReviewPage() {
                           }
                         />
                         <span className="min-w-0 break-words">
-                          {file.key} <span className="text-ink-soft">· {formatBytes(file.size)}{textual ? "" : " · not read as text"}</span>
+                          {file.key} <span className="text-ink-soft">· {file.size > 0 ? formatBytes(file.size) : "size unknown"}{textual ? "" : " · not read as text"}</span>
                         </span>
                       </label>
                     </li>
@@ -515,7 +602,8 @@ export function ReviewPage() {
               <span>Publish these readings to the leaderboard. This is optional. Demo readings stay in this browser. Custom criteria stay unranked.</span>
             </label>
             {!acknowledged && <p className="mt-2 text-sm text-ink-soft">Tick the four notices in step 1 before a reading can join the ranking.</p>}
-            <button type="button" className={`${btnPrimary} mt-3`} disabled={!optIn || !acknowledged || published} onClick={() => void publish()}>
+            {record && !isPublishedDoi(record.doi) && <p className="mt-2 text-sm text-ink-soft">Publishing to the leaderboard needs a published DOI. This reading can still run in this browser.</p>}
+            <button type="button" className={`${btnPrimary} mt-3`} disabled={!optIn || !acknowledged || published || !record || !isPublishedDoi(record.doi)} onClick={() => void publish()}>
               {published ? "Published" : "Publish to the leaderboard"}
             </button>
             {published && record && (

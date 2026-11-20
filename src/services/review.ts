@@ -7,6 +7,7 @@ import {
   buildPacket,
   chunksFor,
   independentPrompt,
+  reduceSystemPrompt,
   repairPrompt,
   reviewSystemPrompt,
   reviewUserPrompt,
@@ -14,6 +15,7 @@ import {
   sourceCheckPrompt,
   summarySystemPrompt,
 } from "./prompts.ts"
+import { bundleItems, readingCoverage } from "./textTools.ts"
 import { extractJsonValue, validateReport } from "./validateReport.ts"
 import type { RelatedSnippet, ZenodoRecord } from "./zenodo.ts"
 import type { CriterionJudgement, MajorIssue, Verdict } from "../domain/types.ts"
@@ -23,7 +25,7 @@ export interface RunContext {
   settings: ProviderSettings
   criteria: CriteriaSet
   record: ZenodoRecord
-  documents: { filename: string; text: string }[]
+  documents: { filename: string; text: string; pagesRead?: number; pagesTotal?: number; pages?: number }[]
   conversationLinks?: ConversationLink[]
   demo: boolean
   signal?: AbortSignal
@@ -77,38 +79,70 @@ async function validatedReport(ctx: RunContext, packet: string, conversations: C
   return validated.report
 }
 
-export async function runReview(ctx: RunContext): Promise<ReviewReport> {
-  const text = [ctx.record.description, ...ctx.documents.map((document) => document.text)].filter(Boolean).join("\n\n")
-  if (ctx.demo) {
-    ctx.onProgress?.(`Building a demo reading for ${ctx.profile.name}.`)
-    return buildDemoReport({
-      profile: ctx.profile,
-      criteria: ctx.criteria,
-      text,
-      filenames: ctx.documents.map((document) => document.filename),
-      title: ctx.record.title,
+const DIGEST_BUDGET = 28_000
+
+async function summariseSections(ctx: RunContext): Promise<string[] | null> {
+  if (!shouldSummarize(ctx.documents)) return null
+  const sections = chunksFor(ctx.documents)
+  let summaries = []
+  for (let index = 0; index < sections.length; index += 1) {
+    const section = sections[index]
+    if (!section) continue
+    ctx.onProgress?.(`Summarising section ${index + 1} of ${sections.length}…`)
+    const summary = await completeChat(ctx.profile, ctx.settings, {
+      model: resolvedModel(ctx.profile, ctx.settings),
+      system: summarySystemPrompt(),
+      user: `Section ${index + 1} of ${sections.length} (${section.label}).\n\n${section.text}`,
+      json: false,
+      signal: ctx.signal,
     })
+    summaries.push(`${section.label}: ${summary}`)
   }
-  let summaries: string[] | null = null
-  if (shouldSummarize(ctx.documents)) {
-    const chunks = chunksFor(ctx.documents)
-    summaries = []
-    for (let index = 0; index < chunks.length; index += 1) {
-      const chunk = chunks[index]
-      if (!chunk) continue
-      ctx.onProgress?.(`${ctx.profile.name} is summarising ${chunk.label} (${index + 1} of ${chunks.length}).`)
+  let round = 0
+  while (summaries.join("\n\n").length > DIGEST_BUDGET && summaries.length > 1 && round < 4) {
+    const groups = bundleItems(summaries, 4)
+    const next: string[] = []
+    for (let index = 0; index < groups.length; index += 1) {
+      const group = groups[index]
+      if (!group) continue
+      ctx.onProgress?.(`Combining sections ${index + 1} of ${groups.length}…`)
       const summary = await completeChat(ctx.profile, ctx.settings, {
         model: resolvedModel(ctx.profile, ctx.settings),
-        system: summarySystemPrompt(),
-        user: chunk.text,
+        system: reduceSystemPrompt(),
+        user: group.join("\n\n"),
         json: false,
         signal: ctx.signal,
       })
-      summaries.push(`${chunk.label}: ${summary}`)
+      next.push(summary)
+    }
+    summaries = next
+    round += 1
+  }
+  return summaries
+}
+
+export async function runReview(ctx: RunContext): Promise<ReviewReport> {
+  const text = [ctx.record.description, ...ctx.documents.map((document) => document.text)].filter(Boolean).join("\n\n")
+  const sections = chunksFor(ctx.documents)
+  const chunksSummarised = shouldSummarize(ctx.documents) ? sections.length : 0
+  const reading = readingCoverage(ctx.documents, chunksSummarised)
+  if (ctx.demo) {
+    ctx.onProgress?.(`Building a demo reading for ${ctx.profile.name}.`)
+    return {
+      ...buildDemoReport({
+        profile: ctx.profile,
+        criteria: ctx.criteria,
+        text,
+        filenames: ctx.documents.map((document) => document.filename),
+        title: ctx.record.title,
+      }),
+      reading,
     }
   }
+  const summaries = await summariseSections(ctx)
   ctx.onProgress?.(`${ctx.profile.name} is scoring the record.`)
-  return validatedReport(ctx, buildPacket(ctx.record, ctx.documents, summaries), ctx.conversationLinks ?? [])
+  const report = await validatedReport(ctx, buildPacket(ctx.record, ctx.documents, summaries), ctx.conversationLinks ?? [])
+  return { ...report, reading }
 }
 
 export interface SourceCheckDraft {

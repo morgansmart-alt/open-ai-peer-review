@@ -2,6 +2,7 @@ import type { AssessorProfile, CriteriaSet, ReviewReport } from "../domain/types
 import type { ConversationLink } from "../domain/conversationLinks.ts"
 import { buildDemoReport } from "./mockReview.ts"
 import { reviewUserPrompt } from "./prompts.ts"
+import { anchorExcerpts, readingCoverage } from "./textTools.ts"
 import { extractJsonValue, validateReport } from "./validateReport.ts"
 import type { ZenodoRecord } from "./zenodo.ts"
 import { runReview, type RunContext } from "./review.ts"
@@ -96,7 +97,10 @@ export async function runFreeScreening(options: {
     const engine = await webllm.CreateMLCEngine(FREE_BROWSER_MODEL, {
       initProgressCallback: (report) => options.onProgress?.(report.text || "Loading the on-device model…"),
     })
-    const packet = text.slice(0, 6000)
+    const long = text.length > 12_000
+    const packet = long
+      ? `This on-device model cannot hold the whole paper. The excerpts below are the beginning, the middle, and the end, so the back half is not dropped.\n\n${anchorExcerpts(text)}`
+      : text
     const user = reviewUserPrompt(options.record, options.criteria, packet, options.conversations)
     const completion = await engine.chat.completions.create({
       messages: [
@@ -109,7 +113,8 @@ export async function runFreeScreening(options: {
     if (!raw) throw new FreeReviewUnavailable("The on-device model returned an empty screening.")
     const validated = validateReport(extractJsonValue(raw), options.criteria)
     if (!validated.ok) throw new FreeReviewUnavailable(`The free model did not return a usable screening. ${validated.errors.slice(0, 2).join(" ")}`)
-    return validated.report
+    const reading = readingCoverage(options.documents, 0)
+    return { ...validated.report, reading: long ? { ...reading, coverage: "partial" } : reading }
   }
   if (!options.ctx) throw new FreeReviewUnavailable("Add the free key for that provider first.")
   const model = options.kind === "openrouter" ? OPENROUTER_FREE_MODEL : options.ctx.profile.defaultModel

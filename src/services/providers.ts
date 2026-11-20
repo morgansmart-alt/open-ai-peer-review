@@ -50,7 +50,34 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
   return text
 }
 
-function openAiCompatible(baseUrl: string, key: string, request: ChatRequest, extraHeaders: Record<string, string> = {}): Promise<string> {
+export const OUTPUT_TOKEN_LIMIT = 16384
+
+export function openAiChatBody(request: ChatRequest, maxTokens?: number): Record<string, unknown> {
+  return {
+    model: request.model,
+    temperature: 0.2,
+    ...(maxTokens ? { max_tokens: maxTokens } : {}),
+    messages: [
+      { role: "system", content: request.system },
+      { role: "user", content: request.user },
+    ],
+    ...(request.json ? { response_format: { type: "json_object" } } : {}),
+  }
+}
+
+export function geminiChatBody(request: ChatRequest, maxTokens = OUTPUT_TOKEN_LIMIT): Record<string, unknown> {
+  return {
+    systemInstruction: { parts: [{ text: request.system }] },
+    contents: [{ role: "user", parts: [{ text: request.user }] }],
+    generationConfig: {
+      temperature: 0.2,
+      maxOutputTokens: maxTokens,
+      ...(request.json ? { responseMimeType: "application/json" } : {}),
+    },
+  }
+}
+
+function openAiCompatible(baseUrl: string, key: string, request: ChatRequest, extraHeaders: Record<string, string> = {}, maxTokens?: number): Promise<string> {
   return postJson(
     `${baseUrl}/chat/completions`,
     {
@@ -58,15 +85,7 @@ function openAiCompatible(baseUrl: string, key: string, request: ChatRequest, ex
       "content-type": "application/json",
       ...extraHeaders,
     },
-    {
-      model: request.model,
-      temperature: 0.2,
-      messages: [
-        { role: "system", content: request.system },
-        { role: "user", content: request.user },
-      ],
-      ...(request.json ? { response_format: { type: "json_object" } } : {}),
-    },
+    openAiChatBody(request, maxTokens),
     request.signal,
   ).then((raw) => {
     const parsed = JSON.parse(raw) as { choices?: { message?: { content?: string } }[] }
@@ -87,7 +106,7 @@ async function anthropic(baseUrl: string, key: string, request: ChatRequest): Pr
     },
     {
       model: request.model,
-      max_tokens: 4096,
+      max_tokens: OUTPUT_TOKEN_LIMIT,
       temperature: 0.2,
       system: request.system,
       messages: [{ role: "user", content: request.user }],
@@ -107,14 +126,7 @@ async function gemini(baseUrl: string, key: string, request: ChatRequest): Promi
       "x-goog-api-key": key,
       "content-type": "application/json",
     },
-    {
-      systemInstruction: { parts: [{ text: request.system }] },
-      contents: [{ role: "user", parts: [{ text: request.user }] }],
-      generationConfig: {
-        temperature: 0.2,
-        ...(request.json ? { responseMimeType: "application/json" } : {}),
-      },
-    },
+    geminiChatBody(request),
     request.signal,
   )
   const parsed = JSON.parse(raw) as { candidates?: { content?: { parts?: { text?: string }[] } }[] }
@@ -135,5 +147,5 @@ export async function completeChat(profile: AssessorProfile, settings: ProviderS
     profile.provider === "openrouter"
       ? { "HTTP-Referer": "https://air-peer-review.local", "X-Title": "AIR Peer Review" }
       : {}
-  return openAiCompatible(baseUrl, key, ready, headers)
+  return openAiCompatible(baseUrl, key, ready, headers, profile.provider === "xai" ? OUTPUT_TOKEN_LIMIT : undefined)
 }
