@@ -409,7 +409,10 @@ export function defaultFileSelection(files: ZenodoFile[]): string[] {
       return b.size - a.size
     })
   const primary = manuscripts[0]
-  const companion = primary && leadingIndex(primary) === 1 ? manuscripts.find((file) => leadingIndex(file) === 2) : undefined
+  const companion =
+    primary && leadingIndex(primary) === 1
+      ? manuscripts.find((file) => leadingIndex(file) === 2 && !/section|§/i.test(file.key))
+      : undefined
   const supplements = readable
     .filter((file) => isSupplementFile(file) && file !== readme && file !== primary && file !== companion)
     .sort((a, b) => a.key.localeCompare(b.key))

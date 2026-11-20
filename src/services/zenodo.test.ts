@@ -118,7 +118,6 @@ describe("defaultFileSelection", () => {
     ]
     expect(defaultFileSelection(files)).toEqual([
       "01_SCG_HMH_Closed_Derivative_Chain_v8.pdf",
-      "02_SCG_HMH_v8_Section_6.6_Cold_Side.pdf",
       "README.md",
       "03_SUPPLEMENTARY_Errata_v7_to_v8.pdf",
       "04_SUPPLEMENTARY_Key_Results_Summary.pdf",

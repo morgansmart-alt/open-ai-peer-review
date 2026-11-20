@@ -1,4 +1,5 @@
-import { FREE_MODELS, modelFits, type FreeModel, type RouterJob } from "../domain/freeModels.ts"
+import { isCalibratedForFullReview } from "../domain/calibration.ts"
+import { capabilityPrior, FREE_MODELS, isLiteModel, modelFits, needsMinuteGap, type FreeModel, type RouterJob } from "../domain/freeModels.ts"
 
 export interface ModelHealth {
   successes: number
@@ -12,6 +13,7 @@ export interface ModelHealth {
   disabledUntil: number
   invalid: boolean
   dailyCount: number
+  dailyResetAt: number
   backoffMs: number
 }
 
@@ -55,11 +57,12 @@ export function emptyHealth(): ModelHealth {
     disabledUntil: 0,
     invalid: false,
     dailyCount: 0,
+    dailyResetAt: 0,
     backoffMs: 0,
   }
 }
 
-export function healthKey(model: FreeModel): string {
+export function healthKey(model: { provider: string; model: string }): string {
   return `${model.provider}:${model.model}`
 }
 
@@ -88,21 +91,65 @@ function median(values: number[]): number {
   return sorted[Math.floor(sorted.length / 2)] ?? 0
 }
 
-export function utilityOf(model: FreeModel, health: ModelHealth | undefined): number {
-  const quality = processQuality(health)
-  const availability = !health || health.attempts === 0 ? 0.5 : health.successes / health.attempts
-  const used = health?.dailyCount ?? 0
+export function utilityOf(model: FreeModel, health: ModelHealth | undefined, now = Date.now()): number {
+  const current = health ? normalizeHealth(health, model.provider, now) : undefined
+  const samples = current?.qualitySamples ?? 0
+  const learned = processQuality(current)
+  const quality = samples === 0 ? capabilityPrior(model) : capabilityPrior(model) * 0.75 + learned * 0.25
+  const attempts = current?.attempts ?? 0
+  const raw = attempts === 0 ? 0.5 : (current?.successes ?? 0) / attempts
+  const availability = (raw * attempts + 2) / (attempts + 4)
+  const used = current?.dailyCount ?? 0
   const headroom = Math.max(0, (model.rpd - used) / model.rpd)
-  const latency = median(health?.latencyMs ?? [])
+  const latency = median(current?.latencyMs ?? [])
   const speed = latency > 0 ? 1 / (1 + latency / 1000) : 0.5
   return 0.45 * quality + 0.25 * availability + 0.15 * headroom + 0.15 * speed
 }
 
+function zoneParts(now: number, timeZone: string): { year: number; month: number; day: number; hour: number; minute: number; second: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(new Date(now))
+  const read = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? "0")
+  return { year: read("year"), month: read("month"), day: read("day"), hour: read("hour"), minute: read("minute"), second: read("second") }
+}
+
+function midnightInZone(timeZone: string, year: number, month: number, day: number): number {
+  let guess = Date.UTC(year, month - 1, day, 8, 0, 0)
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const shown = zoneParts(guess, timeZone)
+    const actual = Date.UTC(shown.year, shown.month - 1, shown.day, shown.hour, shown.minute, shown.second)
+    const target = Date.UTC(year, month - 1, day, 0, 0, 0)
+    guess -= actual - target
+  }
+  return guess
+}
+
 export function nextDailyReset(provider: string, now: number): number {
-  const date = new Date(now)
-  const hour = provider === "gemini" ? 8 : 0
-  const reset = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), hour, 0, 0, 0)
-  return reset > now ? reset : reset + 86_400_000
+  if (provider !== "gemini") {
+    const date = new Date(now)
+    const reset = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0)
+    return reset > now ? reset : reset + 86_400_000
+  }
+  const shown = zoneParts(now, "America/Los_Angeles")
+  let midnight = midnightInZone("America/Los_Angeles", shown.year, shown.month, shown.day)
+  if (midnight <= now) {
+    const tomorrow = zoneParts(now + 36 * 3_600_000, "America/Los_Angeles")
+    midnight = midnightInZone("America/Los_Angeles", tomorrow.year, tomorrow.month, tomorrow.day)
+  }
+  return midnight
+}
+
+export function normalizeHealth(health: ModelHealth, provider: string, now: number): ModelHealth {
+  if (health.dailyResetAt > now) return health
+  return { ...health, dailyCount: 0, dailyResetAt: nextDailyReset(provider, now) }
 }
 
 export function nextOverloadBackoff(previousMs: number): number {
@@ -130,11 +177,12 @@ export function rankCandidates(input: {
   const ranked = FREE_MODELS.filter((model) => present.has(model.provider))
     .filter((model) => modelFits(model, input.tokens))
     .filter((model) => !(input.privateMaterial && model.trainsOnFree))
-    .filter((model) => !cooling(input.health[healthKey(model)], input.now))
+    .filter((model) => !(input.job === "review-full" && isLiteModel(model) && !isCalibratedForFullReview(model.model)))
+    .filter((model) => !cooling(normalizeHealth(input.health[healthKey(model)] ?? emptyHealth(), model.provider, input.now), input.now))
     .sort((a, b) => {
-      const delta = utilityOf(b, input.health[healthKey(b)]) - utilityOf(a, input.health[healthKey(a)])
+      const delta = utilityOf(b, input.health[healthKey(b)], input.now) - utilityOf(a, input.health[healthKey(a)], input.now)
       if (delta !== 0) return delta
-      return healthKey(a).localeCompare(healthKey(b))
+      return capabilityPrior(b) - capabilityPrior(a)
     })
   return interleaveFamilies(ranked)
 }
@@ -167,21 +215,33 @@ function interleaveFamilies(models: FreeModel[]): FreeModel[] {
   return mixed
 }
 
+export function retryDelayMs(body: string, retryAfter?: string): number | null {
+  if (retryAfter && Number(retryAfter) > 0) return Math.ceil(Number(retryAfter) * 1000)
+  const match = body.match(/retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/i)
+  if (match?.[1]) return Math.ceil(Number(match[1]) * 1000)
+  return null
+}
+
+export function isDailyQuota(body: string): boolean {
+  if (/PerMinute|per minute/i.test(body)) return false
+  return /PerDay|per day|RequestsPerDay/i.test(body)
+}
+
 function applyFailure(health: RouterHealth, model: FreeModel, status: number, body: string, retryAfter: string | undefined, now: number): RouterHealth {
   const key = healthKey(model)
-  const current = health[key] ?? emptyHealth()
+  const current = normalizeHealth(health[key] ?? emptyHealth(), model.provider, now)
   const next = { ...current, attempts: current.attempts + 1 }
   const lower = body.toLowerCase()
-  if (status === 401) {
+  const delay = retryDelayMs(body, retryAfter)
+  if (status === 401 || status === 404) {
     next.invalid = true
   } else if (status === 402 || (status === 403 && /credit|billing|spending|payment|insufficient/.test(lower))) {
     next.disabledUntil = now + 365 * 86_400_000
-  } else if (status === 429 && /per day|daily|quota/.test(lower)) {
+  } else if (status === 429 && isDailyQuota(body)) {
     next.cooldownUntil = nextDailyReset(model.provider, now)
     next.dailyCount = model.rpd
   } else if (status === 429) {
-    const seconds = Number(retryAfter)
-    next.cooldownUntil = now + (Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 60_000)
+    next.cooldownUntil = now + (delay ?? 65_000)
   } else if (status === 503 || status === 0) {
     const wait = nextOverloadBackoff(current.backoffMs)
     next.backoffMs = wait
@@ -192,9 +252,10 @@ function applyFailure(health: RouterHealth, model: FreeModel, status: number, bo
   return { ...health, [key]: next }
 }
 
-function applySuccess(health: RouterHealth, model: FreeModel, latencyMs: number): RouterHealth {
+function applySuccess(health: RouterHealth, model: FreeModel, latencyMs: number, now: number, tokens: number): RouterHealth {
   const key = healthKey(model)
-  const current = health[key] ?? emptyHealth()
+  const current = normalizeHealth(health[key] ?? emptyHealth(), model.provider, now)
+  const gap = needsMinuteGap(model, tokens) ? now + 60_000 : 0
   return {
     ...health,
     [key]: {
@@ -203,10 +264,36 @@ function applySuccess(health: RouterHealth, model: FreeModel, latencyMs: number)
       successes: current.successes + 1,
       dailyCount: current.dailyCount + 1,
       backoffMs: 0,
+      cooldownUntil: Math.max(current.cooldownUntil, gap),
       latencyMs: [...current.latencyMs, latencyMs].slice(-20),
     },
   }
 }
+
+function soonestCooldown(models: FreeModel[], health: RouterHealth, now: number): number | null {
+  let soonest: number | null = null
+  for (const model of models) {
+    const current = normalizeHealth(health[healthKey(model)] ?? emptyHealth(), model.provider, now)
+    if (current.invalid || current.disabledUntil > now) continue
+    if (current.cooldownUntil <= now) continue
+    if (soonest === null || current.cooldownUntil < soonest) soonest = current.cooldownUntil
+  }
+  return soonest
+}
+
+function fittingModels(input: { tokens: number; providersWithKeys: string[]; privateMaterial: boolean }): FreeModel[] {
+  const present = new Set(input.providersWithKeys)
+  return FREE_MODELS.filter((model) => present.has(model.provider))
+    .filter((model) => modelFits(model, input.tokens))
+    .filter((model) => !(input.privateMaterial && model.trainsOnFree))
+}
+
+function gmtClock(ms: number): string {
+  return `${new Date(ms).toISOString().slice(11, 16)} GMT`
+}
+
+const SHORT_WAIT_MS = 3 * 60 * 1000
+const WAIT_BUDGET_MS = 10 * 60 * 1000
 
 export async function routeComplete(input: {
   tokens: number
@@ -216,32 +303,62 @@ export async function routeComplete(input: {
   now: number
   privateMaterial: boolean
   maxAttempts?: number
+  budgetMs?: number
+  clock?: () => number
+  sleep?: (ms: number) => Promise<void>
+  onHealth?: (health: RouterHealth) => void
   call: (model: FreeModel) => Promise<RouterCallResult>
 }): Promise<RouteSuccess | RouteFailure> {
-  const ranked = rankCandidates(input)
+  const clock = input.clock ?? Date.now
+  const sleep = input.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)))
+  const deadline = input.now + (input.budgetMs ?? WAIT_BUDGET_MS)
   const attempts: string[] = []
   let health = input.health
-  let now = input.now
+  let virtualNow = input.now
   const limit = input.maxAttempts ?? 4
-  for (const model of ranked.slice(0, limit)) {
-    attempts.push(healthKey(model))
-    const started = now
-    const result = await input.call(model)
-    if (result.status >= 200 && result.status < 300 && result.content) {
-      health = applySuccess(health, model, Math.max(1, now - started + 1))
-      return {
-        ok: true,
-        model,
-        content: result.content,
-        servedModel: result.servedModel || model.model,
-        family: model.family,
-        attempts,
-        health,
+  while (virtualNow <= deadline) {
+    const ranked = rankCandidates({ ...input, health, now: virtualNow })
+    if (ranked.length === 0) {
+      const soonest = soonestCooldown(fittingModels(input).filter((model) => !(input.job === "review-full" && isLiteModel(model) && !isCalibratedForFullReview(model.model))), health, virtualNow)
+      const waitMs = soonest === null ? Number.POSITIVE_INFINITY : soonest - virtualNow
+      if (soonest === null || waitMs > SHORT_WAIT_MS || soonest > deadline) {
+        const when = soonest === null ? "" : ` Next model free at ${gmtClock(soonest)}.`
+        const waited = attempts.length === 0 ? "No free model has room for this job." : `Tried ${attempts.join(", ")}.`
+        return { ok: false, error: `${waited}${when} Add another free key, or wait for the quota to reset.`, attempts, health }
       }
+      await sleep(waitMs)
+      virtualNow = clock()
+      continue
     }
-    health = applyFailure(health, model, result.status, result.body, result.headers?.retryAfter, now)
-    now += 1
+    for (const model of ranked.slice(0, limit)) {
+      attempts.push(healthKey(model))
+      const started = clock()
+      const result = await input.call(model)
+      const latency = Math.max(1, clock() - started)
+      if (result.status >= 200 && result.status < 300 && result.content) {
+        health = applySuccess(health, model, latency, virtualNow, input.tokens)
+        input.onHealth?.(health)
+        return {
+          ok: true,
+          model,
+          content: result.content,
+          servedModel: result.servedModel || model.model,
+          family: model.family,
+          attempts,
+          health,
+        }
+      }
+      health = applyFailure(health, model, result.status, result.body, result.headers?.retryAfter, virtualNow)
+      input.onHealth?.(health)
+    }
+    const soonest = soonestCooldown(fittingModels(input), health, virtualNow)
+    const waitMs = soonest === null ? Number.POSITIVE_INFINITY : soonest - virtualNow
+    if (soonest === null || waitMs > SHORT_WAIT_MS || soonest > deadline) break
+    await sleep(waitMs)
+    virtualNow = clock()
   }
+  const soonest = soonestCooldown(fittingModels(input), health, virtualNow)
+  const when = soonest ? ` Next model free at ${gmtClock(soonest)}.` : ""
   const waited = attempts.length === 0 ? "No free model has room for this job." : `Tried ${attempts.join(", ")}.`
-  return { ok: false, error: `${waited} Add another free key, or wait for the quota to reset.`, attempts, health }
+  return { ok: false, error: `${waited}${when} Add another free key, or wait for the quota to reset.`, attempts, health }
 }

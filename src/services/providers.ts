@@ -40,6 +40,20 @@ export function providerErrorMessage(status: number, body: string): string {
   return `The provider returned ${status}. ${cleaned}`
 }
 
+export class ProviderHttpError extends Error {
+  readonly status: number
+  readonly body: string
+  readonly retryAfter?: string
+
+  constructor(status: number, body: string, retryAfter?: string) {
+    super(providerErrorMessage(status, body))
+    this.name = "ProviderHttpError"
+    this.status = status
+    this.body = body
+    this.retryAfter = retryAfter
+  }
+}
+
 async function postJson(url: string, headers: Record<string, string>, body: unknown, signal?: AbortSignal): Promise<string> {
   let response: Response
   try {
@@ -56,7 +70,7 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
     )
   }
   const text = await response.text()
-  if (!response.ok) throw new Error(providerErrorMessage(response.status, text))
+  if (!response.ok) throw new ProviderHttpError(response.status, text, response.headers.get("retry-after") ?? undefined)
   return text
 }
 

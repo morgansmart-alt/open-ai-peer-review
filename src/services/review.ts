@@ -3,9 +3,9 @@ import { sha256Hex } from "./hash.ts"
 import type { AssessorProfile, Citation, CriteriaSet, CriterionJudgement, MajorIssue, ProviderSettings, ReviewReport, SourceResult, Verdict } from "../domain/types.ts"
 import { buildDemoReport, buildDemoSourceCheck, buildDemoVerdict } from "./mockReview.ts"
 import { FREE_PROVIDER_IDS, jobForText, tokensForJob } from "../domain/freeModels.ts"
-import { completeChat, resolvedModel } from "./providers.ts"
+import { completeChat, ProviderHttpError, resolvedModel } from "./providers.ts"
 import { loadRouterHealth, saveRouterHealth } from "./routerStore.ts"
-import { routeComplete } from "./router.ts"
+import { emptyHealth, healthKey, normalizeHealth, recordProcessQuality, routeComplete } from "./router.ts"
 import {
   buildPacket,
   chunksFor,
@@ -61,20 +61,22 @@ async function completeText(ctx: RunContext, system: string, user: string, json:
         })
         return { status: 200, body: "", content: result.content, servedModel: result.model }
       } catch (error) {
+        if (error instanceof ProviderHttpError) {
+          return { status: error.status, body: error.body, headers: { retryAfter: error.retryAfter } }
+        }
         const message = error instanceof Error ? error.message : "The provider failed."
-        const status = /429|rate limit|quota/i.test(message) ? 429 : /503|overloaded|high demand/i.test(message) ? 503 : /401|rejected that API key/i.test(message) ? 401 : /credit|spending/i.test(message) ? 403 : 500
-        return { status, body: message }
+        return { status: 503, body: message }
       }
     },
+    onHealth: saveRouterHealth,
   })
   saveRouterHealth(routed.health)
-  if (!routed.ok && routed.attempts.length === 0) {
-    if ((ctx.conversationLinks?.length ?? 0) > 0) {
+  if (!routed.ok) {
+    if ((ctx.conversationLinks?.length ?? 0) > 0 && routed.attempts.length === 0) {
       throw new Error("Private notes are not sent to free models that may train on prompts. Use a paid key, or remove the private link.")
     }
-    return completeChat(ctx.profile, ctx.settings, { model, system, user, json, signal: ctx.signal })
+    throw new Error(routed.error)
   }
-  if (!routed.ok) throw new Error(routed.error)
   return { content: routed.content, model: routed.servedModel, family: routed.family, attempts: routed.attempts, provider: routed.model.provider }
 }
 
@@ -97,7 +99,7 @@ async function completeJson(ctx: RunContext, system: string, user: string): Prom
   }
 }
 
-async function validatedReport(ctx: RunContext, packet: string, conversations: ConversationLink[]): Promise<{ report: ReviewReport; model: string; family?: string; attempts?: string[]; provider?: string }> {
+async function validatedReport(ctx: RunContext, packet: string, conversations: ConversationLink[]): Promise<{ report: ReviewReport; model: string; family?: string; attempts?: string[]; provider?: string; schemaFirstTry: boolean }> {
   const system = reviewSystemPrompt(ctx.criteria)
   const user = reviewUserPrompt(ctx.record, ctx.criteria, packet, conversations)
   const first = await completeText(ctx, system, user, true)
@@ -110,9 +112,12 @@ async function validatedReport(ctx: RunContext, packet: string, conversations: C
     parsed = null
   }
   let validated = parsed ? validateReport(parsed, ctx.criteria) : { ok: false as const, errors: ["The output was not JSON."] }
-  if (validated.ok) return { report: validated.report, model, family: first.family, attempts: first.attempts, provider: first.provider }
+  if (validated.ok) return { report: validated.report, model, family: first.family, attempts: first.attempts, provider: first.provider, schemaFirstTry: true }
   ctx.onProgress?.(`${ctx.profile.name}'s reading did not match the schema. Asking for a repair.`)
-  const repaired = await completeText(ctx, system, repairPrompt(raw, validated.errors), true)
+  const repairProfile = first.provider
+    ? { ...ctx.profile, provider: first.provider as RunContext["profile"]["provider"], defaultModel: first.model, defaultBaseUrl: baseUrlFor(first.provider) }
+    : ctx.profile
+  const repaired = await completeChat(repairProfile, ctx.settings, { model: first.model, system, user: repairPrompt(raw, validated.errors), json: true, signal: ctx.signal })
   raw = repaired.content
   model = repaired.model || model
   parsed = extractJsonValue(raw)
@@ -120,7 +125,7 @@ async function validatedReport(ctx: RunContext, packet: string, conversations: C
   if (!validated.ok) {
     throw new Error(`${ctx.profile.name} did not return a usable reading. ${validated.errors.slice(0, 3).join(" ")}`)
   }
-  return { report: validated.report, model, family: repaired.family ?? first.family, attempts: repaired.attempts ?? first.attempts, provider: repaired.provider ?? first.provider }
+  return { report: validated.report, model, family: first.family, attempts: first.attempts, provider: first.provider, schemaFirstTry: false }
 }
 
 function verifyQuotes(report: ReviewReport, corpus: string): ReviewReport {
@@ -196,7 +201,7 @@ export async function runReview(ctx: RunContext): Promise<ReviewReport> {
   const summaries = await summariseSections(ctx)
   ctx.onProgress?.(`${ctx.profile.name} is scoring the record.`)
   const scored = await validatedReport(ctx, buildPacket(ctx.record, ctx.documents, summaries), ctx.conversationLinks ?? [])
-  return verifyQuotes(
+  const report = verifyQuotes(
     {
       ...scored.report,
       reading,
@@ -205,6 +210,18 @@ export async function runReview(ctx: RunContext): Promise<ReviewReport> {
     },
     corpus,
   )
+  if (scored.provider && scored.model) {
+    const key = healthKey({ provider: scored.provider, model: scored.model })
+    const stored = loadRouterHealth()
+    const current = normalizeHealth(stored[key] ?? emptyHealth(), scored.provider, Date.now())
+    stored[key] = recordProcessQuality(current, {
+      schemaValid: scored.schemaFirstTry,
+      quotesVerified: (report.unverifiedQuotes ?? 0) === 0,
+      scoresAgree: report.scoringCheck?.mismatch !== true,
+    })
+    saveRouterHealth(stored)
+  }
+  return report
 }
 
 export interface SourceCheckDraft {

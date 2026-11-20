@@ -132,15 +132,46 @@ export const FREE_MODELS: FreeModel[] = [
 
 export const FREE_PROVIDER_IDS = ["gemini", "openrouter", "groq", "cohere"] as const
 
-/** PDF text from this corpus is about 1.4 characters per token, denser than plain prose. */
+/**
+ * Measured on the v8 packet: 720,898 characters were 269,611 tokens, about 2.7 characters each.
+ * Dividing by 1.4 made the router think the paper was more than twice as long.
+ */
 export function estimateTokens(chars: number): number {
-  return Math.ceil(chars / 1.4)
+  return Math.ceil(chars / 2.7)
 }
 
-export function tokensForJob(job: RouterJob, chars: number): number {
-  const estimate = estimateTokens(chars)
-  if (job === "review-full" || job === "extract") return Math.ceil(estimate * 1.2)
-  return estimate
+export function tokensForJob(_job: RouterJob, chars: number): number {
+  return estimateTokens(chars)
+}
+
+const CAPABILITY_PRIOR: Record<string, number> = {
+  "gemini-3.8-flash": 0.95,
+  "gemini-3.6-flash": 0.72,
+  "nvidia/nemotron-3-ultra-550b-a55b:free": 0.7,
+  "inclusionai/ling-3.2-flash:free": 0.66,
+  "openai/gpt-oss-120b": 0.55,
+  "command-a-03-2025": 0.5,
+  "google/gemma-4-31b-it:free": 0.4,
+  "gemini-3.5-flash-lite": 0.32,
+  "gemini-3.1-flash-lite": 0.28,
+}
+
+export function capabilityPrior(model: FreeModel): number {
+  return CAPABILITY_PRIOR[model.model] ?? 0.45
+}
+
+export function isLiteModel(model: Pick<FreeModel, "model">): boolean {
+  return /lite/i.test(model.model)
+}
+
+/** Gemini's free tier allows about 250,000 input tokens per minute per model. */
+export function inputTokensPerMinute(model: FreeModel): number | undefined {
+  return model.provider === "gemini" ? 250_000 : undefined
+}
+
+export function needsMinuteGap(model: FreeModel, tokens: number): boolean {
+  const limit = inputTokensPerMinute(model)
+  return Boolean(limit && tokens >= limit * 0.8)
 }
 
 export function modelFits(model: FreeModel, tokens: number): boolean {

@@ -28,6 +28,7 @@ import {
 } from "../services/zenodo.ts"
 import { isPublishedDoi, parseAnyRef, resolvePublishedDoi } from "../services/works.ts"
 import { coverageAllowsPublish } from "../services/textTools.ts"
+import { isCalibratedForFullReview } from "../domain/calibration.ts"
 import { enoughFamilies, familiesOf } from "../services/fairness.ts"
 
 interface PanelResult {
@@ -326,7 +327,9 @@ export function ReviewPage() {
       }),
     )
     const finished = panel.flatMap((item) => (item.stored && !item.stored.mock ? [item.stored] : []))
-    if (finished.length > 0 && familiesOf(finished).length < 2) {
+    const oneFamily = familiesOf(finished).length < 2
+    const uncalibrated = finished.some((review) => (review.report.router?.job === "review-full" || review.report.router?.job === "extract") && !isCalibratedForFullReview(review.modelId))
+    if (finished.length > 0 && (oneFamily || uncalibrated)) {
       for (const review of finished) review.tier = "provisional"
     }
     setResults(air.profiles.map((profile) => panel.find((item) => item.assessorId === profile.id)).filter((item): item is PanelResult => Boolean(item)))
@@ -345,8 +348,13 @@ export function ReviewPage() {
       setError("Publishing to the leaderboard needs a published DOI. This reading stays in this browser.")
       return
     }
-    if (!enoughFamilies(ready.filter((review) => !review.mock))) {
+    const live = ready.filter((review) => !review.mock)
+    if (!enoughFamilies(live)) {
       setError("A ranked review needs two different model families, for example Gemini and OpenRouter. This one is saved on this device as provisional.")
+      return
+    }
+    if (live.some((review) => (review.report.router?.job === "review-full" || review.report.router?.job === "extract") && !isCalibratedForFullReview(review.modelId))) {
+      setError("This model has not passed the reference calibration, so the reading stays provisional. Today only Gemini 3.8 Flash is cleared for a publishable whole-paper review.")
       return
     }
     const thin = ready.filter((review) => !coverageAllowsPublish(review.report.reading))
