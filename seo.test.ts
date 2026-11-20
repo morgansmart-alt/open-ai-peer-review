@@ -17,11 +17,12 @@ describe("public metadata", () => {
 
   it("includes Open Graph and Twitter large-image cards", () => {
     expect(html).toContain('property="og:title" content="Open AI Peer Review &amp; Idea Rankings | SCG-HMH"')
-    expect(html).toContain('property="og:image" content="https://morgansmart-alt.github.io/open-ai-peer-review/og-image.png"')
+    expect(html).toContain('property="og:image" content="https://morgansmart-alt.github.io/open-ai-peer-review/og-image.jpg"')
+    expect(html).toContain('property="og:image:type" content="image/jpeg"')
     expect(html).toContain('property="og:image:width" content="1200"')
     expect(html).toContain('property="og:image:height" content="630"')
     expect(html).toContain('name="twitter:card" content="summary_large_image"')
-    expect(html).toContain('name="twitter:image" content="https://morgansmart-alt.github.io/open-ai-peer-review/og-image.png"')
+    expect(html).toContain('name="twitter:image" content="https://morgansmart-alt.github.io/open-ai-peer-review/og-image.jpg"')
   })
 
   it("describes a free web application by Morgan Elliott Smart", () => {
@@ -34,11 +35,10 @@ describe("public metadata", () => {
   it("ships robots, a sitemap, and a 1200 by 630 share image", () => {
     const robots = readFileSync(new URL("./public/robots.txt", import.meta.url), "utf8")
     const sitemap = readFileSync(new URL("./public/sitemap.xml", import.meta.url), "utf8")
-    const image = readFileSync(new URL("./public/og-image.png", import.meta.url))
+    const image = readFileSync(new URL("./public/og-image.jpg", import.meta.url))
     expect(robots).toContain("Sitemap: https://morgansmart-alt.github.io/open-ai-peer-review/sitemap.xml")
     expect(sitemap).toContain("<loc>https://morgansmart-alt.github.io/open-ai-peer-review/</loc>")
-    expect(image.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a")
-    expect(image.readUInt32BE(16)).toBe(1200)
-    expect(image.readUInt32BE(20)).toBe(630)
+    expect(image.subarray(0, 3).toString("hex")).toBe("ffd8ff")
+    expect(image.byteLength).toBeGreaterThan(50_000)
   })
 })

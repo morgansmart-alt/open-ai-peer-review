@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { Link, useParams } from "react-router-dom"
 import { keySlot } from "../domain/assessors.ts"
-import { canAppendRound, ROUND_LIMIT, statusFromCheck, statusLabel } from "../domain/issues.ts"
+import { canAppendRound, latestAuthorClaim, ROUND_LIMIT, statusFromCheck, statusLabel } from "../domain/issues.ts"
 import { buildRanking } from "../domain/ranking.ts"
 import { samplePaperById, type SamplePaper } from "../domain/samples.ts"
 import type { AttachmentMeta, AuthorRole, IssueThread, NodeSubmission, StoredReview, Verdict } from "../domain/types.ts"
@@ -218,7 +218,7 @@ function AuthorBox({ record }: { record: ZenodoRecord }) {
   const air = useAir()
   const orcid = air.settings.orcid.replace(/^https?:\/\/orcid\.org\//i, "").trim()
   const listed = Boolean(orcid) && record.creators.some((creator) => creator.orcid === orcid)
-  const claim = air.db.claims.find((item) => item.doi === record.doi)
+  const claim = latestAuthorClaim(air.db.claims, record.doi)
   return (
     <details className="mt-4 rounded-2xl border border-line bg-white/50 p-3 text-sm">
       <summary className="cursor-pointer">Claim this record as an author</summary>
@@ -266,7 +266,8 @@ function IssueCard({
   const [chatNote, setChatNote] = useState("")
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
-  const role = authorRole(air.db.claims.find((claim) => claim.doi === record.doi)?.listedOnRecord ?? false, air.db.claims.some((claim) => claim.doi === record.doi))
+  const claim = latestAuthorClaim(air.db.claims, record.doi)
+  const role = authorRole(claim?.listedOnRecord ?? false, Boolean(claim))
 
   async function check(version: string) {
     if (documents.length === 0 && !record.description) {

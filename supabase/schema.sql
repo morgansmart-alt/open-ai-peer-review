@@ -68,11 +68,14 @@ create policy air_nodes_insert on air_nodes for insert with check (true);
 
 create policy air_issues_read on air_issues for select using (true);
 create policy air_issues_insert on air_issues for insert with check (true);
-create policy air_issues_update on air_issues for update using (true) with check (true);
 
 create policy air_claims_read on air_claims for select using (true);
 create policy air_claims_insert on air_claims for insert with check (true);
-create policy air_claims_update on air_claims for update using (true) with check (true);
+
+-- Issue replies are not a public UPDATE. See
+-- supabase/migrations/20261120000000_append_only_issues_and_claims.sql
+-- which adds air_append_issue_round and the insert guards. A fresh project
+-- should run that migration after this file.
 
 -- Existing projects created before private context counts:
 alter table air_reviews add column if not exists private_context_count integer not null default 0;

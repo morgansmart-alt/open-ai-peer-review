@@ -3,7 +3,7 @@ import { airCriteriaV01, officialCriteria } from "./officialCriteria.ts"
 import { impactFeasibilityQuadrant } from "./criteria.ts"
 import { globalGoals } from "./goals.ts"
 import { capWeights, computeReputations, consensusOf, fidelityFor } from "./fidelity.ts"
-import { canAppendRound, issuePenalty, newerVersion, statusFromCheck, ROUND_LIMIT } from "./issues.ts"
+import { canAppendRound, issuePenalty, latestAuthorClaim, newerVersion, statusFromCheck, ROUND_LIMIT } from "./issues.ts"
 import { ladderTier } from "./fidelity.ts"
 import { buildRanking, median, normalizeToTen, shrink, sortRows, listRankingMethods } from "./ranking.ts"
 import { builtinAssessors } from "./assessors.ts"
@@ -187,6 +187,12 @@ describe("issues", () => {
     expect(newerVersion([{ id: "1", publicationDate: "2026-01-01" }], "1")).toBeNull()
     const thread = { rounds: Array.from({ length: ROUND_LIMIT }, () => ({ id: "x" })) } as IssueThread
     expect(canAppendRound(thread)).toBe(false)
+    const claims = [
+      { id: "old", doi: "10.1/test", displayName: "Old", orcid: "", listedOnRecord: false, selfDeclared: true, createdAt: "2026-01-01T00:00:00.000Z" },
+      { id: "new", doi: "10.1/test", displayName: "New", orcid: "", listedOnRecord: true, selfDeclared: false, createdAt: "2026-06-01T00:00:00.000Z" },
+    ]
+    expect(latestAuthorClaim(claims, "10.1/test")?.displayName).toBe("New")
+    expect(latestAuthorClaim(claims, "10.1/other")).toBeUndefined()
   })
 })
 

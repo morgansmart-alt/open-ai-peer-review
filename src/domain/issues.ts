@@ -1,4 +1,4 @@
-import type { IssueRound, IssueStatus, IssueThread, MajorIssue, NodeSubmission, SourceResult, StoredReview } from "./types.ts"
+import type { AuthorClaim, IssueRound, IssueStatus, IssueThread, MajorIssue, NodeSubmission, SourceResult, StoredReview } from "./types.ts"
 
 export const ROUND_LIMIT = 6
 
@@ -21,6 +21,13 @@ export function statusFromCheck(
 
 export function canAppendRound(issue: IssueThread): boolean {
   return issue.rounds.length < ROUND_LIMIT
+}
+
+/** Several labels can exist for one DOI. The newest insert wins. */
+export function latestAuthorClaim(claims: AuthorClaim[], doi: string): AuthorClaim | undefined {
+  return claims
+    .filter((claim) => claim.doi === doi)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))[0]
 }
 
 export interface VersionRef {

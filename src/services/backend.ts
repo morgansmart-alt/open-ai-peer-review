@@ -184,10 +184,11 @@ export async function saveIssue(mode: BackendMode, issue: IssueThread): Promise<
   }
   const sb = client()
   if (!sb) return "The shared board is not configured."
-  const { error } = await sb
-    .from("air_issues")
-    .update({ payload: publicPayload(issue), updated_at: issue.updatedAt })
-    .eq("id", issue.id)
+  const payload = publicPayload(issue)
+  const rpc = await sb.rpc("air_append_issue_round", { p_issue_id: issue.id, p_payload: payload })
+  if (!rpc.error) return null
+  if (!missingAppendFunction(rpc.error)) return rpc.error.message
+  const { error } = await sb.from("air_issues").update({ payload, updated_at: issue.updatedAt }).eq("id", issue.id)
   if (error) {
     const overlay = loadOverlay()
     const index = overlay.issues.findIndex((item) => item.id === issue.id)
@@ -212,9 +213,17 @@ export async function publishClaim(mode: BackendMode, claim: AuthorClaim): Promi
   }
   const sb = client()
   if (!sb) return "The shared board is not configured."
-  const { error } = await sb.from("air_claims").upsert({ id: claim.id, doi: claim.doi, payload: publicPayload(claim) })
-  if (error) return error.message
-  return null
+  const row = { id: claim.id, doi: claim.doi, payload: publicPayload(claim) }
+  const inserted = await sb.from("air_claims").insert(row)
+  if (!inserted.error) return null
+  if (!/duplicate|unique/i.test(inserted.error.message)) return inserted.error.message
+  const updated = await sb.from("air_claims").update({ doi: row.doi, payload: row.payload }).eq("id", claim.id)
+  return updated.error ? updated.error.message : null
+}
+
+function missingAppendFunction(error: { code?: string; message?: string }): boolean {
+  const text = `${error.code ?? ""} ${error.message ?? ""}`
+  return /PGRST202|PGRST204|could not find the function|schema cache/i.test(text)
 }
 
 export function appendRound(issue: IssueThread, round: IssueRound, status: IssueStatus): IssueThread {

@@ -38,6 +38,23 @@ const sections = [
   },
 ]
 
+function SectionArt({ file, alt, caption }: { file: string; alt: string; caption: string }) {
+  return (
+    <figure className="mt-6">
+      <img
+        src={`${import.meta.env.BASE_URL}${file}`}
+        alt={alt}
+        width={1600}
+        height={1200}
+        loading="lazy"
+        decoding="async"
+        className="aspect-[4/3] w-full rounded-2xl border border-line object-cover"
+      />
+      <figcaption className="mt-2 text-xs text-ink-soft">{caption}</figcaption>
+    </figure>
+  )
+}
+
 export function MethodPage() {
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
@@ -54,6 +71,11 @@ export function MethodPage() {
         </Link>
         .
       </p>
+      <SectionArt
+        file="air_section_ai_reviewers.webp"
+        alt="Illustration of geometric nodes connected to a document card labelled 10.5555/EXAMPLE-DOI. The DOI is a placeholder, not a real record."
+        caption="Several assessors read the same public record. The DOI on the card is an example, not a paper on the board."
+      />
       <ol className="mt-6 space-y-3">
         {publishNotices.map((notice, index) => (
           <li key={notice.id} className="rounded-2xl border border-line bg-white/70 p-4">
@@ -64,6 +86,16 @@ export function MethodPage() {
           </li>
         ))}
       </ol>
+      <SectionArt
+        file="air_section_nodes_corroborate.webp"
+        alt="Illustration of independent nodes linked to a centre. Teal checks are passes and red checks are fails. The tick shape is the same; the colour carries the verdict."
+        caption="Independent nodes corroborate a reading or disagree with it. Teal is a pass and red is a fail."
+      />
+      <SectionArt
+        file="air_section_leaderboard.webp"
+        alt="Decorative illustration of four ranked cards over a globe. The scores 8.7, 8.1, 7.6 and 7.2 are artwork, not live results."
+        caption="Artwork only. The numbers on these cards are not the live leaderboard."
+      />
       <h2 className="mt-8 font-serif text-2xl">Private AI context</h2>
       <p className="mt-2 text-sm leading-relaxed text-ink-soft">
         A submitter, an author on an issue thread, or an independent node can add https links to earlier AI chats. Those links are sent only to the model that person chose, and only from that browser. The public record shows a count, never the address or the note. The links are not scored and do not move the ranking. A share link can still be opened by anyone who has it, so people should only add a conversation they are willing for that provider to read. If the model cannot open a link, it must say so and must not invent the chat. An issue is addressed only when the publication itself is quoted.
