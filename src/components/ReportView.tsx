@@ -2,6 +2,7 @@ import type { ReactNode } from "react"
 import { GoalsHeatmap, PhysicsGauge, QuadrantChart, RadarChart, RangeBars } from "./charts.tsx"
 import { publicContextCount } from "../domain/conversationLinks.ts"
 import { categoryLabel, impactFeasibilityQuadrant } from "../domain/criteria.ts"
+import { scoringMismatch, storedScale, toBoard } from "../domain/scoring.ts"
 import { globalGoals } from "../domain/goals.ts"
 import { DISCLAIMER, type CriteriaSet, type ReviewReport, type StoredReview } from "../domain/types.ts"
 import { downloadText, reportToMarkdown } from "../services/markdown.ts"
@@ -54,6 +55,9 @@ export function ReportView({
       outputHash: meta.outputHash ?? "",
       createdAt: meta.createdAt,
     } satisfies StoredReview)
+  const scale = storedScale(report, meta.criteriaVersion)
+  const shown = (score: number) => toBoard(score, scale)
+  const check = scoringMismatch(exportReview)
 
   return (
     <article data-testid="report-card" className="rounded-3xl border border-line bg-white/70 p-4 sm:p-6">
@@ -61,9 +65,14 @@ export function ReportView({
         <p className="text-xs uppercase tracking-wide text-teal">{meta.assessorName}</p>
         <h3 className="mt-1 font-serif text-2xl">{categoryLabel(criteria, report.recommendation)}</h3>
         <p className="mt-2 text-sm text-ink-soft">
-          Overall {report.overallScore.toFixed(2)} / {criteria.scale.max} · Idea {report.ideaScore.toFixed(2)} / {criteria.scale.max}
+          Overall {shown(report.overallScore).toFixed(0)} / 100 · Idea {shown(report.ideaScore).toFixed(0)} / 100
           {criteria.version.startsWith("0.1") ? " · AIR v0.1" : ""}
         </p>
+        {check.mismatch && (
+          <p className="mt-2 text-sm text-bad">
+            Scoring mismatch, needs re-check. {check.reason}
+          </p>
+        )}
         <dl className="mt-3 grid gap-1 text-xs text-ink-soft sm:grid-cols-2">
           <div>Model: {meta.modelId}</div>
           <div>Provider: {meta.provider}</div>
@@ -101,9 +110,9 @@ export function ReportView({
           Print / save PDF
         </button>
       </div>
-      <Matrices report={report} criteria={criteria} />
+      <Matrices report={report} criteria={criteria} scale={scale} />
       <div className="mt-4 grid gap-3 lg:grid-cols-2">
-        <RadarChart scores={report.scores.slice(0, 8).map((score) => ({ label: criteria.criteria.find((item) => item.id === score.criterionId)?.name ?? score.criterionId, score: score.score, max: criteria.scale.max }))} />
+        <RadarChart scores={report.scores.slice(0, 8).map((score) => ({ label: criteria.criteria.find((item) => item.id === score.criterionId)?.name ?? score.criterionId, score: shown(score.score), max: 100 }))} />
         {report.physics && <PhysicsGauge classification={report.physics.classification} />}
         {report.goals && <GoalsHeatmap goals={report.goals} />}
         {report.valueEstimate && <RangeBars low={report.valueEstimate.overallBenefit.low} central={report.valueEstimate.overallBenefit.central} high={report.valueEstimate.overallBenefit.high} />}
@@ -120,7 +129,7 @@ export function ReportView({
                 <div className="flex items-baseline justify-between gap-3">
                   <h4 className="font-medium">{criterion?.name ?? score.criterionId}</h4>
                   <span className="tabular-nums">
-                    {score.score}/{criteria.scale.max}
+                    {shown(score.score).toFixed(0)}/100
                     {score.confidence ? ` · ${score.confidence}` : ""}
                   </span>
                 </div>
@@ -167,10 +176,12 @@ export function ReportView({
   )
 }
 
-function Matrices({ report, criteria }: { report: ReviewReport; criteria: CriteriaSet }) {
+function Matrices({ report, criteria, scale }: { report: ReviewReport; criteria: CriteriaSet; scale: number }) {
   if (criteria.reportSchema !== "0.2" && !report.physics && !report.goals) return null
-  const impact = report.scores.find((score) => score.criterionId === "impact")?.score
-  const feasibility = report.scores.find((score) => score.criterionId === "feasibility")?.score
+  const impactRaw = report.scores.find((score) => score.criterionId === "impact")?.score
+  const feasibilityRaw = report.scores.find((score) => score.criterionId === "feasibility")?.score
+  const impact = impactRaw === undefined ? undefined : toBoard(impactRaw, scale)
+  const feasibility = feasibilityRaw === undefined ? undefined : toBoard(feasibilityRaw, scale)
   const quadrant = impact !== undefined && feasibility !== undefined ? impactFeasibilityQuadrant(impact, feasibility) : null
   return (
     <div className="mt-4 grid gap-3 lg:grid-cols-2">

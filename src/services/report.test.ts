@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
-import { airCriteriaV01, airCriteriaV02 } from "../domain/officialCriteria.ts"
+import { airCriteriaV01, airCriteriaV02, officialCriteria } from "../domain/officialCriteria.ts"
+import { reviewSystemPrompt, reviewUserPrompt } from "./prompts.ts"
+import type { ZenodoRecord } from "./zenodo.ts"
 import { STORED_REVIEW_KEYS, type StoredReview } from "../domain/types.ts"
 import { weightedMean } from "../domain/criteria.ts"
 import { sha256Hex } from "./hash.ts"
@@ -38,6 +40,66 @@ describe("validateReport", () => {
     const fenced = "Sure:\n```json\n" + JSON.stringify(good) + "\n```"
     const parsed = validateReport(extractJsonValue(fenced), airCriteriaV01)
     expect(parsed.ok).toBe(true)
+  })
+
+  it("stores a 0–100 scale and records a scoring mismatch", () => {
+    const scores = officialCriteria.criteria.map((criterion) => ({
+      criterionId: criterion.id,
+      score: 80,
+      rationale: `${criterion.name} is supported by a passage a reader can find, with the remaining gap named.`,
+      citations: [{ quote: "Net B collected 1.8 litres.", location: "results" }],
+      confidence: "medium",
+    }))
+    const base = {
+      summary: "The record states a narrow claim and shows the weighing steps that support it, with the season limit written in the text.",
+      scores,
+      strengths: ["The files are public."],
+      majorIssues: [],
+      minorIssues: ["The season is narrow."],
+      questionsForAuthors: ["What would a second season change?"],
+      suggestedNextSteps: ["Publish the weighing sheet beside the figure."],
+      ontologyClass: "physical-testable",
+      physics: { classification: "CONSISTENT", laws: ["conservation of mass"], howAddressed: "The mass balance is written out." },
+      simulation: { reported: 0, passed: 0, methods: "Simulation does not apply to this record.", inputsAvailable: false },
+      valueEstimate: { assumptions: ["The season is one site."], marketDisruption: "Not estimated." },
+      goals: [{ goalId: "clean-water", level: "indirect", note: "The record is about collection, not a target." }],
+    }
+    const matched = validateReport({ ...base, recommendation: "encourage", overallScore: 80 }, officialCriteria)
+    expect(matched.ok).toBe(true)
+    if (!matched.ok) return
+    expect(matched.report.scale).toBe(100)
+    expect(matched.report.scoringCheck?.mismatch).toBe(false)
+    const drifted = validateReport({ ...base, recommendation: "revise", overallScore: 40 }, officialCriteria)
+    expect(drifted.ok).toBe(true)
+    if (!drifted.ok) return
+    expect(drifted.report.overallScore).toBe(40)
+    expect(drifted.report.scoringCheck?.mismatch).toBe(true)
+    expect(drifted.report.scoringCheck?.reason).toContain("differs from the weighted score")
+    expect(drifted.report.scoringCheck?.reason).toContain("Verdict")
+    const record = {
+      id: "1",
+      conceptId: "1",
+      doi: "10.5281/zenodo.1",
+      conceptDoi: "10.5281/zenodo.1",
+      title: "A record",
+      creators: [],
+      description: "",
+      descriptionHtml: "",
+      keywords: [],
+      version: "1",
+      recordVersion: "1",
+      license: "",
+      publicationDate: "2026-01-01",
+      related: [],
+      resourceType: "publication",
+      access: { record: "open", files: "open" },
+      files: [],
+      htmlUrl: "https://zenodo.org/records/1",
+    } satisfies ZenodoRecord
+    const prompt = reviewUserPrompt(record, officialCriteria, "text")
+    expect(reviewSystemPrompt(officialCriteria)).toContain("out of 100")
+    expect(prompt).toContain("integer 0-100")
+    expect(prompt).toContain("0-20")
   })
 
   it("rejects a score outside the scale", () => {

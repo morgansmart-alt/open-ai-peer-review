@@ -32,7 +32,7 @@ const questions = [
   },
   {
     q: "How are rankings computed?",
-    a: "Each cell is a median on a 0–10 scale. The order leans toward 5 until there are more readings: n/(n+2) × median + 2/(n+2) × 5. Open issues nudge that down a little. Custom criteria and free screenings are left out.",
+    a: "Each cell is a median on a 0–100 scale. Older 0–10 readings are shown times 10. The order leans toward 50 until there are more readings: n/(n+2) × median + 2/(n+2) × 50. A reading whose scores disagree with its own total, or whose verdict is in the wrong band, is marked Scoring mismatch, needs re-check and left out of that median. If assessors on the same version are more than 30 points apart, the row is marked Assessors disagree. Open issues nudge the order down a little. Custom criteria and free screenings are left out.",
   },
 ]
 

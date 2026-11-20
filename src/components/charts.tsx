@@ -44,7 +44,7 @@ export function QuadrantChart({ impact, feasibility }: { impact: number; feasibi
       <rect x="100" y="10" width="80" height="60" className="fill-teal/25" />
       <rect x="20" y="70" width="80" height="60" className="fill-bad/15" />
       <rect x="100" y="70" width="80" height="60" className="fill-paper-deep" />
-      <circle cx={20 + (feasibility / 10) * 160} cy={130 - (impact / 10) * 120} r="5" className="fill-ink" />
+      <circle cx={20 + (Math.min(100, feasibility) / 100) * 160} cy={130 - (Math.min(100, impact) / 100) * 120} r="5" className="fill-ink" />
       <text x="100" y="154" textAnchor="middle" className="fill-ink-soft text-[9px]">
         Feasibility →
       </text>
@@ -119,7 +119,7 @@ export function Sparkline({ values }: { values: number[] }) {
   const height = 24
   if (values.length === 0) return null
   const step = values.length === 1 ? 0 : width / (values.length - 1)
-  const points = values.map((value, index) => `${index * step},${height - (Math.min(10, Math.max(0, value)) / 10) * (height - 4) - 2}`).join(" ")
+  const points = values.map((value, index) => `${index * step},${height - (Math.min(100, Math.max(0, value)) / 100) * (height - 4) - 2}`).join(" ")
   return (
     <svg viewBox={`0 0 ${width} ${height}`} aria-hidden="true" className="inline-block h-6 w-16">
       <polyline points={points} fill="none" className="stroke-teal" strokeWidth="2" />

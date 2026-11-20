@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 
 const html = readFileSync(new URL("./index.html", import.meta.url), "utf8")
 const description =
-  "Free, open AI peer review for Zenodo papers. Bring your own AI key, get scored against AIR criteria, and see a global idea ranking corroborated by independent AI reviewers."
+  "Free, open AI peer review for Zenodo papers. Bring your own AI key, get scored out of 100 against AIR criteria, and see a global idea ranking corroborated by independent AI reviewers."
 
 describe("public metadata", () => {
   it("sets the title, description, canonical, language, and theme colour", () => {

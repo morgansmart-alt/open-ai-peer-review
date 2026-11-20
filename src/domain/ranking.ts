@@ -2,14 +2,15 @@ import type { AssessorProfile } from "./types.ts"
 import { round2 } from "./criteria.ts"
 import { computeReputations, fidelityFor, nodesForReviews, type FidelitySummary } from "./fidelity.ts"
 import { issueCounts, issuePenalty } from "./issues.ts"
+import { ASSESSOR_SPREAD, BOARD_PRIOR, boardValue, scoringMismatch } from "./scoring.ts"
 import type { AirDatabase, IssueThread, StoredReview } from "./types.ts"
 
 export const PRIOR = 3
-export const BOARD_PRIOR = 5
+export { BOARD_PRIOR }
 export const SHRINK_K = 2
-const DISPUTE_NUDGE = 0.15
-const VERIFY_BOOST = 0.1
-const NUDGE_CAP = 0.5
+const DISPUTE_NUDGE = 1.5
+const VERIFY_BOOST = 1
+const NUDGE_CAP = 5
 
 export function median(values: number[]): number | null {
   if (values.length === 0) return null
@@ -27,7 +28,7 @@ export function shrink(score: number, count: number, prior = PRIOR): number {
   return round2((count / (count + SHRINK_K)) * score + (SHRINK_K / (count + SHRINK_K)) * prior)
 }
 
-/** AIR v0.1 scores are 1–5. The board shows every version on 0–10. */
+/** AIR v0.1 scores are 1–5. Kept so older tests can still read a 0–10 stretch. The board itself uses toBoard. */
 export function normalizeToTen(score: number, criteriaVersion: string): number {
   if (criteriaVersion.startsWith("0.1")) return round2(((score - 1) / 4) * 10)
   return score
@@ -65,6 +66,8 @@ export interface RankRow {
   unresolvedIssues: number
   partialIssues: number
   addressedIssues: number
+  mismatchCount: number
+  assessorsDisagree: boolean
   reviews: StoredReview[]
   issues: IssueThread[]
 }
@@ -107,22 +110,24 @@ export function buildRanking(db: AirDatabase, now = Date.now()): RankRow[] {
   for (const [key, reviews] of groups) {
     const first = reviews[0]
     if (!first) continue
+    const mismatchCount = reviews.filter((review) => scoringMismatch(review).mismatch).length
+    const counted = reviews.filter((review) => !scoringMismatch(review).mismatch)
     const byAssessor: Record<string, AssessorCell> = {}
-    const assessorIds = [...new Set(reviews.map((review) => review.assessorId))]
+    const assessorIds = [...new Set(counted.map((review) => review.assessorId))]
     for (const assessorId of assessorIds) {
-      const mine = reviews.filter((review) => review.assessorId === assessorId)
-      const value = median(mine.map((review) => normalizeToTen(review.report.overallScore, review.criteriaVersion)))
+      const mine = counted.filter((review) => review.assessorId === assessorId)
+      const value = median(mine.map((review) => boardValue(review.report.overallScore, review.report, review.criteriaVersion)))
       if (value === null) continue
       byAssessor[assessorId] = { median: value, count: mine.length, rankScore: shrink(value, mine.length, BOARD_PRIOR) }
     }
     const assessorMedians = Object.values(byAssessor).map((cell) => cell.median)
     const panelMedian = median(assessorMedians)
-    const ideaMedian = median(reviews.map((review) => normalizeToTen(review.report.ideaScore, review.criteriaVersion)))
+    const ideaMedian = median(counted.map((review) => boardValue(review.report.ideaScore, review.report, review.criteriaVersion)))
     const subscores: RankRow["subscores"] = {}
     for (const sub of SUBSCORE_IDS) {
-      const values = reviews.flatMap((review) => {
+      const values = counted.flatMap((review) => {
         const found = review.report.scores.find((score) => score.criterionId === sub.id)
-        return found ? [normalizeToTen(found.score, review.criteriaVersion)] : []
+        return found ? [boardValue(found.score, review.report, review.criteriaVersion)] : []
       })
       const subMedian = median(values)
       subscores[sub.id] = {
@@ -150,13 +155,15 @@ export function buildRanking(db: AirDatabase, now = Date.now()): RankRow[] {
       publicationDate: first.publicationDate,
       byAssessor,
       panelMedian,
-      panelRankScore: panelMedian === null ? null : round2(shrink(panelMedian, reviews.length, BOARD_PRIOR) - nudge + boost),
+      panelRankScore: panelMedian === null ? null : round2(shrink(panelMedian, counted.length, BOARD_PRIOR) - nudge + boost),
       ideaMedian,
-      ideaRankScore: ideaMedian === null ? null : round2(shrink(ideaMedian, reviews.length, BOARD_PRIOR) - nudge + boost),
+      ideaRankScore: ideaMedian === null ? null : round2(shrink(ideaMedian, counted.length, BOARD_PRIOR) - nudge + boost),
       subscores,
       physicsClass: classes.sort((a, b) => classes.filter((item) => item === b).length - classes.filter((item) => item === a).length)[0] ?? null,
       criteriaVersions: [...new Set(reviews.map((review) => review.criteriaVersion))],
       reviewCount: reviews.length,
+      mismatchCount,
+      assessorsDisagree: assessorMedians.length >= 2 && Math.max(...assessorMedians) - Math.min(...assessorMedians) > ASSESSOR_SPREAD,
       fidelity,
       issuePenalty: round2(penalty),
       openIssues: counts.open,
@@ -184,7 +191,7 @@ export function listRankingMethods(profiles: AssessorProfile[]): RankingMethod[]
     {
       id: "panel",
       label: "Panel",
-      hint: "Cautious combined score across assessors, on a 0–10 board",
+      hint: "Cautious combined score across assessors, on a 0–100 board",
       value: (row) => row.panelRankScore,
     },
     ...SUBSCORE_IDS.map(
@@ -248,6 +255,6 @@ export function tendency(
     return { delta: null, label: "Not enough shared records yet", compared: 0 }
   }
   const delta = round2(deltas.reduce((total, value) => total + value, 0) / deltas.length)
-  const label = delta <= -0.25 ? "Harsher than the panel" : delta >= 0.25 ? "More lenient than the panel" : "Close to the panel"
+  const label = delta <= -2.5 ? "Harsher than the panel" : delta >= 2.5 ? "More lenient than the panel" : "Close to the panel"
   return { delta, label, compared: deltas.length }
 }

@@ -1,5 +1,6 @@
 import { assessorById } from "../domain/assessors.ts"
 import { clamp, recommendationFor, weightedMean } from "../domain/criteria.ts"
+import { describeScoring } from "../domain/scoring.ts"
 import { globalGoals, goalLevelForText } from "../domain/goals.ts"
 import type {
   AssessorProfile,
@@ -52,7 +53,7 @@ export function buildDemoReport(options: {
   const quotes = pickQuotes(text, criteria.criteria.length + 2)
   const fallback = `The record “${title}” was read from its metadata and files.`
   const midpoint = (criteria.scale.min + criteria.scale.max) / 2
-  const spread = criteria.scale.max > 5 ? 2 : 1
+  const spread = Math.max(1, (criteria.scale.max - criteria.scale.min) / 5)
   const confidence: Confidence = text.length > 1000 ? "medium" : "low"
   const scores = criteria.criteria.map((criterion, index) => {
     const bias = BIAS[profile.id]?.[criterion.id] ?? BIAS[profile.id]?.all ?? 0
@@ -76,7 +77,7 @@ export function buildDemoReport(options: {
   const weakest = [...scores].sort((a, b) => a.score - b.score)[0]
   const weakestCriterion = criteria.criteria.find((item) => item.id === weakest?.criterionId)
   const majorIssues: MajorIssue[] = scores
-    .filter((score) => score.score <= 2)
+    .filter((score) => score.score <= criteria.scale.max * 0.2)
     .slice(0, 3)
     .map((score) => {
       const criterion = criteria.criteria.find((item) => item.id === score.criterionId)
@@ -87,12 +88,16 @@ export function buildDemoReport(options: {
         reason: signalSentence(score.criterionId, signals[score.criterionId] ?? 0),
       }
     })
+  const recommendation = recommendationFor(overall, criteria)
+  const check = describeScoring({ scores, statedOverall: overall, recommendation, criteria })
   return {
     summary: `This is a demo reading of “${title}” by the ${profile.name} profile. No API was called. The notes below use a fixed local heuristic so you can walk the whole report, the panel, and the leaderboard before you spend a key. Treat every score as a placeholder a real model would replace.`,
     scores,
     overallScore: overall,
     ideaScore: idea,
-    recommendation: recommendationFor(overall, criteria),
+    recommendation,
+    scale: check.scale,
+    scoringCheck: check.scoringCheck,
     strengths: [
       "The record is public on Zenodo, so a reader can open the same files AIR used.",
       text.length > 800 ? "There is enough text in the selected files to anchor comments to passages." : "The metadata already states a subject a later reading can test.",

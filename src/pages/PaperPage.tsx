@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom"
 import { keySlot } from "../domain/assessors.ts"
 import { canAppendRound, latestAuthorClaim, ROUND_LIMIT, statusFromCheck, statusLabel } from "../domain/issues.ts"
 import { buildRanking } from "../domain/ranking.ts"
+import { boardValue } from "../domain/scoring.ts"
 import { samplePaperById, type SamplePaper } from "../domain/samples.ts"
 import type { AttachmentMeta, AuthorRole, IssueThread, NodeSubmission, StoredReview, Verdict } from "../domain/types.ts"
 import { useAir } from "../context/AirContext.tsx"
@@ -147,7 +148,7 @@ export function PaperPage() {
                 .map((review) => (
                   <details key={review.id} className="rounded-2xl border border-line bg-white/50 p-3">
                     <summary className="cursor-pointer text-sm">
-                      {air.profiles.find((profile) => profile.id === review.assessorId)?.name ?? review.assessorId} · {review.report.overallScore.toFixed(1)} ·{" "}
+                      {air.profiles.find((profile) => profile.id === review.assessorId)?.name ?? review.assessorId} · {boardValue(review.report.overallScore, review.report, review.criteriaVersion).toFixed(0)} / 100 ·{" "}
                       {formatWhen(review.createdAt)}
                       {review.customCriteria ? " · unranked" : ""}
                       {review.mock ? " · demo" : ""}

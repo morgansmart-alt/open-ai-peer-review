@@ -6,6 +6,7 @@ import { capWeights, computeReputations, consensusOf, fidelityFor } from "./fide
 import { canAppendRound, issuePenalty, latestAuthorClaim, newerVersion, statusFromCheck, ROUND_LIMIT } from "./issues.ts"
 import { ladderTier } from "./fidelity.ts"
 import { buildRanking, median, normalizeToTen, shrink, sortRows, listRankingMethods } from "./ranking.ts"
+import { toBoard } from "./scoring.ts"
 import { builtinAssessors } from "./assessors.ts"
 import { sampleDatabase } from "./samples.ts"
 import { rateLimitDecision } from "../services/rateLimit.ts"
@@ -97,9 +98,9 @@ describe("ranking", () => {
     const rows = buildRanking(db)
     const low = rows.find((row) => row.recordId === "9")
     const many = rows.find((row) => row.recordId === "8")
-    expect(low?.panelMedian).toBe(3)
+    expect(low?.panelMedian).toBe(30)
     expect(low?.reviewCount).toBe(2)
-    expect(many?.panelMedian).toBe(4.2)
+    expect(many?.panelMedian).toBe(42)
     const method = listRankingMethods(builtinAssessors).find((item) => item.id === "panel")
     expect(method).toBeTruthy()
     if (!method || !low || !many) return
@@ -201,13 +202,18 @@ describe("AIR v0.2", () => {
     expect(airCriteriaV01.version).toBe("0.1.0")
     expect(airCriteriaV01.reportSchema).toBe("0.1")
     expect(officialCriteria.version).toBe("0.2.0")
-    expect(officialCriteria.scale.max).toBe(10)
+    expect(officialCriteria.scale.max).toBe(100)
     expect(officialCriteria.criteria.find((item) => item.id === "clarity")?.weight).toBeLessThan(1)
     expect(officialCriteria.criteria.find((item) => item.id === "impact")?.weight).toBeGreaterThan(1)
+    expect(officialCriteria.criteria.find((item) => item.id === "impact")?.bands?.[0]?.max).toBe(20)
     expect(globalGoals.goals.every((goal) => goal.sourceUrl.startsWith("https://"))).toBe(true)
     expect(globalGoals.goals.some((goal) => goal.id === "methane-pledge")).toBe(true)
-    expect(impactFeasibilityQuadrant(8, 8).id).toBe("priority")
-    expect(impactFeasibilityQuadrant(8, 2).id).toBe("moonshot")
+    expect(impactFeasibilityQuadrant(80, 80).id).toBe("priority")
+    expect(impactFeasibilityQuadrant(80, 20).id).toBe("moonshot")
+    expect(toBoard(7, 10)).toBe(70)
+    expect(toBoard(1, 5)).toBe(0)
+    expect(toBoard(5, 5)).toBe(100)
+    expect(toBoard(73, 100)).toBe(73)
     expect(normalizeToTen(1, "0.1.0")).toBe(0)
     expect(normalizeToTen(5, "0.1.0")).toBe(10)
     expect(normalizeToTen(7, "0.2.0")).toBe(7)
@@ -246,6 +252,50 @@ describe("sample board", () => {
     expect(wire).toBeGreaterThan(fog)
     expect(ordered.find((row) => row.recordId === "sample-wire")?.fidelity.disputed).toBe(true)
     expect(ordered.find((row) => row.recordId === "sample-fog")?.fidelity.nodes).toBe(4)
+  })
+})
+
+function scored(
+  partial: { id: string; assessorId: string; doi: string; recordId: string; title: string },
+  criterionScore: number,
+  stated: number,
+  recommendation: string,
+): StoredReview {
+  const base = review({ ...partial, overall: stated })
+  base.report.scale = 100
+  base.report.recommendation = recommendation
+  base.report.scores = officialCriteria.criteria.map((criterion) => ({
+    criterionId: criterion.id,
+    score: criterionScore,
+    rationale: "Supported by a passage a reader can find in the record.",
+    citations: [],
+  }))
+  return base
+}
+
+describe("score consistency", () => {
+  it("excludes a mismatched reading and flags assessors more than 30 apart", () => {
+    const steady = scored({ id: "steady", assessorId: "grok", doi: "10.5281/zenodo.40", recordId: "40", title: "Steady" }, 70, 70, "revise")
+    const off = scored({ id: "off", assessorId: "gpt", doi: "10.5281/zenodo.40", recordId: "40", title: "Steady" }, 70, 95, "revise")
+    const harsh = scored({ id: "harsh", assessorId: "claude", doi: "10.5281/zenodo.41", recordId: "41", title: "Split" }, 40, 40, "major-revision")
+    const kind = scored({ id: "kind", assessorId: "gemini", doi: "10.5281/zenodo.41", recordId: "41", title: "Split" }, 90, 90, "encourage")
+    const closeA = scored({ id: "close-a", assessorId: "grok", doi: "10.5281/zenodo.42", recordId: "42", title: "Close" }, 70, 70, "revise")
+    const closeB = scored({ id: "close-b", assessorId: "gpt", doi: "10.5281/zenodo.42", recordId: "42", title: "Close" }, 55, 55, "major-revision")
+    const wrongBand = scored({ id: "band", assessorId: "grok", doi: "10.5281/zenodo.43", recordId: "43", title: "Band" }, 70, 70, "encourage")
+    const rows = buildRanking({ reviews: [steady, off, harsh, kind, closeA, closeB, wrongBand], nodes: [], issues: [], claims: [] })
+    const mixed = rows.find((row) => row.recordId === "40")
+    expect(mixed?.mismatchCount).toBe(1)
+    expect(mixed?.panelMedian).toBe(70)
+    expect(mixed?.reviewCount).toBe(2)
+    expect(off.report.scores.length).toBeGreaterThan(0)
+    const split = rows.find((row) => row.recordId === "41")
+    expect(split?.assessorsDisagree).toBe(true)
+    expect(split?.mismatchCount).toBe(0)
+    expect(split?.panelMedian).toBe(65)
+    expect(rows.find((row) => row.recordId === "42")?.assessorsDisagree).toBe(false)
+    const band = rows.find((row) => row.recordId === "43")
+    expect(band?.mismatchCount).toBe(1)
+    expect(band?.panelMedian).toBeNull()
   })
 })
 

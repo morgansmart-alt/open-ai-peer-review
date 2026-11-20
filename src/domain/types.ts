@@ -125,6 +125,14 @@ export interface ReviewReport {
   overallScore: number
   ideaScore: number
   recommendation: string
+  /** 100 means the stored numbers are already out of 100. Missing means an older 0–10 or 1–5 reading. */
+  scale?: number
+  scoringCheck?: {
+    internal: number
+    statedOverall: number | null
+    mismatch: boolean
+    reason: string | null
+  }
   strengths: string[]
   majorIssues: MajorIssue[]
   minorIssues: string[]

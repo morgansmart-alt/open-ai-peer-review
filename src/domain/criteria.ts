@@ -153,10 +153,10 @@ export function recommendationFor(score: number, criteria: CriteriaSet): string 
 export type QuadrantId = "priority" | "moonshot" | "incremental" | "reconsider" | "mixed"
 
 export function impactFeasibilityQuadrant(impact: number, feasibility: number): { id: QuadrantId; label: string; meaning: string } {
-  const highImpact = impact >= 7
-  const lowImpact = impact <= 4
-  const highFeasibility = feasibility >= 7
-  const lowFeasibility = feasibility <= 4
+  const highImpact = impact >= 70
+  const lowImpact = impact <= 40
+  const highFeasibility = feasibility >= 70
+  const lowFeasibility = feasibility <= 40
   if (highImpact && highFeasibility) {
     return { id: "priority", label: "High impact / high feasibility", meaning: "Priority. The benefit is wide and a path to test or build is written down." }
   }

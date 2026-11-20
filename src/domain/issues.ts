@@ -175,5 +175,5 @@ export function issueCounts(issues: IssueThread[]): { open: number; unresolved: 
 
 export function issuePenalty(issues: IssueThread[]): number {
   const counts = issueCounts(issues)
-  return Math.min(0.4, counts.unresolved * 0.08 + counts.open * 0.04 + counts.partial * 0.03)
+  return Math.min(4, counts.unresolved * 0.8 + counts.open * 0.4 + counts.partial * 0.3)
 }

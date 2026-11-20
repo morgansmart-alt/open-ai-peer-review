@@ -97,6 +97,6 @@ describe("private AI context links", () => {
     })
     const db: AirDatabase = { reviews: [base(0), base(3)], nodes: [], issues: [], claims: [] }
     const rows = buildRanking(db)
-    expect(rows.every((row) => row.panelMedian === 6)).toBe(true)
+    expect(rows.every((row) => row.panelMedian === 60)).toBe(true)
   })
 })

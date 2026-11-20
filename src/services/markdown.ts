@@ -1,4 +1,5 @@
 import { categoryLabel } from "../domain/criteria.ts"
+import { boardValue } from "../domain/scoring.ts"
 import { DISCLAIMER, type CriteriaSet, type StoredReview } from "../domain/types.ts"
 
 export function reportToMarkdown(review: StoredReview, criteria: CriteriaSet, assessorName: string): string {
@@ -20,8 +21,9 @@ export function reportToMarkdown(review: StoredReview, criteria: CriteriaSet, as
       ? `- Private AI context links sent to the model: ${review.privateContextCount}. Addresses are not included.`
       : "",
     `- Output hash: ${review.outputHash}`,
-    `- Overall: ${review.report.overallScore.toFixed(2)} / 5`,
-    `- Idea score: ${review.report.ideaScore.toFixed(2)} / 5`,
+    `- Overall: ${boardValue(review.report.overallScore, review.report, review.criteriaVersion).toFixed(0)} / 100`,
+    `- Idea score: ${boardValue(review.report.ideaScore, review.report, review.criteriaVersion).toFixed(0)} / 100`,
+    review.report.scoringCheck?.mismatch ? `- Scoring mismatch, needs re-check. ${review.report.scoringCheck.reason ?? ""}` : "",
     `- Recommendation: ${categoryLabel(criteria, review.report.recommendation)}`,
     "",
     "## Summary",

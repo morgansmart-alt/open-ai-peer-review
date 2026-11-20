@@ -2,6 +2,7 @@ import { Link, useParams } from "react-router-dom"
 import { assessorById } from "../domain/assessors.ts"
 import { computeReputations, consensusOf, eligibleNodes, reputationOf } from "../domain/fidelity.ts"
 import { buildRanking, listRankingMethods, sortRows, tendency } from "../domain/ranking.ts"
+import { boardValue } from "../domain/scoring.ts"
 import { useAir } from "../context/AirContext.tsx"
 import { formatWhen } from "../components/ui.tsx"
 
@@ -78,7 +79,7 @@ export function ReviewerPage() {
         {history.map((review) => (
           <details key={review.id} className="rounded-2xl border border-line bg-white/50 p-3 text-sm">
             <summary className="cursor-pointer">
-              {review.title} · {review.report.overallScore.toFixed(1)} · {formatWhen(review.createdAt)}
+              {review.title} · {boardValue(review.report.overallScore, review.report, review.criteriaVersion).toFixed(0)} / 100 · {formatWhen(review.createdAt)}
               {review.sample ? " · sample" : ""}
               {review.customCriteria ? " · unranked" : ""}
             </summary>

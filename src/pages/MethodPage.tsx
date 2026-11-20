@@ -6,11 +6,11 @@ import { globalGoals } from "../domain/goals.ts"
 const sections = [
   {
     title: "What a score is",
-    body: "An assessor reads the Zenodo metadata and the files you selected, then scores every AIR criterion from 0 to 10. AIR recomputes the overall score from the published weights. It does not trust a total the model invented. AIR v0.2 is the default for new readings. AIR v0.1 readings stay valid and are labelled. On the board, a v0.1 score is stretched from 1–5 onto 0–10 so the columns share one scale.",
+    body: "An assessor reads the Zenodo metadata and the files you selected, then scores every AIR criterion from 0 to 100. AIR recomputes the overall score from the published weights and stores that scale on the reading. It does not trust a total the model invented. If the model's stated overall is more than 10 points away, or the verdict sits in the wrong band, the reading is marked Scoring mismatch, needs re-check and left out of the median. AIR v0.2 is the default for new readings. Older readings stay valid. A stored 0–10 score is shown times 10, and an AIR v0.1 score is stretched from 1–5 onto 0–100.",
   },
   {
     title: "The leaderboard",
-    body: "The number in a cell is the median for that assessor, on a 0–10 scale, or the median of those medians for the panel. Order leans toward 5 until more readings exist: rank score = n/(n+2) × median + 2/(n+2) × 5. You can also sort by impact, feasibility, the physics check, simulation evidence, the quality of the value estimate, global-goals alignment, or the idea score. Those sub-scores sit in the expanded row. The assessor columns stay the centre of the table. Unresolved issues subtract a little (0.08 each, open 0.04, partial 0.03, capped). A disputed record loses another 0.15. Three or more agreeing nodes add 0.10.",
+    body: "The number in a cell is the median for that assessor, on a 0–100 scale, or the median of those medians for the panel. Readings marked Scoring mismatch, needs re-check are left out, and the row says how many. If the remaining assessors on the same DOI and version are more than 30 points apart, the row is marked Assessors disagree. Order leans toward 50 until more readings exist: rank score = n/(n+2) × median + 2/(n+2) × 50. You can also sort by impact, feasibility, the physics check, simulation evidence, the quality of the value estimate, global-goals alignment, or the idea score. Those sub-scores sit in the expanded row. The assessor columns stay the centre of the table. Unresolved issues subtract a little (0.8 each, open 0.4, partial 0.3, capped at 4). A disputed record loses another 1.5. Three or more agreeing nodes add 1.",
   },
   {
     title: "One reading should not dominate",

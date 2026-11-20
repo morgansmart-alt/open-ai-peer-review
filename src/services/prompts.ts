@@ -12,6 +12,9 @@ export function reviewSystemPrompt(criteria: CriteriaSet): string {
     "Be specific and kind. Every criticism needs a way to resolve it.",
     "Quote only passages that appear in the text you were given. Do not invent page numbers, results, or citations.",
     `Score every criterion with an integer from ${criteria.scale.min} to ${criteria.scale.max}.`,
+    criteria.scale.max >= 100
+      ? "The board is out of 100. AIR weights the criterion scores itself. If you include overallScore, keep it within 10 points of that weighted total. recommendation must match the band: encourage from 80, revise from 60, major-revision from 40, otherwise not-ready."
+      : "",
     criteria.reportSchema === "0.2"
       ? "On every score set confidence to low, medium, or high. Untested is not the same as wrong. A CHALLENGES physics class is not an automatic fail."
       : "",
@@ -46,6 +49,7 @@ export function reviewUserPrompt(record: ZenodoRecord, criteria: CriteriaSet, pa
           goals: globalGoals.goals.map((goal) => ({ goalId: goal.id, level: "none | indirect | partial | direct", note: "string" })),
         }
       : {}),
+    overallScore: criteria.scale.max >= 100 ? "integer 0-100, within 10 of the weighted criterion total" : `number from ${criteria.scale.min} to ${criteria.scale.max}`,
     recommendation: criteria.recommendationCategories.map((item) => item.id).join(" | "),
     strengths: ["string"],
     majorIssues: [{ criterionId: "id", claim: "what is wrong", quotedPassage: "verbatim or empty", reason: "why it matters and how to fix it" }],

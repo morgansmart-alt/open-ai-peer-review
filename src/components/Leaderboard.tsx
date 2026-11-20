@@ -2,6 +2,7 @@ import { useMemo, useState } from "react"
 import { Link } from "react-router-dom"
 import { assessorById } from "../domain/assessors.ts"
 import { categoryLabel } from "../domain/criteria.ts"
+import { boardValue, scoringMismatch } from "../domain/scoring.ts"
 import { statusLabel } from "../domain/issues.ts"
 import { buildRanking, listRankingMethods, sortRows, type RankRow } from "../domain/ranking.ts"
 import { officialCriteria } from "../domain/officialCriteria.ts"
@@ -47,7 +48,7 @@ export function Leaderboard() {
           Records by AIR score
         </h2>
         <p className="max-w-xl text-xs text-ink-soft">
-          Cells are medians on a 0–10 scale. AIR v0.1 readings are converted from 1–5 and labelled. Order leans toward 5 until several readings exist.
+          Cells are medians on a 0–100 scale. Older 0–10 readings are multiplied by 10, and AIR v0.1 readings are stretched from 1–5. Order leans toward 50 until several readings exist. A reading whose own scores disagree is left out of the median.
           Sort by impact, feasibility, physics, simulation, estimated value, global goals, or idea. Those scores open inside the row.{" "}
           <Link to="/method" className="underline">
             How this is calculated
@@ -152,12 +153,19 @@ function RowBody({ row, rank, open, onToggle, methodId }: { row: RankRow; rank: 
           <p className="mt-1 text-xs text-ink-soft">
             {row.creators.join(", ") || "Creator unlisted"} · {row.publicationDate || "undated"}
           </p>
-          <Sparkline values={[...row.reviews].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map((review) => review.report.overallScore)} />
+          <Sparkline
+            values={[...row.reviews]
+              .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+              .map((review) => boardValue(review.report.overallScore, review.report, review.criteriaVersion))}
+          />
           <p className="mt-1 flex flex-wrap gap-1">
             {row.sample && <Chip>Sample</Chip>}
             {!row.sample && row.demo && <Chip>Demo</Chip>}
             {issueNote > 0 && <Chip>{`${issueNote} open`}</Chip>}
             {row.fidelity.disputed && <Chip>Disputed</Chip>}
+            {row.mismatchCount > 0 && <Chip>Scoring mismatch, needs re-check</Chip>}
+            {row.mismatchCount > 0 && <Chip>{`${row.mismatchCount} left out of the median`}</Chip>}
+            {row.assessorsDisagree && <Chip>Assessors disagree</Chip>}
           </p>
           <button type="button" className="no-print mt-2 text-xs text-teal underline-offset-2 hover:underline" aria-expanded={open} onClick={onToggle}>
             {open ? "Hide details" : "Scores, checks, and issues"}
@@ -197,7 +205,7 @@ function FreeScreening() {
       <ul className="mt-2 space-y-2">
         {rows.map((review) => (
           <li key={review.id} className="rounded-2xl border border-line px-3 py-2 text-sm">
-            <AssessorMark name="Free" /> {review.title} · {review.report.overallScore.toFixed(1)} / 10 · screening only
+            <AssessorMark name="Free" /> {review.title} · {boardValue(review.report.overallScore, review.report, review.criteriaVersion).toFixed(0)} / 100 · screening only
           </li>
         ))}
       </ul>
@@ -246,8 +254,9 @@ function Expanded({ row }: { row: RankRow }) {
           {row.reviews.map((review) => (
             <details key={review.id}>
               <summary className="cursor-pointer text-sm">
-                {assessorById(review.assessorId, air.profiles)?.name ?? review.assessorId} · {review.report.overallScore.toFixed(1)} ·{" "}
+                {assessorById(review.assessorId, air.profiles)?.name ?? review.assessorId} · {boardValue(review.report.overallScore, review.report, review.criteriaVersion).toFixed(0)} / 100 ·{" "}
                 {categoryLabel(criteria, review.report.recommendation)}
+                {scoringMismatch(review).mismatch ? " · Scoring mismatch, needs re-check" : ""}
               </summary>
               <p className="mt-1 text-sm text-ink-soft">{review.report.summary}</p>
             </details>
@@ -257,7 +266,7 @@ function Expanded({ row }: { row: RankRow }) {
       <div className="space-y-3 text-sm">
         <p title={row.fidelity.label}>{row.fidelity.label}</p>
         <p className="text-ink-soft">
-          Rank score {row.panelRankScore?.toFixed(2) ?? "—"} from median {row.panelMedian?.toFixed(2) ?? "—"} / 10 across {row.reviewCount} reading
+          Rank score {row.panelRankScore?.toFixed(0) ?? "—"} from median {row.panelMedian?.toFixed(0) ?? "—"} / 100 across {row.reviewCount} reading
           {row.reviewCount === 1 ? "" : "s"}. Criteria {row.criteriaVersions.join(", ") || "unlabelled"}.
           {row.physicsClass ? ` Physics class ${row.physicsClass}.` : ""}
           {row.issuePenalty > 0 ? ` Open issues nudge the order by ${row.issuePenalty.toFixed(2)}.` : " Addressed issues do not change the order."}

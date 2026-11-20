@@ -66,18 +66,18 @@ The homepage is the board. Each row is one Zenodo version. Columns are Panel, Id
 The number in a cell is the **median** score. Order uses a more cautious number so one glowing reading cannot jump the table:
 
 ```text
-rank score = n / (n + 2) × median + 2 / (n + 2) × 5
+rank score = n / (n + 2) × median + 2 / (n + 2) × 50
 ```
 
-`n` is the number of official readings. 5 is the middle of the 0–10 board. You can also sort by impact, feasibility, the physics check, simulation evidence, estimated value, global goals, or idea. Those sub-scores open inside the row. The assessor columns stay on the table.
+`n` is the number of official readings that agree with themselves. 50 is the middle of the 0–100 board. A reading is left out of the median when its stated overall is more than 10 points from the weighted criterion score, or when its verdict does not match the score band (encourage from 80, revise from 60, major-revision from 40, otherwise not-ready). The row is marked Scoring mismatch, needs re-check and shows how many were left out. If the assessors who remain are more than 30 points apart on the same DOI and version, the row is marked Assessors disagree and those readings stay in the median. You can also sort by impact, feasibility, the physics check, simulation evidence, estimated value, global goals, or idea. Those sub-scores open inside the row. The assessor columns stay on the table.
 
-Then a small nudge:
+Then a small nudge, on the same 0–100 board:
 
-- unresolved issue: −0.08
-- open issue: −0.04
-- partially addressed: −0.03
-- the nudge is capped at 0.50, including a further −0.15 when the record is disputed
-- three or more independent nodes agreeing at 70% or better: +0.10
+- unresolved issue: −0.8
+- open issue: −0.4
+- partially addressed: −0.3
+- the nudge is capped at 5, including a further −1.5 when the record is disputed
+- three or more independent nodes agreeing at 70% or better: +1
 
 Addressed issues, including ones fixed in a newer version, do not move the score. The cell still shows the median. The method page spells this out.
 
@@ -113,7 +113,7 @@ Status becomes addressed-in-publication, partially-addressed, unresolved, or fix
 
 ## Criteria
 
-New readings use [`criteria/air-v0.2.json`](criteria/air-v0.2.json). [`criteria/air-v0.1.json`](criteria/air-v0.1.json) stays in the repo and older readings that used it stay valid and are labelled. v0.2 scores 0–10. On the board, a v0.1 score is stretched from 1–5 onto 0–10.
+New readings use [`criteria/air-v0.2.json`](criteria/air-v0.2.json) and store `scale: 100` on the report. [`criteria/air-v0.1.json`](criteria/air-v0.1.json) stays in the repo and older readings that used it stay valid and are labelled. A stored 0–10 score is shown times 10. An AIR v0.1 score is stretched from 1–5 onto 0–100.
 
 v0.2 weights: impact 1.4, feasibility 1.3, testability 1.3, physics 1.3, global goals 1.1, physical-or-metaphysical class 1.0, simulation 0.9, estimated value 0.7, then the smaller quality checks — consistency 0.5, evidence labelling 0.5, clarity 0.4, availability 0.4, limitations 0.4. The idea rank uses impact and global-goals alignment.
 

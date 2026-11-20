@@ -1,4 +1,5 @@
 import { categoryLabel, clamp, weightedMean } from "../domain/criteria.ts"
+import { describeScoring } from "../domain/scoring.ts"
 import type {
   Citation,
   Confidence,
@@ -129,14 +130,23 @@ export function validateReport(input: unknown, criteria: CriteriaSet): { ok: tru
   const overall = weightedMean(ready, criteria)
   const idea = weightedMean(ready, criteria, criteria.ideaCriterionIds)
   if (overall === null || idea === null) return { ok: false, errors: ["Could not weight the scores."] }
+  const statedRaw = Number(input.overallScore)
+  const check = describeScoring({
+    scores: ready,
+    statedOverall: Number.isFinite(statedRaw) ? statedRaw : null,
+    recommendation,
+    criteria,
+  })
   return {
     ok: true,
     report: {
       summary,
       scores: ready.map((score) => ({ ...score, score: clamp(score.score, criteria.scale.min, criteria.scale.max) })),
-      overallScore: overall,
+      overallScore: check.statedOverall ?? overall,
       ideaScore: idea,
       recommendation,
+      scale: check.scale,
+      scoringCheck: check.scoringCheck,
       strengths,
       majorIssues,
       minorIssues,

@@ -5,6 +5,7 @@ import { collectConversationLinks, saveSubmissionLinks } from "../domain/convers
 import { publishNotices } from "../content/notices.ts"
 import { keySlot } from "../domain/assessors.ts"
 import { median } from "../domain/ranking.ts"
+import { boardValue } from "../domain/scoring.ts"
 import type { ReviewReport, StoredReview } from "../domain/types.ts"
 import { useAir } from "../context/AirContext.tsx"
 import { ReportView } from "../components/ReportView.tsx"
@@ -280,7 +281,12 @@ export function ReviewPage() {
     setPublished(true)
   }
 
-  const panelScore = median(results.flatMap((result) => (result.report ? [result.report.overallScore] : [])))
+  const panelScore = median(
+    results.flatMap((result) => {
+      if (!result.report) return []
+      return [boardValue(result.report.overallScore, result.report, result.stored?.criteriaVersion ?? air.criteria.version)]
+    }),
+  )
   const notes = useMemo(() => disagreementNotes(results, air.criteria.criteria.map((item) => item.id)), [air.criteria.criteria, results])
   const restricted = record ? filesAreRestricted(record) : false
 
@@ -482,7 +488,7 @@ export function ReviewPage() {
           <div className="mb-4 rounded-3xl border border-line bg-teal/5 p-4">
             <h2 className="font-serif text-2xl">Panel</h2>
             <p className="mt-1 text-sm">
-              Combined median {panelScore === null ? "—" : panelScore.toFixed(2)} / 5 across {results.filter((result) => result.report).length} reading
+              Combined median {panelScore === null ? "—" : panelScore.toFixed(0)} / 100 across {results.filter((result) => result.report).length} reading
               {results.filter((result) => result.report).length === 1 ? "" : "s"}.
             </p>
             {notes.length > 0 ? (
@@ -557,7 +563,7 @@ function disagreementNotes(results: PanelResult[], criterionIds: string[]): stri
     const values = scored.map((item) => item.score)
     const low = Math.min(...values)
     const high = Math.max(...values)
-    if (high - low >= 2) {
+    if (high - low >= 20) {
       notes.push(
         `${criterionId}: ${scored
           .filter((item) => item.score === high)
