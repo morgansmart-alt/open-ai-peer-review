@@ -128,7 +128,7 @@ async function validatedReport(ctx: RunContext, packet: string, conversations: C
   return { report: validated.report, model, family: first.family, attempts: first.attempts, provider: first.provider, schemaFirstTry: false }
 }
 
-function verifyQuotes(report: ReviewReport, corpus: string): ReviewReport {
+export function verifyQuotes(report: ReviewReport, corpus: string): ReviewReport {
   let unverifiedQuotes = 0
   const mark = (quote: string): boolean => {
     const verified = quoteMatchesCorpus(quote, corpus)

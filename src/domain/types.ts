@@ -166,6 +166,14 @@ export interface ReviewReport {
     chunksSummarised: number
     coverage: "full" | "partial"
   }
+  provenance?: {
+    source: "local-nano" | "gemini-web"
+    label: string
+    modelName?: string
+    plan?: "free" | "plus" | "pro"
+    humanHandoff?: boolean
+    selfReported?: boolean
+  }
 }
 
 export interface StoredReview {
@@ -188,7 +196,7 @@ export interface StoredReview {
   criteriaVersion: string
   customCriteria: boolean
   /** Free screenings stay off the ranked board. A provisional reading has only one model family. */
-  tier?: "free-screening" | "in-depth" | "demo" | "provisional"
+  tier?: "free-screening" | "in-depth" | "demo" | "provisional" | "local-screening"
   report: ReviewReport
   outputHash: string
   createdAt: string

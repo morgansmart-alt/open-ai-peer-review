@@ -69,7 +69,7 @@ function upsertLocal(review: StoredReview): void {
 export async function publishReview(mode: BackendMode, review: StoredReview): Promise<string | null> {
   const limited = spend()
   if (limited) return limited
-  if (mode === "local" || review.mock || review.sample || review.tier === "provisional") {
+  if (mode === "local" || review.mock || review.sample || review.tier === "provisional" || review.tier === "local-screening") {
     if (mode === "supabase" && review.mock) {
       const overlay = loadOverlay()
       overlay.reviews = [...overlay.reviews.filter((item) => item.id !== review.id), review]
