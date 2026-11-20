@@ -15,10 +15,6 @@ export function emptyLinkDraft(): LinkDraft {
   return { url: "", note: "" }
 }
 
-export function exampleLinkDraft(): LinkDraft {
-  return { url: EXAMPLE_GOOGLE_AI_MODE_URL, note: "Example only. Replace or clear this before a real reading." }
-}
-
 export function PrivateLinksField({
   rows,
   onChange,
@@ -29,7 +25,7 @@ export function PrivateLinksField({
   title?: string
 }) {
   return (
-    <details open data-testid="private-links" className="mt-4 rounded-2xl border border-line bg-white/50 p-3">
+    <details open data-testid="private-links" className="rounded-2xl border border-line bg-white/50 p-3">
       <summary className="cursor-pointer text-sm font-medium">{title}</summary>
       <p className="mt-2 text-xs text-ink-soft">{PRIVATE_CONTEXT_NOTICE}</p>
       <ul className="mt-3 space-y-3">
@@ -40,7 +36,7 @@ export function PrivateLinksField({
               <input
                 className={`${fieldClass} mt-1`}
                 value={row.url}
-                placeholder="https://"
+                placeholder={EXAMPLE_GOOGLE_AI_MODE_URL}
                 onChange={(event) => onChange(rows.map((item, itemIndex) => (itemIndex === index ? { ...item, url: event.target.value } : item)))}
               />
             </label>

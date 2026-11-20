@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { filesAreRestricted, normalizeZenodoRecord, parseRecordRef, stripHtml } from "./zenodo.ts"
+import { defaultFileSelection, filesAreRestricted, formatRecordStamp, normalizeZenodoRecord, parseRecordRef, stripHtml, type ZenodoFile } from "./zenodo.ts"
 
 const legacy = {
   id: 18916931,
@@ -92,6 +92,60 @@ describe("normalizeZenodoRecord", () => {
     expect(record.related[0]?.relation).toBe("cites")
     expect(record.files.map((file) => file.key)).toEqual(["readme.md"])
     expect(filesAreRestricted(record)).toBe(true)
+  })
+})
+
+function file(key: string, size: number): ZenodoFile {
+  const extension = key.split(".").pop()?.toLowerCase() ?? ""
+  return { key, size, downloadUrl: "", extension }
+}
+
+describe("defaultFileSelection", () => {
+  it("preselects the main manuscript of a 12-file record like zenodo 23773780", () => {
+    const files = [
+      file("01_SCG_HMH_Closed_Derivative_Chain_v8.pdf", 3_448_535),
+      file("02_SCG_HMH_v8_Section_6.6_Cold_Side.pdf", 3_501_670),
+      file("03_SUPPLEMENTARY_Errata_v7_to_v8.pdf", 47_921),
+      file("04_SUPPLEMENTARY_Key_Results_Summary.pdf", 46_847),
+      file("05_SUPPLEMENTARY_Bench_Validation_Plan.pdf", 39_429),
+      file("06_SUPPLEMENTARY_Open_Questions.pdf", 44_508),
+      file("07_SUPPLEMENTARY_Reproducibility.pdf", 59_406),
+      file("08_SUPPLEMENTARY_Transistor_Physics_and_Data_Centres.pdf", 78_625),
+      file("09_SUPPLEMENTARY_Further_Physics_Exploitations.pdf", 192_717),
+      file("10_SCG_HMH_Technology_Readiness_Benchmarks_v5.pdf", 373_135),
+      file("11_SCG_HMH_v8_reproducibility_scripts_and_outputs.zip", 846_580),
+      file("README.md", 1_148),
+    ]
+    expect(defaultFileSelection(files)).toEqual([
+      "01_SCG_HMH_Closed_Derivative_Chain_v8.pdf",
+      "02_SCG_HMH_v8_Section_6.6_Cold_Side.pdf",
+      "README.md",
+    ])
+  })
+
+  it("uses the largest non-supplement PDF when nothing is numbered 01", () => {
+    expect(
+      defaultFileSelection([
+        file("notes.pdf", 20_000),
+        file("paper.pdf", 2_000_000),
+        file("SUPPLEMENTARY_table.pdf", 10_000),
+        file("README.md", 800),
+      ]),
+    ).toEqual(["paper.pdf", "README.md"])
+  })
+
+  it("still selects a readable file when the record is only supplements", () => {
+    expect(defaultFileSelection([file("03_SUPPLEMENTARY_Errata.pdf", 12_000), file("04_SUPPLEMENTARY_Notes.pdf", 80_000)])).toEqual([
+      "04_SUPPLEMENTARY_Notes.pdf",
+      "03_SUPPLEMENTARY_Errata.pdf",
+    ])
+  })
+})
+
+describe("formatRecordStamp", () => {
+  it("uses the Zenodo version when one is present, otherwise the record id and date", () => {
+    expect(formatRecordStamp({ version: "v8", id: "23773780", publicationDate: "2026-10-29" })).toBe("version v8 · 2026-10-29")
+    expect(formatRecordStamp({ version: "", id: "23773780", publicationDate: "2026-10-29" })).toBe("Record 23773780 · 2026-10-29")
   })
 })
 

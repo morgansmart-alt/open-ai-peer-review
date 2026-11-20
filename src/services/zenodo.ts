@@ -323,22 +323,70 @@ export function isTextualFile(file: ZenodoFile): boolean {
   return ["pdf", "md", "markdown", "txt", "text", "docx", "html", "htm", "py", "csv", "json", "r", "ipynb"].includes(file.extension)
 }
 
+const SELECTION_FILE_CAP = 4
+const SELECTION_FILE_BYTES = 8_000_000
+const SELECTION_TOTAL_BYTES = 8_000_000
+
+function fileBase(key: string): string {
+  return (key.split("/").pop() ?? key).toLowerCase()
+}
+
+function isReadmeFile(file: ZenodoFile): boolean {
+  const base = fileBase(file.key)
+  return base === "readme" || base.startsWith("readme.")
+}
+
+function isSupplementFile(file: ZenodoFile): boolean {
+  return /supplement|errata|appendix|supporting/.test(fileBase(file.key))
+}
+
+function leadingIndex(file: ZenodoFile): number | null {
+  const match = fileBase(file.key).match(/^(\d+)[_\-\s.]/)
+  return match ? Number(match[1]) : null
+}
+
 export function defaultFileSelection(files: ZenodoFile[]): string[] {
-  const ranked = files
-    .filter((file) => isTextualFile(file) && file.size > 0 && file.size < 1_500_000)
+  const readable = files.filter((file) => isTextualFile(file) && file.size > 0 && file.size <= SELECTION_FILE_BYTES)
+  const readme = readable.find(isReadmeFile)
+  const manuscripts = readable
+    .filter((file) => file.extension === "pdf" && !isSupplementFile(file))
     .sort((a, b) => {
-      const score = (file: ZenodoFile) => (file.extension === "pdf" ? 3 : file.extension === "docx" || file.extension === "md" ? 2 : 1)
-      return score(b) - score(a) || a.size - b.size
+      const aIndex = leadingIndex(a)
+      const bIndex = leadingIndex(b)
+      const aPrimary = aIndex === 1 ? 0 : 1
+      const bPrimary = bIndex === 1 ? 0 : 1
+      if (aPrimary !== bPrimary) return aPrimary - bPrimary
+      if (aIndex !== null && bIndex !== null && aIndex !== bIndex) return aIndex - bIndex
+      if ((aIndex === null) !== (bIndex === null)) return aIndex === null ? 1 : -1
+      return b.size - a.size
     })
-  const picked: string[] = []
+  const primary = manuscripts[0]
+  const companion = primary && leadingIndex(primary) === 1 ? manuscripts.find((file) => leadingIndex(file) === 2) : undefined
+  const rest = readable
+    .filter((file) => file !== readme && file !== primary && file !== companion)
+    .sort((a, b) => Number(isSupplementFile(a)) - Number(isSupplementFile(b)) || b.size - a.size)
+  const picked: ZenodoFile[] = []
   let total = 0
-  for (const file of ranked) {
-    if (picked.length >= 4) break
-    if (total + file.size > 2_000_000) continue
-    picked.push(file.key)
+  const take = (file: ZenodoFile | undefined) => {
+    if (!file || picked.includes(file) || picked.length >= SELECTION_FILE_CAP) return
+    if (total + file.size > SELECTION_TOTAL_BYTES) return
+    picked.push(file)
     total += file.size
   }
-  return picked
+  take(primary)
+  take(companion)
+  take(readme)
+  if (!primary) {
+    for (const file of rest) take(file)
+  }
+  return picked.map((file) => file.key)
+}
+
+export function formatRecordStamp(record: Pick<ZenodoRecord, "version" | "id" | "publicationDate">): string {
+  const version = record.version.trim()
+  const date = record.publicationDate.trim()
+  if (version && version !== date) return date ? `version ${version} · ${date}` : `version ${version}`
+  return `Record ${record.id} · ${date || "undated"}`
 }
 
 export function formatBytes(size: number): string {

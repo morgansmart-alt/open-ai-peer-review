@@ -19,6 +19,7 @@ import { downloadReceipt, lookupReceipt, savePrivateContext } from "../services/
 import { resolvedModel } from "../services/providers.ts"
 import {
   defaultFileSelection,
+  formatRecordStamp,
   extensionOf,
   fetchRecordVersions,
   fetchRelatedSnippets,
@@ -103,8 +104,8 @@ export function PaperPage() {
           )}
           <h1 className="mt-1 font-serif text-4xl">{record.title}</h1>
           <p className="mt-2 text-sm text-ink-soft">
-            {record.creators.map((creator) => creator.name).join(", ") || "Creator unlisted"} · {record.publicationDate || "undated"} · version{" "}
-            {record.recordVersion}
+            {record.creators.map((creator) => creator.name).join(", ") || "Creator unlisted"} · {record.license || "license unlisted"} ·{" "}
+            {formatRecordStamp(record)}
           </p>
           <p data-testid="tier-ladder" className="mt-3 text-sm">
             Tier: {ladderTier(reviews, air.db.nodes.filter((node) => reviews.some((review) => review.id === node.reviewId))) === "corroborated"

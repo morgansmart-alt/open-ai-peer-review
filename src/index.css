@@ -79,6 +79,20 @@ body {
   background: #f7f3eb;
 }
 
+.file-fieldset {
+  display: block;
+  min-inline-size: 0;
+  min-width: 0;
+}
+
+.file-scroll {
+  max-height: 48rem;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-bottom: 0.75rem;
+}
+
 @media print {
   .no-print {
     display: none !important;

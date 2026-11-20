@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
-import { PrivateLinksField, exampleLinkDraft, type LinkDraft } from "../components/PrivateLinks.tsx"
+import { PrivateLinksField, emptyLinkDraft, type LinkDraft } from "../components/PrivateLinks.tsx"
 import { collectConversationLinks, saveSubmissionLinks } from "../domain/conversationLinks.ts"
 import { publishNotices } from "../content/notices.ts"
 import { keySlot } from "../domain/assessors.ts"
@@ -20,6 +20,7 @@ import {
   fetchZenodoRecord,
   filesAreRestricted,
   formatBytes,
+  formatRecordStamp,
   isTextualFile,
   parseRecordRef,
   type ZenodoRecord,
@@ -46,7 +47,7 @@ export function ReviewPage() {
   const [results, setResults] = useState<PanelResult[]>([])
   const [optIn, setOptIn] = useState(false)
   const [acks, setAcks] = useState<Record<string, boolean>>({})
-  const [linkDrafts, setLinkDrafts] = useState<LinkDraft[]>([exampleLinkDraft()])
+  const [linkDrafts, setLinkDrafts] = useState<LinkDraft[]>([emptyLinkDraft()])
   const [published, setPublished] = useState(false)
   const acknowledged = publishNotices.every((notice) => acks[notice.id])
 
@@ -299,7 +300,7 @@ export function ReviewPage() {
       </p>
       <ol className="mt-6 space-y-4">
         <li data-testid="notices" className="rounded-3xl border border-line bg-white/70 p-4">
-          <h2 className="font-serif text-2xl">1. Read this before anything is published</h2>
+          <h2 className="font-serif text-2xl">Step 1 · Read this before anything is published</h2>
           <p className="mt-1 text-sm text-ink-soft">Publishing to the ranking stays locked until every box is ticked. You can still fetch a record and run a private reading first.</p>
           <ul className="mt-3 space-y-3">
             {publishNotices.map((notice) => (
@@ -321,7 +322,7 @@ export function ReviewPage() {
           </ul>
         </li>
       </ol>
-      <h2 className="mt-6 font-serif text-2xl">2. Paste the DOI</h2>
+      <h2 className="mt-6 font-serif text-2xl">Step 2 · Paste the DOI</h2>
       <form
         className="mt-5 flex flex-col gap-2 sm:flex-row"
         onSubmit={(event) => {
@@ -359,11 +360,11 @@ export function ReviewPage() {
       {record && (
         <section className="mt-6 grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
           <div className="rounded-3xl border border-line bg-white/60 p-4">
-            <p className="text-xs uppercase tracking-wide text-teal">Step 3 · Files</p>
-            <h2 className="font-serif text-2xl">{record.title}</h2>
+            <h2 className="font-serif text-2xl">Step 3 · Files</h2>
+            <h3 className="mt-2 font-serif text-xl">{record.title}</h3>
             <p className="mt-1 text-sm text-ink-soft">
-              {record.creators.map((creator) => creator.name).join(", ") || "Creator unlisted"} · {record.publicationDate || "undated"} ·{" "}
-              {record.license || "license unlisted"} · version {record.recordVersion}
+              {record.creators.map((creator) => creator.name).join(", ") || "Creator unlisted"} · {record.license || "license unlisted"} ·{" "}
+              {formatRecordStamp(record)}
             </p>
             <p className="mt-2 text-xs text-ink-soft">
               <ExternalLink className="underline" href={record.htmlUrl}>
@@ -380,10 +381,16 @@ export function ReviewPage() {
                 <Banner tone="error">Files on this record are restricted or embargoed. AIR can still read the public description, not the files.</Banner>
               </div>
             )}
-            <fieldset className="mt-4" disabled={restricted}>
+            <fieldset className="file-fieldset mt-4" disabled={restricted}>
               <legend className="text-sm font-medium">Files to read</legend>
-              <p className="mt-1 text-xs text-ink-soft">Smaller text files are preselected. Images are skipped. A long paper is summarised in sections before it is scored.</p>
-              <ul className="mt-2 max-h-64 space-y-1 overflow-auto text-sm">
+              <p className="mt-1 text-xs text-ink-soft">
+                The main manuscript is preselected, with a README when the record has one. Supplementary files stay unticked. Images and archives are skipped. A long paper is summarised in sections before it is scored.
+              </p>
+              <p className="mt-1 text-xs font-medium text-ink">
+                {selected.length} of {record.files.length} files · {formatBytes(record.files.filter((file) => selected.includes(file.key)).reduce((total, file) => total + file.size, 0))} selected
+              </p>
+              <div className="file-scroll mt-2">
+              <ul className="space-y-1 text-sm">
                 {record.files.map((file) => {
                   const textual = isTextualFile(file)
                   return (
@@ -397,7 +404,7 @@ export function ReviewPage() {
                             setSelected((current) => (event.target.checked ? [...current, file.key] : current.filter((key) => key !== file.key)))
                           }
                         />
-                        <span>
+                        <span className="min-w-0 break-words">
                           {file.key} <span className="text-ink-soft">· {formatBytes(file.size)}{textual ? "" : " · not read as text"}</span>
                         </span>
                       </label>
@@ -405,8 +412,11 @@ export function ReviewPage() {
                   )
                 })}
               </ul>
+              </div>
             </fieldset>
-            <PrivateLinksField rows={linkDrafts} onChange={setLinkDrafts} />
+            <div className="mt-5">
+              <PrivateLinksField rows={linkDrafts} onChange={setLinkDrafts} />
+            </div>
             {docs.length > 0 && (
               <details className="mt-3">
                 <summary className="cursor-pointer text-sm">
@@ -426,7 +436,7 @@ export function ReviewPage() {
           </div>
           <div>
             <fieldset className="rounded-3xl border border-line bg-white/60 p-4">
-              <legend className="text-sm font-medium">Step 4 · Assessors</legend>
+              <legend className="font-serif text-2xl">Step 4 · Assessors</legend>
               <p className="mt-1 text-xs text-ink-soft">One model, or a panel. Each uses the key for its provider. Demo mode calls none of them.</p>
               <ul className="mt-3 space-y-2">
                 {air.profiles.map((profile) => {
@@ -478,7 +488,7 @@ export function ReviewPage() {
                   Free Gemini key
                 </button>
               </div>
-              <p className="mt-3 text-xs text-ink-soft">An in-depth review uses your own key and can be ranked. Your key is billed by that provider.</p>
+              <p className="mt-3 text-sm text-ink-soft">Demo readings produce synthetic sample scores and are never published to the live board. A real ranked review uses your own API key, or a free key for an unranked screening.</p>
             </fieldset>
           </div>
         </section>
