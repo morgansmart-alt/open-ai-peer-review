@@ -8,12 +8,13 @@ import type { AttachmentMeta, AuthorRole, IssueThread, NodeSubmission, StoredRev
 import { useAir } from "../context/AirContext.tsx"
 import { ReportView } from "../components/ReportView.tsx"
 import { Banner, btnPrimary, btnQuiet, ExternalLink, fieldClass, formatWhen } from "../components/ui.tsx"
-import { loadRoundLink, loadSubmissionLinks, parseConversationLink, publicContextCount, saveRoundLink, saveNodeLink } from "../domain/conversationLinks.ts"
+import { isPrivateShareLink, loadRoundLink, loadSubmissionLinks, parseConversationLink, publicContextCount, saveRoundLink, saveNodeLink } from "../domain/conversationLinks.ts"
 import { ladderTier } from "../domain/fidelity.ts"
 import { LineChart } from "../components/charts.tsx"
 import { sha256Hex, uid } from "../services/hash.ts"
 import { runIndependent, runSourceCheck, type VerdictDraft } from "../services/review.ts"
 import { downloadArrayBuffer, extractDocument } from "../services/extractText.ts"
+import { downloadReceipt, lookupReceipt, savePrivateContext } from "../services/privateContext.ts"
 import { resolvedModel } from "../services/providers.ts"
 import {
   defaultFileSelection,
@@ -266,6 +267,9 @@ function IssueCard({
   const [chatNote, setChatNote] = useState("")
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  const [receipt, setReceipt] = useState<string | null>(null)
+  const [receiptCheck, setReceiptCheck] = useState("")
+  const [receiptResult, setReceiptResult] = useState<string | null>(null)
   const claim = latestAuthorClaim(air.db.claims, record.doi)
   const role = authorRole(claim?.listedOnRecord ?? false, Boolean(claim))
 
@@ -339,6 +343,32 @@ function IssueCard({
       setMessage(parsed.error)
       return
     }
+    if (parsed && parsed.ok && !isPrivateShareLink(parsed.link.url)) {
+      setMessage("Use a Grok, ChatGPT, Claude, or Gemini share link. The link itself is never published.")
+      return
+    }
+    let archiveNote = ""
+    if (parsed && parsed.ok) {
+      const archived = await savePrivateContext({
+        doi: record.doi,
+        issueId: issue.id,
+        linkUrl: parsed.link.url,
+        provider: parsed.link.provider,
+      })
+      if (archived.state === "rejected") {
+        setMessage(archived.reason)
+        return
+      }
+      if (archived.state === "saved") {
+        setReceipt(archived.secret)
+        archiveNote =
+          archived.snapshot === "fetch_failed"
+            ? "The link is in the private archive. Its page text could not be copied yet. Save the receipt below. AIR does not keep the secret."
+            : "The link is in the private archive. Only this written answer and a count are public. Save the receipt below. AIR does not keep the secret."
+      } else {
+        archiveNote = "The private archive is not available yet, so this link stays in this browser only and is not published."
+      }
+    }
     const roundId = uid("round")
     if (parsed && parsed.ok) saveRoundLink(roundId, parsed.link)
     const error = await air.addRound(
@@ -355,7 +385,7 @@ function IssueCard({
       },
       issue.status,
     )
-    setMessage(error ?? (parsed && parsed.ok ? "Response saved. The chat link stays in this browser and is not published. A later source check still has to quote the publication." : null))
+    setMessage(error ?? (archiveNote || (parsed && parsed.ok ? "Response saved. The chat link is not published. A later source check still has to quote the publication." : null)))
     if (!error) {
       setNote("")
       setChatUrl("")
@@ -405,11 +435,45 @@ function IssueCard({
           Response
           <textarea id={`note-${issue.id}`} className={`${fieldClass} mt-1`} rows={3} value={note} onChange={(event) => setNote(event.target.value)} />
         </label>
+        <label className="block text-xs text-ink-soft" htmlFor={`private-link-${issue.id}`}>
+          Private context link (never published)
+          <input id={`private-link-${issue.id}`} className={`${fieldClass} mt-1`} value={chatUrl} placeholder="https://chatgpt.com/share/…" onChange={(event) => setChatUrl(event.target.value)} />
+        </label>
+        <p className="text-xs text-ink-soft">
+          Only the written answer above and a count are public. A Grok, ChatGPT, Claude, or Gemini share link is archived privately. The chat’s wording, including mistakes and tone, is not published. Quote the publication to address the issue.
+        </p>
         <details className="rounded-xl border border-line p-2">
-          <summary className="cursor-pointer text-xs">Private AI context link for this response (never published)</summary>
-          <p className="mt-1 text-xs text-ink-soft">Sent only if you later run a source check in this browser. It does not count as addressing the issue. Quote the publication for that.</p>
-          <input className={`${fieldClass} mt-2`} value={chatUrl} placeholder="https://" aria-label="Private chat link" onChange={(event) => setChatUrl(event.target.value)} />
-          <input className={`${fieldClass} mt-2`} value={chatNote} placeholder="Optional note" aria-label="Private chat note" onChange={(event) => setChatNote(event.target.value)} />
+          <summary className="cursor-pointer text-xs">Optional note for this browser only</summary>
+          <input className={`${fieldClass} mt-2`} value={chatNote} placeholder="What this conversation covers" aria-label="Private chat note" onChange={(event) => setChatNote(event.target.value)} />
+        </details>
+        {receipt && (
+          <div className="rounded-xl border border-teal/40 bg-teal/5 p-3 text-xs">
+            <p className="font-medium">Receipt secret</p>
+            <p className="mt-1 break-all font-mono">{receipt}</p>
+            <p className="mt-1 text-ink-soft">Save this now. AIR does not keep it. Anyone who has it can read that private archive.</p>
+            <button type="button" className={`${btnQuiet} mt-2`} onClick={() => downloadReceipt(receipt, record.doi)}>
+              Download receipt
+            </button>
+          </div>
+        )}
+        <details className="rounded-xl border border-line p-2">
+          <summary className="cursor-pointer text-xs">Look up a private archive with a receipt</summary>
+          <input className={`${fieldClass} mt-2`} value={receiptCheck} aria-label="Receipt secret" onChange={(event) => setReceiptCheck(event.target.value)} />
+          <button
+            type="button"
+            className={`${btnQuiet} mt-2`}
+            onClick={() =>
+              void lookupReceipt(receiptCheck).then((result) => {
+                if (result.state === "unavailable") setReceiptResult("The private archive is not available yet.")
+                else if (result.state === "rejected") setReceiptResult(result.reason)
+                else if (result.rows.length === 0) setReceiptResult("No private archive matches that receipt.")
+                else setReceiptResult(result.rows.map((row) => `${row.provider ?? "Link"} · ${row.snapshot_status ?? "pending"} · ${row.doi}`).join("\n"))
+              })
+            }
+          >
+            Check receipt
+          </button>
+          {receiptResult && <p className="mt-2 whitespace-pre-wrap text-ink-soft">{receiptResult}</p>}
         </details>
         <div className="flex flex-wrap gap-2">
           <button type="button" className={btnQuiet} onClick={() => void respond("rebuttal")}>

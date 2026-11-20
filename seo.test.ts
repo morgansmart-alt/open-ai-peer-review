@@ -42,3 +42,17 @@ describe("public metadata", () => {
     expect(image.byteLength).toBeGreaterThan(50_000)
   })
 })
+
+describe("private context migration", () => {
+  it("lets anon insert a share link and does not grant anon a read", () => {
+    const sql = readFileSync(new URL("./supabase/migrations/20261120000200_private_context.sql", import.meta.url), "utf8")
+    expect(sql).toContain("create table if not exists air_private_context")
+    expect(sql).toContain("for insert")
+    expect(sql).toContain("air_my_context")
+    expect(sql).toContain("encode(extensions.digest")
+    expect(sql).not.toContain("air_private_context_read")
+    expect(sql).not.toContain("for select")
+    expect(sql).not.toContain("for update")
+    expect(sql).not.toContain("for delete")
+  })
+})

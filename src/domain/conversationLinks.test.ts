@@ -5,6 +5,7 @@ import {
   EXAMPLE_GOOGLE_AI_MODE_URL,
   collectConversationLinks,
   conversationPromptBlock,
+  isPrivateShareLink,
   providerFromUrl,
   publicContextCount,
 } from "./conversationLinks.ts"
@@ -19,6 +20,19 @@ describe("private AI context links", () => {
     expect(providerFromUrl("https://grok.com/share/example")).toBe("Grok")
     expect(providerFromUrl("https://www.perplexity.ai/search/example")).toBe("Perplexity")
     expect(providerFromUrl("https://example.com/notes")).toBe("Other")
+  })
+
+  it("archives only Grok, ChatGPT, Claude, and Gemini share links", () => {
+    expect(isPrivateShareLink("https://chatgpt.com/share/example")).toBe(true)
+    expect(isPrivateShareLink("https://claude.ai/share/example")).toBe(true)
+    expect(isPrivateShareLink("https://gemini.google.com/share/example")).toBe(true)
+    expect(isPrivateShareLink("https://grok.com/share/example")).toBe(true)
+    expect(isPrivateShareLink("https://share.google/aimode/EXAMPLE")).toBe(true)
+    expect(isPrivateShareLink("http://chatgpt.com/share/example")).toBe(false)
+    expect(isPrivateShareLink("https://user:pass@chatgpt.com/share/example")).toBe(false)
+    expect(isPrivateShareLink("https://x.com/grok/status/1")).toBe(false)
+    expect(isPrivateShareLink("https://evil.example/chatgpt.com")).toBe(false)
+    expect(isPrivateShareLink("https://perplexity.ai/search/example")).toBe(false)
   })
 
   it("accepts only https and at most ten links", () => {

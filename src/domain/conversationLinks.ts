@@ -94,6 +94,25 @@ export function providerFromUrl(url: string): string {
   return "Other"
 }
 
+/** Grok, ChatGPT, Claude, and Gemini share links only. A post on x.com is not one. */
+export function isPrivateShareLink(url: string): boolean {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return false
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password) return false
+  const host = parsed.hostname.replace(/^www\./, "").toLowerCase()
+  const path = parsed.pathname.toLowerCase()
+  if (host === "share.google") return path.startsWith("/aimode")
+  if (host === "chatgpt.com" || host.endsWith(".chatgpt.com") || host === "chat.openai.com") return true
+  if (host === "claude.ai" || host.endsWith(".claude.ai")) return true
+  if (host === "gemini.google.com" || host === "aistudio.google.com") return true
+  if (host === "grok.com" || host.endsWith(".grok.com") || host === "grok.x.ai") return true
+  return false
+}
+
 export function parseConversationLink(url: string, note: string): { ok: true; link: ConversationLink } | { ok: false; error: string } {
   const trimmed = url.trim()
   if (!trimmed) return { ok: false, error: "Enter a link, or leave the row blank." }

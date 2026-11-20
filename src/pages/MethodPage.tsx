@@ -98,7 +98,7 @@ export function MethodPage() {
       />
       <h2 className="mt-8 font-serif text-2xl">Private AI context</h2>
       <p className="mt-2 text-sm leading-relaxed text-ink-soft">
-        A submitter, an author on an issue thread, or an independent node can add https links to earlier AI chats. Those links are sent only to the model that person chose, and only from that browser. The public record shows a count, never the address or the note. The links are not scored and do not move the ranking. A share link can still be opened by anyone who has it, so people should only add a conversation they are willing for that provider to read. If the model cannot open a link, it must say so and must not invent the chat. An issue is addressed only when the publication itself is quoted.
+        A reply can include one Grok, ChatGPT, Claude, or Gemini share link. AIR archives that link privately and gives the submitter a receipt secret, which AIR does not store. The public thread shows the written answer and a count, never the link, the chat history, or the note. The link is not scored. An issue is addressed only when the publication itself is quoted.
       </p>
       <h2 className="mt-8 font-serif text-2xl">AIR v0.2 weights</h2>
       <ul className="mt-2 space-y-1 text-sm">

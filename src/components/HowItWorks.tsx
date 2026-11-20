@@ -13,7 +13,7 @@ const steps = [
   },
   {
     title: "Nodes check the reading",
-    body: "An independent node can pass or fail it, or open an issue. A thread stops at six rounds. Only the publication can mark it addressed.",
+    body: "An independent node can pass or fail it, or open an issue. A reply can archive a private chat link. Only the written answer and a count are published.",
   },
 ]
 
@@ -28,7 +28,7 @@ const questions = [
   },
   {
     q: "Are private AI links published?",
-    a: "No. The address stays in this browser and is included only in that reader's prompt. The board stores a count, never the URL.",
+    a: "No. A Grok, ChatGPT, Claude, or Gemini share link is archived privately, and you get a receipt secret that AIR does not keep. The public thread shows your written answer and a count. The link and the chat’s wording stay private.",
   },
   {
     q: "How are rankings computed?",
