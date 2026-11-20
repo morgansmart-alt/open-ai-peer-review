@@ -1,4 +1,5 @@
 import { keySlot } from "../domain/assessors.ts"
+import { AIR_SITE_URL } from "./keyProbe.ts"
 import type { AssessorProfile, ProviderSettings } from "../domain/types.ts"
 
 export interface ChatRequest {
@@ -39,6 +40,20 @@ export function providerErrorMessage(status: number, body: string): string {
   return `The provider returned ${status}. ${cleaned}`
 }
 
+export class ProviderHttpError extends Error {
+  readonly status: number
+  readonly body: string
+  readonly retryAfter?: string
+
+  constructor(status: number, body: string, retryAfter?: string) {
+    super(providerErrorMessage(status, body))
+    this.name = "ProviderHttpError"
+    this.status = status
+    this.body = body
+    this.retryAfter = retryAfter
+  }
+}
+
 async function postJson(url: string, headers: Record<string, string>, body: unknown, signal?: AbortSignal): Promise<string> {
   let response: Response
   try {
@@ -55,7 +70,7 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
     )
   }
   const text = await response.text()
-  if (!response.ok) throw new Error(providerErrorMessage(response.status, text))
+  if (!response.ok) throw new ProviderHttpError(response.status, text, response.headers.get("retry-after") ?? undefined)
   return text
 }
 
@@ -159,7 +174,7 @@ export async function completeChat(profile: AssessorProfile, settings: ProviderS
   if (profile.provider === "gemini") return gemini(baseUrl, key, ready)
   const headers: Record<string, string> =
     profile.provider === "openrouter"
-      ? { "HTTP-Referer": "https://air-peer-review.local", "X-Title": "AIR Peer Review" }
+      ? { "HTTP-Referer": AIR_SITE_URL, "X-Title": "Open AI Peer Review" }
       : {}
   return openAiCompatible(baseUrl, key, ready, headers, profile.provider === "xai" ? OUTPUT_TOKEN_LIMIT : undefined)
 }

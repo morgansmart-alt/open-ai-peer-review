@@ -99,7 +99,7 @@ export function buildRanking(db: AirDatabase, now = Date.now()): RankRow[] {
   const reputations = computeReputations(db.nodes)
   const groups = new Map<string, StoredReview[]>()
   for (const review of db.reviews) {
-    if (review.customCriteria || review.tier === "free-screening") continue
+    if (review.customCriteria || review.tier === "free-screening" || review.tier === "provisional") continue
     const key = paperKey(review.doi, review.recordVersion)
     const list = groups.get(key) ?? []
     list.push(review)

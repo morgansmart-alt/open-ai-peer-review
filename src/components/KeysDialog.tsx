@@ -4,6 +4,7 @@ import type { ProviderId } from "../domain/types.ts"
 import { clearBrowserData } from "../services/storage.ts"
 import { useAir } from "../context/AirContext.tsx"
 import { btnPrimary, btnQuiet, fieldClass } from "./ui.tsx"
+import { FreeKeys } from "./FreeKeys.tsx"
 
 export function KeysDialog() {
   const air = useAir()
@@ -68,10 +69,13 @@ export function KeysDialog() {
             </span>
           </span>
         </label>
+        <FreeKeys />
         <div className="mt-5 space-y-4">
-          {providers.map((provider) => (
-            <ProviderFields key={provider} provider={provider} />
-          ))}
+          {providers
+            .filter((provider) => provider !== "gemini" && provider !== "openrouter" && provider !== "groq" && provider !== "cohere")
+            .map((provider) => (
+              <ProviderFields key={provider} provider={provider} />
+            ))}
         </div>
         <NodeFields />
         <AddProfile />

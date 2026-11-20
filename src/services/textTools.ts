@@ -101,9 +101,15 @@ export function normaliseForQuote(value: string): string {
 }
 
 export function quoteMatchesCorpus(quote: string, corpus: string): boolean {
-  const needle = normaliseForQuote(quote)
+  const haystack = normaliseForQuote(corpus)
+  const fragments = quote
+    .split(/\s*(?:\u2026|\.\.\.)\s*/)
+    .map((fragment) => normaliseForQuote(fragment))
+    .filter((fragment) => fragment.length >= 12)
+  if (fragments.length > 1) return fragments.every((fragment) => haystack.includes(fragment))
+  const needle = fragments[0] ?? normaliseForQuote(quote)
   if (!needle) return false
-  return normaliseForQuote(corpus).includes(needle)
+  return haystack.includes(needle)
 }
 
 export function readingCoverage(documents: readonly Record<string, unknown>[], chunksSummarised: number): ReadingCoverage {

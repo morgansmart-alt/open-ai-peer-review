@@ -4,6 +4,8 @@ export type ProviderId =
   | "anthropic"
   | "gemini"
   | "openrouter"
+  | "groq"
+  | "cohere"
   | "compatible"
 
 export interface AssessorProfile {
@@ -135,6 +137,12 @@ export interface ReviewReport {
   unverifiedQuotes?: number
   /** Model id the provider actually served, when it differs from the requested id. */
   servedModel?: string
+  router?: {
+    family: string
+    provider?: string
+    attempts: string[]
+    job: string
+  }
   scoringCheck?: {
     internal: number
     statedOverall: number | null
@@ -179,8 +187,8 @@ export interface StoredReview {
   criteriaId: string
   criteriaVersion: string
   customCriteria: boolean
-  /** Free screenings stay off the ranked board. In-depth readings are ranked. */
-  tier?: "free-screening" | "in-depth" | "demo"
+  /** Free screenings stay off the ranked board. A provisional reading has only one model family. */
+  tier?: "free-screening" | "in-depth" | "demo" | "provisional"
   report: ReviewReport
   outputHash: string
   createdAt: string
