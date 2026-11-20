@@ -77,7 +77,7 @@ as $$
   select
     (select count(*) from air_reviews where doi = target_doi and created_at > now() - interval '1 minute')
     + (select count(*) from air_nodes where coalesce(payload->>'doi', '') = target_doi and created_at > now() - interval '1 minute')
-    + (select count(*) from air_issues where doi = target_doi and created_at > now() - interval '1 minute')
+    + (select count(*) from air_issues where doi = target_doi and updated_at > now() - interval '1 minute')
     + (select count(*) from air_claims where doi = target_doi and created_at > now() - interval '1 minute')
     + (select count(*) from air_issue_events where doi = target_doi and created_at > now() - interval '1 minute');
 $$;
