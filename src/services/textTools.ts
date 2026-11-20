@@ -50,15 +50,31 @@ export function chunkText(text: string, size = SECTION_CHARS): string[] {
   return chunks
 }
 
-export function sectionsFor(documents: { filename: string; text: string }[]): TextSection[] {
+/** Share the section budget across files by length, so a long first file cannot crowd out the rest. */
+export function sectionsFor(documents: { filename: string; text: string }[], cap = SECTION_CAP): TextSection[] {
+  const docs = documents.filter((document) => document.text.trim())
+  const total = docs.reduce((sum, document) => sum + document.text.length, 0)
+  if (total === 0 || cap <= 0) return []
+  const shares = docs.map((document) => Math.max(1, Math.round((cap * document.text.length) / total)))
+  let spare = shares.reduce((sum, share) => sum + share, 0) - cap
+  while (spare > 0) {
+    let index = 0
+    for (let cursor = 1; cursor < shares.length; cursor += 1) {
+      if ((shares[cursor] ?? 0) > (shares[index] ?? 0)) index = cursor
+    }
+    if ((shares[index] ?? 1) <= 1) break
+    shares[index] = (shares[index] ?? 1) - 1
+    spare -= 1
+  }
   const sections: TextSection[] = []
-  for (const document of documents) {
-    const parts = chunkText(document.text)
-    parts.forEach((text, index) => {
-      const label = parts.length === 1 ? document.filename : `${document.filename} · section ${index + 1} of ${parts.length}`
+  docs.forEach((document, index) => {
+    const share = Math.max(1, shares[index] ?? 1)
+    const parts = chunkText(document.text, Math.ceil(document.text.length / share))
+    parts.forEach((text, partIndex) => {
+      const label = parts.length === 1 ? document.filename : `${document.filename} · section ${partIndex + 1} of ${parts.length}`
       sections.push({ label, text })
     })
-  }
+  })
   return sections
 }
 
@@ -69,6 +85,25 @@ export function anchorExcerpts(text: string): string {
   const take = 700
   const mid = Math.floor(clean.length / 2)
   return [`Beginning: ${clean.slice(0, take)}`, `Middle: ${clean.slice(mid - Math.floor(take / 2), mid + Math.ceil(take / 2))}`, `End: ${clean.slice(-take)}`].join("\n\n")
+}
+
+export function coverageAllowsPublish(reading: { coverage?: string; pagesRead?: number; pagesTotal?: number } | undefined): boolean {
+  if (!reading) return false
+  if (reading.coverage === "full") return true
+  const total = Number(reading.pagesTotal ?? 0)
+  const read = Number(reading.pagesRead ?? 0)
+  if (total <= 0) return false
+  return read / total >= 0.9
+}
+
+export function normaliseForQuote(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim()
+}
+
+export function quoteMatchesCorpus(quote: string, corpus: string): boolean {
+  const needle = normaliseForQuote(quote)
+  if (!needle) return false
+  return normaliseForQuote(corpus).includes(needle)
 }
 
 export function readingCoverage(documents: readonly Record<string, unknown>[], chunksSummarised: number): ReadingCoverage {

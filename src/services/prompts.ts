@@ -5,6 +5,18 @@ import type { CriteriaSet, MajorIssue, ReviewReport } from "../domain/types.ts"
 import type { RelatedSnippet, ZenodoRecord } from "./zenodo.ts"
 import { anchorExcerpts, sectionsFor } from "./textTools.ts"
 
+/** Safe single-call size. 1M-token models can take about 1.4M characters; a 200k-token model about 400k. */
+export function singleCallCharBudget(provider: string): number {
+  if (provider === "gemini" || provider === "xai" || provider === "openai") return 1_400_000
+  if (provider === "anthropic") return 400_000
+  return 350_000
+}
+
+export function textFitsSingleCall(documents: { text: string }[], provider: string): boolean {
+  const total = documents.reduce((sum, document) => sum + document.text.length, 0)
+  return total <= singleCallCharBudget(provider)
+}
+
 export function reviewSystemPrompt(criteria: CriteriaSet): string {
   return [
     "You are an AIR reviewer. Return one JSON object and nothing else.",
@@ -16,7 +28,13 @@ export function reviewSystemPrompt(criteria: CriteriaSet): string {
       ? "The board is out of 100. AIR weights the criterion scores itself. If you include overallScore, keep it within 10 points of that weighted total. recommendation must match the band: encourage from 80, revise from 60, major-revision from 40, otherwise not-ready."
       : "",
     criteria.reportSchema === "0.2"
-      ? "On every score set confidence to low, medium, or high. Untested is not the same as wrong. A CHALLENGES physics class is not an automatic fail."
+      ? [
+          "On every score set confidence to low, medium, or high. Untested is not the same as wrong. A CHALLENGES physics class is not an automatic fail.",
+          "A simulation or verification run means a named script, an audit table, or a numerical cross-check. Say which of those the record contains. A sentence that only claims \"we simulated\" is not a completed run.",
+          "Mark a global goal direct only when the record gives a bounded quantitative contribution, with a number and a unit or a range. A TRL 1–3 concept without that estimate is at most partial.",
+          "Under consistency, look for numbers carried over from an earlier version, an erratum, or a supplement after the text changed. Flag a stale figure.",
+          "Quote only text marked as the paper or as VERBATIM EXCERPTS. A block labelled AI SECTION SUMMARIES is not the paper. Do not present a summary sentence as a quotation.",
+        ].join("\n")
       : "",
     "Principles:",
     ...criteria.principles.map((principle) => `- ${principle}`),
@@ -94,18 +112,15 @@ export function reviewUserPrompt(record: ZenodoRecord, criteria: CriteriaSet, pa
 export function buildPacket(record: ZenodoRecord, documents: { filename: string; text: string }[], summaries: string[] | null): string {
   const fileList = record.files.map((file) => `- ${file.key} (${file.size} bytes)`).join("\n")
   const description = record.description.slice(0, 4000)
-  const full = documents.map((document) => document.text).join("\n\n")
+  const verbatim = documents.map((document) => `## ${document.filename}\n${summaries ? anchorExcerpts(document.text) : document.text}`).join("\n\n")
   const body = summaries
-    ? ["Section digest covering the whole text, in order:", ...summaries, "", "Verbatim excerpts from the beginning, the middle, and the end:", anchorExcerpts(full)].join("\n\n")
-    : full.length <= 28_000
-      ? documents.map((document) => `## ${document.filename}\n${document.text}`).join("\n\n")
-      : `The text is longer than one call. These excerpts keep the beginning, the middle, and the end.\n\n${anchorExcerpts(full)}`
+    ? ["AI SECTION SUMMARIES (NOT VERBATIM QUOTES)", "Do not quote this block as paper text.", ...summaries, "", "VERBATIM EXCERPTS", verbatim].join("\n\n")
+    : verbatim
   return [`Description:\n${description}`, `Files:\n${fileList || "- none"}`, body].join("\n\n")
 }
 
-export function shouldSummarize(documents: { text: string }[]): boolean {
-  const total = documents.reduce((sum, document) => sum + document.text.length, 0)
-  return total > 24_000
+export function shouldSummarize(documents: { text: string }[], provider = "compatible"): boolean {
+  return !textFitsSingleCall(documents, provider)
 }
 
 export function chunksFor(documents: { filename: string; text: string }[]): { label: string; text: string }[] {

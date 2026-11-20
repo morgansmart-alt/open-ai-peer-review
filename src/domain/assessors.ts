@@ -41,7 +41,7 @@ export const builtinAssessors: AssessorProfile[] = [
     name: "Gemini",
     shortName: "Gemini",
     provider: "gemini",
-    defaultModel: "gemini-3.5-flash",
+    defaultModel: "gemini-3.8-flash",
     defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
     blurb: "Google Gemini via the Generative Language API. The key stays in the x-goog-api-key header.",
     builtin: true,

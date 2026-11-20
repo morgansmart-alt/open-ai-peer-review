@@ -2,7 +2,7 @@ import type { AssessorProfile } from "./types.ts"
 import { round2 } from "./criteria.ts"
 import { computeReputations, fidelityFor, nodesForReviews, type FidelitySummary } from "./fidelity.ts"
 import { issueCounts, issuePenalty } from "./issues.ts"
-import { ASSESSOR_SPREAD, BOARD_PRIOR, boardValue, scoringMismatch } from "./scoring.ts"
+import { ASSESSOR_SPREAD, BOARD_PRIOR, boardValue, rankedBoardScore, scoringMismatch } from "./scoring.ts"
 import type { AirDatabase, IssueThread, StoredReview } from "./types.ts"
 
 export const PRIOR = 3
@@ -116,7 +116,7 @@ export function buildRanking(db: AirDatabase, now = Date.now()): RankRow[] {
     const assessorIds = [...new Set(counted.map((review) => review.assessorId))]
     for (const assessorId of assessorIds) {
       const mine = counted.filter((review) => review.assessorId === assessorId)
-      const value = median(mine.map((review) => boardValue(review.report.overallScore, review.report, review.criteriaVersion)))
+      const value = median(mine.map((review) => rankedBoardScore(review)))
       if (value === null) continue
       byAssessor[assessorId] = { median: value, count: mine.length, rankScore: shrink(value, mine.length, BOARD_PRIOR) }
     }

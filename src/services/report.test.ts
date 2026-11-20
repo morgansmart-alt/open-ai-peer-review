@@ -72,7 +72,8 @@ describe("validateReport", () => {
     const drifted = validateReport({ ...base, recommendation: "revise", overallScore: 40 }, officialCriteria)
     expect(drifted.ok).toBe(true)
     if (!drifted.ok) return
-    expect(drifted.report.overallScore).toBe(40)
+    expect(drifted.report.overallScore).toBe(80)
+    expect(drifted.report.statedOverall).toBe(40)
     expect(drifted.report.scoringCheck?.mismatch).toBe(true)
     expect(drifted.report.scoringCheck?.reason).toContain("differs from the weighted score")
     expect(drifted.report.scoringCheck?.reason).toContain("Verdict")

@@ -27,6 +27,7 @@ import {
   type ZenodoRecord,
 } from "../services/zenodo.ts"
 import { isPublishedDoi, parseAnyRef, resolvePublishedDoi } from "../services/works.ts"
+import { coverageAllowsPublish } from "../services/textTools.ts"
 
 interface PanelResult {
   assessorId: string
@@ -286,7 +287,7 @@ export function ReviewPage() {
             demo,
             onProgress: setStatus,
           })
-          const modelId = demo ? `${resolvedModel(profile, air.providerSettings)} (demo)` : resolvedModel(profile, air.providerSettings)
+          const modelId = demo ? `${resolvedModel(profile, air.providerSettings)} (demo)` : report.servedModel || resolvedModel(profile, air.providerSettings)
           const createdAt = new Date().toISOString()
           const outputHash = await sha256Hex(`${modelId}\n${JSON.stringify(report)}`)
           const stored: StoredReview = {
@@ -335,6 +336,16 @@ export function ReviewPage() {
     }
     if (!record || !isPublishedDoi(record.doi)) {
       setError("Publishing to the leaderboard needs a published DOI. This reading stays in this browser.")
+      return
+    }
+    const thin = ready.filter((review) => !coverageAllowsPublish(review.report.reading))
+    if (thin.length > 0) {
+      const reading = thin[0]?.report.reading
+      setError(
+        reading
+          ? `This reading covered ${reading.pagesRead} of ${reading.pagesTotal} pages (${reading.coverage}). The ranked board needs full coverage, or at least 90% of the pages.`
+          : "This reading has no coverage record. The ranked board needs a full reading.",
+      )
       return
     }
     for (const review of ready) {
@@ -471,7 +482,7 @@ export function ReviewPage() {
             <fieldset className="file-fieldset mt-4" disabled={restricted}>
               <legend className="text-sm font-medium">Files to read</legend>
               <p className="mt-1 text-xs text-ink-soft">
-                The main manuscript is preselected, with a README when the record has one. Supplementary files and zips stay unticked until you choose them. A long paper is read in full, then summarised in sections.
+                The main manuscript and the small supplements are preselected when they fit. A zip stays unticked. A paper that fits the model's context is sent in full.
               </p>
               <p className="mt-1 text-xs font-medium text-ink">
                 {selected.length} of {record.files.length} files · {formatBytes(record.files.filter((file) => selected.includes(file.key)).reduce((total, file) => total + file.size, 0))} selected
@@ -603,7 +614,15 @@ export function ReviewPage() {
             </label>
             {!acknowledged && <p className="mt-2 text-sm text-ink-soft">Tick the four notices in step 1 before a reading can join the ranking.</p>}
             {record && !isPublishedDoi(record.doi) && <p className="mt-2 text-sm text-ink-soft">Publishing to the leaderboard needs a published DOI. This reading can still run in this browser.</p>}
-            <button type="button" className={`${btnPrimary} mt-3`} disabled={!optIn || !acknowledged || published || !record || !isPublishedDoi(record.doi)} onClick={() => void publish()}>
+            {results.some((result) => result.report && !coverageAllowsPublish(result.report.reading)) && (
+              <p className="mt-2 text-sm text-ink-soft">The ranked board needs full coverage, or at least 90% of the pages read.</p>
+            )}
+            <button
+              type="button"
+              className={`${btnPrimary} mt-3`}
+              disabled={!optIn || !acknowledged || published || !record || !isPublishedDoi(record.doi) || results.some((result) => result.report && !coverageAllowsPublish(result.report.reading))}
+              onClick={() => void publish()}
+            >
               {published ? "Published" : "Publish to the leaderboard"}
             </button>
             {published && record && (

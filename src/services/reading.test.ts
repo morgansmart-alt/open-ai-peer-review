@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest"
 import { builtinAssessors } from "../domain/assessors.ts"
+import { officialCriteria } from "../domain/officialCriteria.ts"
+import { buildRanking } from "../domain/ranking.ts"
+import type { AirDatabase, StoredReview } from "../domain/types.ts"
 import { PDF_PAGE_CEILING, extractDocument, pagesToRead, scannedPdfNote } from "./extractText.ts"
-import { geminiChatBody, openAiChatBody, OUTPUT_TOKEN_LIMIT } from "./providers.ts"
+import { geminiChatBody, openAiChatBody, OUTPUT_TOKEN_LIMIT, providerErrorMessage } from "./providers.ts"
+import { buildPacket, shouldSummarize, singleCallCharBudget } from "./prompts.ts"
 import { listZip, textFromDocx, textFromZip } from "./zipText.ts"
-import { chunkText, readingCoverage, sectionsFor } from "./textTools.ts"
+import { chunkText, coverageAllowsPublish, quoteMatchesCorpus, readingCoverage, sectionsFor } from "./textTools.ts"
+import { validateReport } from "./validateReport.ts"
 import { isPublishedDoi, parseAnyRef, recordFromCrossref, recordFromOpenAlex } from "./works.ts"
 
 function u16(value: number): number[] {
@@ -158,16 +163,120 @@ describe("non-Zenodo DOIs", () => {
   })
 })
 
+describe("scoring the whole paper", () => {
+  it("sends the full text in one call when it fits, and labels summaries when it does not", () => {
+    const paper = "Section 6.6.22 answers the pump at 582 kg/s on page 94."
+    const supplement = "Errata: the earlier draft said 500 kg/s."
+    const documents = [{ filename: "01.pdf", text: paper }, { filename: "03.pdf", text: supplement }]
+    expect(singleCallCharBudget("gemini")).toBe(1_400_000)
+    expect(singleCallCharBudget("anthropic")).toBe(400_000)
+    expect(shouldSummarize(documents, "gemini")).toBe(false)
+    const direct = buildPacket({ files: [], description: "", title: "T" } as never, documents, null)
+    expect(direct).toContain("582 kg/s")
+    expect(direct).toContain("500 kg/s")
+    expect(direct).not.toContain("AI SECTION SUMMARIES")
+    const huge = [{ filename: "01.pdf", text: "A".repeat(500_000) }, { filename: "02.pdf", text: "TAIL-MARKER" }]
+    expect(shouldSummarize(huge, "anthropic")).toBe(true)
+    expect(shouldSummarize(huge, "gemini")).toBe(false)
+    const sections = sectionsFor(huge, 4)
+    expect(sections.some((section) => section.text.includes("TAIL-MARKER") || section.label.startsWith("02.pdf"))).toBe(true)
+    const digest = buildPacket({ files: [], description: "", title: "T" } as never, huge, ["01.pdf: a summary that is not the paper"])
+    expect(digest).toContain("AI SECTION SUMMARIES (NOT VERBATIM QUOTES)")
+    expect(digest.indexOf("AI SECTION SUMMARIES")).toBeLessThan(digest.indexOf("VERBATIM EXCERPTS"))
+    expect(digest).toContain("TAIL-MARKER")
+  })
+
+  it("marks a fabricated quote and keeps a real one", () => {
+    const corpus = "The cold-side pump is specified at 582 kg/s in section 6.6.22."
+    expect(quoteMatchesCorpus("582 kg/s in section 6.6.22", corpus)).toBe(true)
+    expect(quoteMatchesCorpus("the pump was never specified", corpus)).toBe(false)
+  })
+
+  it("ranks the weighted score and keeps the model's total beside it", () => {
+    const scores = officialCriteria.criteria.map((criterion) => ({
+      criterionId: criterion.id,
+      score: 80,
+      rationale: `${criterion.name} is supported by a passage a reader can find in the record.`,
+      citations: [{ quote: "Net B collected 1.8 litres.", location: "results" }],
+      confidence: "medium" as const,
+    }))
+    const result = validateReport(
+      {
+        summary: "The record states a narrow claim and shows the weighing steps that support it, with the season limit written in the text.",
+        scores,
+        overallScore: 40,
+        recommendation: "encourage",
+        strengths: ["The files are public."],
+        majorIssues: [],
+        minorIssues: ["The season is narrow."],
+        questionsForAuthors: ["What would a second season change?"],
+        suggestedNextSteps: ["Publish the weighing sheet beside the figure."],
+        ontologyClass: "physical-testable",
+        physics: { classification: "CONSISTENT", laws: ["conservation of mass"], howAddressed: "The mass balance is written out." },
+        simulation: { reported: 0, passed: 0, methods: "Simulation does not apply to this record.", inputsAvailable: false },
+        valueEstimate: { assumptions: ["The season is one site."], marketDisruption: "Not estimated." },
+        goals: [{ goalId: "clean-water", level: "indirect", note: "The record is about collection, not a target." }],
+      },
+      officialCriteria,
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.report.statedOverall).toBe(40)
+    expect(result.report.overallScore).toBeGreaterThan(70)
+    const review = {
+      id: "weighted",
+      sample: false,
+      mock: false,
+      doi: "10.5281/zenodo.23773780",
+      recordId: "23773780",
+      conceptRecordId: "23773780",
+      recordVersion: "v8",
+      title: "Closed chain",
+      creators: [],
+      keywords: [],
+      publicationDate: "2026-10-29",
+      license: "",
+      assessorId: "gemini",
+      modelId: "gemini-3.8-flash",
+      provider: "gemini",
+      criteriaId: officialCriteria.id,
+      criteriaVersion: officialCriteria.version,
+      customCriteria: false,
+      report: { ...result.report, statedOverall: result.report.overallScore, scoringCheck: { ...result.report.scoringCheck!, mismatch: false, reason: null } },
+      outputHash: "abc",
+      createdAt: "2026-10-29T00:00:00.000Z",
+    } satisfies StoredReview
+    const db: AirDatabase = { reviews: [review], nodes: [], issues: [], claims: [] }
+    const row = buildRanking(db)[0]
+    expect(row?.panelMedian).toBe(result.report.overallScore)
+    expect(row?.panelMedian).not.toBe(40)
+  })
+
+  it("parses credit, key, and rate-limit failures differently", () => {
+    expect(providerErrorMessage(403, '{"error":"Your spending limit was reached and credits are exhausted"}')).toContain("spending limit")
+    expect(providerErrorMessage(403, "API key not valid")).toContain("refused that API key")
+    expect(providerErrorMessage(429, "Daily rate limit exceeded")).toContain("rate limit")
+    expect(providerErrorMessage(403, "billing").startsWith("The provider refused that API key")).toBe(false)
+  })
+
+  it("lets a full reading onto the board and holds back a thin one", () => {
+    expect(coverageAllowsPublish({ coverage: "full", pagesRead: 119, pagesTotal: 119 })).toBe(true)
+    expect(coverageAllowsPublish({ coverage: "partial", pagesRead: 108, pagesTotal: 119 })).toBe(true)
+    expect(coverageAllowsPublish({ coverage: "partial", pagesRead: 40, pagesTotal: 119 })).toBe(false)
+    expect(coverageAllowsPublish(undefined)).toBe(false)
+  })
+})
+
 describe("provider payloads", () => {
   it("uses current Grok and Gemini models and a generous JSON token ceiling", () => {
     expect(builtinAssessors.find((profile) => profile.id === "grok")?.defaultModel).toBe("grok-4.7")
     expect(builtinAssessors.find((profile) => profile.id === "grok")?.defaultBaseUrl).toBe("https://api.x.ai/v1")
-    expect(builtinAssessors.find((profile) => profile.id === "gemini")?.defaultModel).toBe("gemini-3.5-flash")
+    expect(builtinAssessors.find((profile) => profile.id === "gemini")?.defaultModel).toBe("gemini-3.8-flash")
     expect(builtinAssessors.find((profile) => profile.id === "gemini")?.defaultBaseUrl).toBe("https://generativelanguage.googleapis.com/v1beta")
     const request = { model: "grok-4.7", system: "sys", user: "user", json: true }
     expect(openAiChatBody(request, OUTPUT_TOKEN_LIMIT).max_tokens).toBe(16384)
     expect(openAiChatBody(request, OUTPUT_TOKEN_LIMIT).response_format).toEqual({ type: "json_object" })
-    const gemini = geminiChatBody({ ...request, model: "gemini-3.5-flash" })
+    const gemini = geminiChatBody({ ...request, model: "gemini-3.8-flash" })
     const config = gemini.generationConfig as { maxOutputTokens: number; responseMimeType: string }
     expect(config.maxOutputTokens).toBe(16384)
     expect(config.responseMimeType).toBe("application/json")

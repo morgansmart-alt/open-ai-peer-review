@@ -28,6 +28,15 @@ export function boardValue(score: number, report: Pick<ReviewReport, "scale">, c
   return toBoard(score, storedScale(report, criteriaVersion))
 }
 
+/** Leaderboard value. Criterion scores win over the model's stated total. */
+export function rankedBoardScore(review: StoredReview): number {
+  const criteria = criteriaForReview(review)
+  const weighted = weightedMean(review.report.scores, criteria)
+  const scale = storedScale(review.report, review.criteriaVersion)
+  if (weighted === null) return boardValue(review.report.overallScore, review.report, review.criteriaVersion)
+  return toBoard(weighted, scale)
+}
+
 export function expectedVerdict(board: number): "encourage" | "revise" | "major-revision" | "not-ready" {
   if (board >= 80) return "encourage"
   if (board >= 60) return "revise"
@@ -70,7 +79,8 @@ export function scoringMismatch(review: StoredReview): { mismatch: boolean; reas
   if (internalRaw === null) return { mismatch: false, reason: null, internal: null }
   const scale = storedScale(review.report, review.criteriaVersion)
   const internal = toBoard(internalRaw, scale)
-  const stated = toBoard(review.report.overallScore, scale)
+  const statedSource = review.report.statedOverall != null ? review.report.statedOverall : review.report.overallScore
+  const stated = toBoard(statedSource, scale)
   const reasons: string[] = []
   if (Math.abs(stated - internal) > MISMATCH_POINTS) {
     reasons.push(`Stated overall ${stated} differs from the weighted score ${internal} by more than ${MISMATCH_POINTS}.`)

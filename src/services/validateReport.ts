@@ -142,7 +142,8 @@ export function validateReport(input: unknown, criteria: CriteriaSet): { ok: tru
     report: {
       summary,
       scores: ready.map((score) => ({ ...score, score: clamp(score.score, criteria.scale.min, criteria.scale.max) })),
-      overallScore: check.statedOverall ?? overall,
+      overallScore: overall,
+      statedOverall: Number.isFinite(statedRaw) ? statedRaw : null,
       ideaScore: idea,
       recommendation,
       scale: check.scale,

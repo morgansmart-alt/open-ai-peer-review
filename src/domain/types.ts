@@ -56,6 +56,8 @@ export interface CriteriaSet {
 export interface Citation {
   quote: string
   location: string
+  /** False when the quote is not a substring of the extracted paper. Absent on older readings. */
+  quoteVerified?: boolean
 }
 
 export type Confidence = "low" | "medium" | "high"
@@ -117,6 +119,7 @@ export interface MajorIssue {
   claim: string
   quotedPassage: string
   reason: string
+  quoteVerified?: boolean
 }
 
 export interface ReviewReport {
@@ -127,6 +130,11 @@ export interface ReviewReport {
   recommendation: string
   /** 100 means the stored numbers are already out of 100. Missing means an older 0–10 or 1–5 reading. */
   scale?: number
+  /** The model's own total, kept for the mismatch check. Ranking uses overallScore, which is the weighted score. */
+  statedOverall?: number | null
+  unverifiedQuotes?: number
+  /** Model id the provider actually served, when it differs from the requested id. */
+  servedModel?: string
   scoringCheck?: {
     internal: number
     statedOverall: number | null

@@ -362,7 +362,7 @@ export function isTextualFile(file: Pick<ZenodoFile, "extension">): boolean {
   return READABLE_EXTENSIONS.has(file.extension)
 }
 
-const SELECTION_FILE_CAP = 4
+const SELECTION_FILE_CAP = 12
 const SELECTION_FILE_BYTES = 8_000_000
 const SELECTION_TOTAL_BYTES = 8_000_000
 
@@ -385,7 +385,16 @@ function leadingIndex(file: ZenodoFile): number | null {
 }
 
 export function defaultFileSelection(files: ZenodoFile[]): string[] {
-  const readable = files.filter((file) => isTextualFile(file) && file.extension !== "zip" && ((file.size > 0 && file.size <= SELECTION_FILE_BYTES) || (file.size === 0 && file.extension === "pdf")))
+  const seen = new Set<string>()
+  const readable = files.filter((file) => {
+    if (!isTextualFile(file) || file.extension === "zip") return false
+    if (!((file.size > 0 && file.size <= SELECTION_FILE_BYTES) || (file.size === 0 && file.extension === "pdf"))) return false
+    const id = file.checksum || file.key
+    if (seen.has(id) || seen.has(file.key)) return false
+    seen.add(id)
+    seen.add(file.key)
+    return true
+  })
   const readme = readable.find(isReadmeFile)
   const manuscripts = readable
     .filter((file) => file.extension === "pdf" && !isSupplementFile(file))
@@ -401,9 +410,12 @@ export function defaultFileSelection(files: ZenodoFile[]): string[] {
     })
   const primary = manuscripts[0]
   const companion = primary && leadingIndex(primary) === 1 ? manuscripts.find((file) => leadingIndex(file) === 2) : undefined
+  const supplements = readable
+    .filter((file) => isSupplementFile(file) && file !== readme && file !== primary && file !== companion)
+    .sort((a, b) => a.key.localeCompare(b.key))
   const rest = readable
-    .filter((file) => file !== readme && file !== primary && file !== companion)
-    .sort((a, b) => Number(isSupplementFile(a)) - Number(isSupplementFile(b)) || b.size - a.size)
+    .filter((file) => file !== readme && file !== primary && file !== companion && !isSupplementFile(file))
+    .sort((a, b) => b.size - a.size)
   const picked: ZenodoFile[] = []
   let total = 0
   const take = (file: ZenodoFile | undefined) => {
@@ -415,6 +427,7 @@ export function defaultFileSelection(files: ZenodoFile[]): string[] {
   take(primary)
   take(companion)
   take(readme)
+  for (const file of supplements) take(file)
   if (!primary) {
     for (const file of rest) take(file)
   }

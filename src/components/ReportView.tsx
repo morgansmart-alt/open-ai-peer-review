@@ -69,10 +69,12 @@ export function ReportView({
           {criteria.version.startsWith("0.1") ? " · AIR v0.1" : ""}
         </p>
         {report.reading && (
-          <p className="mt-1 text-sm text-ink-soft">
-            Read {report.reading.pagesRead} of {report.reading.pagesTotal} pages · {report.reading.chunksSummarised} sections summarised · coverage {report.reading.coverage}
+          <p className="mt-1 text-sm text-ink">
+            {report.reading.pagesRead} / {report.reading.pagesTotal} pages · coverage {report.reading.coverage}
+            {report.reading.chunksSummarised > 0 ? ` · ${report.reading.chunksSummarised} sections summarised` : " · full text sent"}
           </p>
         )}
+        {report.unverifiedQuotes ? <p className="mt-1 text-xs text-ink-soft">{report.unverifiedQuotes} unverified quote{report.unverifiedQuotes === 1 ? "" : "s"}</p> : null}
         {check.mismatch && (
           <p className="mt-2 text-sm text-bad">
             Scoring mismatch, needs re-check. {check.reason}
@@ -142,7 +144,10 @@ export function ReportView({
                 {score.citations.map((citation, index) => (
                   <blockquote key={index} className="mt-2 border-l-2 border-teal/40 pl-3 text-sm">
                     {citation.quote}
-                    <footer className="mt-1 text-xs text-ink-soft">{citation.location}</footer>
+                    <footer className="mt-1 text-xs text-ink-soft">
+                      {citation.location}
+                      {citation.quoteVerified === false ? " · unverified" : ""}
+                    </footer>
                   </blockquote>
                 ))}
               </li>
@@ -161,7 +166,12 @@ export function ReportView({
             {report.majorIssues.map((issue, index) => (
               <li key={index}>
                 <span className="font-medium">{issue.claim}</span>
-                {issue.quotedPassage && <blockquote className="mt-1 border-l-2 border-line pl-3">{issue.quotedPassage}</blockquote>}
+                {issue.quotedPassage && (
+                  <blockquote className="mt-1 border-l-2 border-line pl-3">
+                    {issue.quotedPassage}
+                    {issue.quoteVerified === false ? <span className="mt-1 block text-xs text-ink-soft">unverified</span> : null}
+                  </blockquote>
+                )}
                 <p className="text-ink-soft">{issue.reason}</p>
               </li>
             ))}

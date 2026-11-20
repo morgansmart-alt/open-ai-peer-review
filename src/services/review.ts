@@ -1,6 +1,6 @@
 import type { ConversationLink } from "../domain/conversationLinks.ts"
 import { sha256Hex } from "./hash.ts"
-import type { AssessorProfile, CriteriaSet, ProviderSettings, ReviewReport, SourceResult } from "../domain/types.ts"
+import type { AssessorProfile, Citation, CriteriaSet, CriterionJudgement, MajorIssue, ProviderSettings, ReviewReport, SourceResult, Verdict } from "../domain/types.ts"
 import { buildDemoReport, buildDemoSourceCheck, buildDemoVerdict } from "./mockReview.ts"
 import { completeChat, resolvedModel } from "./providers.ts"
 import {
@@ -15,10 +15,9 @@ import {
   sourceCheckPrompt,
   summarySystemPrompt,
 } from "./prompts.ts"
-import { bundleItems, readingCoverage } from "./textTools.ts"
+import { bundleItems, quoteMatchesCorpus, readingCoverage } from "./textTools.ts"
 import { extractJsonValue, validateReport } from "./validateReport.ts"
 import type { RelatedSnippet, ZenodoRecord } from "./zenodo.ts"
-import type { CriterionJudgement, MajorIssue, Verdict } from "../domain/types.ts"
 
 export interface RunContext {
   profile: AssessorProfile
@@ -32,29 +31,28 @@ export interface RunContext {
   onProgress?: (message: string) => void
 }
 
-async function completeJson(ctx: RunContext, system: string, user: string): Promise<unknown> {
+async function completeText(ctx: RunContext, system: string, user: string, json: boolean): Promise<{ content: string; model: string }> {
   const model = resolvedModel(ctx.profile, ctx.settings)
-  const first = await completeChat(ctx.profile, ctx.settings, { model, system, user, json: true, signal: ctx.signal })
+  return completeChat(ctx.profile, ctx.settings, { model, system, user, json, signal: ctx.signal })
+}
+
+async function completeJson(ctx: RunContext, system: string, user: string): Promise<unknown> {
+  const first = await completeText(ctx, system, user, true)
   try {
-    return extractJsonValue(first)
+    return extractJsonValue(first.content)
   } catch {
     ctx.onProgress?.(`${ctx.profile.name} returned malformed JSON. Asking for a repair.`)
-    const second = await completeChat(ctx.profile, ctx.settings, {
-      model,
-      system,
-      user: repairPrompt(first, ["The output was not parseable JSON."]),
-      json: true,
-      signal: ctx.signal,
-    })
-    return extractJsonValue(second)
+    const second = await completeText(ctx, system, repairPrompt(first.content, ["The output was not parseable JSON."]), true)
+    return extractJsonValue(second.content)
   }
 }
 
-async function validatedReport(ctx: RunContext, packet: string, conversations: ConversationLink[]): Promise<ReviewReport> {
+async function validatedReport(ctx: RunContext, packet: string, conversations: ConversationLink[]): Promise<{ report: ReviewReport; model: string }> {
   const system = reviewSystemPrompt(ctx.criteria)
   const user = reviewUserPrompt(ctx.record, ctx.criteria, packet, conversations)
-  const model = resolvedModel(ctx.profile, ctx.settings)
-  let raw = await completeChat(ctx.profile, ctx.settings, { model, system, user, json: true, signal: ctx.signal })
+  const first = await completeText(ctx, system, user, true)
+  let raw = first.content
+  let model = first.model
   let parsed: unknown = null
   try {
     parsed = extractJsonValue(raw)
@@ -62,41 +60,49 @@ async function validatedReport(ctx: RunContext, packet: string, conversations: C
     parsed = null
   }
   let validated = parsed ? validateReport(parsed, ctx.criteria) : { ok: false as const, errors: ["The output was not JSON."] }
-  if (validated.ok) return validated.report
+  if (validated.ok) return { report: validated.report, model }
   ctx.onProgress?.(`${ctx.profile.name}'s reading did not match the schema. Asking for a repair.`)
-  const repaired = await completeChat(ctx.profile, ctx.settings, {
-    model,
-    system,
-    user: repairPrompt(raw, validated.errors),
-    json: true,
-    signal: ctx.signal,
-  })
-  parsed = extractJsonValue(repaired)
+  const repaired = await completeText(ctx, system, repairPrompt(raw, validated.errors), true)
+  raw = repaired.content
+  model = repaired.model || model
+  parsed = extractJsonValue(raw)
   validated = validateReport(parsed, ctx.criteria)
   if (!validated.ok) {
     throw new Error(`${ctx.profile.name} did not return a usable reading. ${validated.errors.slice(0, 3).join(" ")}`)
   }
-  return validated.report
+  return { report: validated.report, model }
+}
+
+function verifyQuotes(report: ReviewReport, corpus: string): ReviewReport {
+  let unverifiedQuotes = 0
+  const mark = (quote: string): boolean => {
+    const verified = quoteMatchesCorpus(quote, corpus)
+    if (quote.trim() && !verified) unverifiedQuotes += 1
+    return verified
+  }
+  const scores = report.scores.map((score) => ({
+    ...score,
+    citations: score.citations.map((citation: Citation) => ({ ...citation, quoteVerified: citation.quote.trim() ? mark(citation.quote) : undefined })),
+  }))
+  const majorIssues = report.majorIssues.map((issue: MajorIssue) => ({
+    ...issue,
+    quoteVerified: issue.quotedPassage.trim() ? mark(issue.quotedPassage) : undefined,
+  }))
+  return { ...report, scores, majorIssues, unverifiedQuotes }
 }
 
 const DIGEST_BUDGET = 28_000
 
 async function summariseSections(ctx: RunContext): Promise<string[] | null> {
-  if (!shouldSummarize(ctx.documents)) return null
+  if (!shouldSummarize(ctx.documents, ctx.profile.provider)) return null
   const sections = chunksFor(ctx.documents)
   let summaries = []
   for (let index = 0; index < sections.length; index += 1) {
     const section = sections[index]
     if (!section) continue
     ctx.onProgress?.(`Summarising section ${index + 1} of ${sections.length}…`)
-    const summary = await completeChat(ctx.profile, ctx.settings, {
-      model: resolvedModel(ctx.profile, ctx.settings),
-      system: summarySystemPrompt(),
-      user: `Section ${index + 1} of ${sections.length} (${section.label}).\n\n${section.text}`,
-      json: false,
-      signal: ctx.signal,
-    })
-    summaries.push(`${section.label}: ${summary}`)
+    const summary = await completeText(ctx, summarySystemPrompt(), `Section ${index + 1} of ${sections.length} (${section.label}).\n\n${section.text}`, false)
+    summaries.push(`${section.label}: ${summary.content}`)
   }
   let round = 0
   while (summaries.join("\n\n").length > DIGEST_BUDGET && summaries.length > 1 && round < 4) {
@@ -106,14 +112,8 @@ async function summariseSections(ctx: RunContext): Promise<string[] | null> {
       const group = groups[index]
       if (!group) continue
       ctx.onProgress?.(`Combining sections ${index + 1} of ${groups.length}…`)
-      const summary = await completeChat(ctx.profile, ctx.settings, {
-        model: resolvedModel(ctx.profile, ctx.settings),
-        system: reduceSystemPrompt(),
-        user: group.join("\n\n"),
-        json: false,
-        signal: ctx.signal,
-      })
-      next.push(summary)
+      const summary = await completeText(ctx, reduceSystemPrompt(), group.join("\n\n"), false)
+      next.push(summary.content)
     }
     summaries = next
     round += 1
@@ -123,26 +123,30 @@ async function summariseSections(ctx: RunContext): Promise<string[] | null> {
 
 export async function runReview(ctx: RunContext): Promise<ReviewReport> {
   const text = [ctx.record.description, ...ctx.documents.map((document) => document.text)].filter(Boolean).join("\n\n")
+  const summarise = shouldSummarize(ctx.documents, ctx.profile.provider)
   const sections = chunksFor(ctx.documents)
-  const chunksSummarised = shouldSummarize(ctx.documents) ? sections.length : 0
-  const reading = readingCoverage(ctx.documents, chunksSummarised)
+  const reading = readingCoverage(ctx.documents, summarise ? sections.length : 0)
+  const corpus = text
   if (ctx.demo) {
     ctx.onProgress?.(`Building a demo reading for ${ctx.profile.name}.`)
-    return {
-      ...buildDemoReport({
-        profile: ctx.profile,
-        criteria: ctx.criteria,
-        text,
-        filenames: ctx.documents.map((document) => document.filename),
-        title: ctx.record.title,
-      }),
-      reading,
-    }
+    return verifyQuotes(
+      {
+        ...buildDemoReport({
+          profile: ctx.profile,
+          criteria: ctx.criteria,
+          text,
+          filenames: ctx.documents.map((document) => document.filename),
+          title: ctx.record.title,
+        }),
+        reading,
+      },
+      corpus,
+    )
   }
   const summaries = await summariseSections(ctx)
   ctx.onProgress?.(`${ctx.profile.name} is scoring the record.`)
-  const report = await validatedReport(ctx, buildPacket(ctx.record, ctx.documents, summaries), ctx.conversationLinks ?? [])
-  return { ...report, reading }
+  const scored = await validatedReport(ctx, buildPacket(ctx.record, ctx.documents, summaries), ctx.conversationLinks ?? [])
+  return verifyQuotes({ ...scored.report, reading, servedModel: scored.model }, corpus)
 }
 
 export interface SourceCheckDraft {

@@ -120,6 +120,13 @@ describe("defaultFileSelection", () => {
       "01_SCG_HMH_Closed_Derivative_Chain_v8.pdf",
       "02_SCG_HMH_v8_Section_6.6_Cold_Side.pdf",
       "README.md",
+      "03_SUPPLEMENTARY_Errata_v7_to_v8.pdf",
+      "04_SUPPLEMENTARY_Key_Results_Summary.pdf",
+      "05_SUPPLEMENTARY_Bench_Validation_Plan.pdf",
+      "06_SUPPLEMENTARY_Open_Questions.pdf",
+      "07_SUPPLEMENTARY_Reproducibility.pdf",
+      "08_SUPPLEMENTARY_Transistor_Physics_and_Data_Centres.pdf",
+      "09_SUPPLEMENTARY_Further_Physics_Exploitations.pdf",
     ])
   })
 
@@ -131,13 +138,13 @@ describe("defaultFileSelection", () => {
         file("SUPPLEMENTARY_table.pdf", 10_000),
         file("README.md", 800),
       ]),
-    ).toEqual(["paper.pdf", "README.md"])
+    ).toEqual(["paper.pdf", "README.md", "SUPPLEMENTARY_table.pdf"])
   })
 
   it("still selects a readable file when the record is only supplements", () => {
     expect(defaultFileSelection([file("03_SUPPLEMENTARY_Errata.pdf", 12_000), file("04_SUPPLEMENTARY_Notes.pdf", 80_000)])).toEqual([
-      "04_SUPPLEMENTARY_Notes.pdf",
       "03_SUPPLEMENTARY_Errata.pdf",
+      "04_SUPPLEMENTARY_Notes.pdf",
     ])
   })
 })
