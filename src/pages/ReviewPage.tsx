@@ -9,6 +9,7 @@ import { boardValue } from "../domain/scoring.ts"
 import type { ReviewReport, StoredReview } from "../domain/types.ts"
 import { useAir } from "../context/AirContext.tsx"
 import { ReportView } from "../components/ReportView.tsx"
+import { LocalPaperTools } from "../components/LocalPaperTools.tsx"
 import { Banner, btnPrimary, btnQuiet, ExternalLink, fieldClass } from "../components/ui.tsx"
 import { sha256Hex, uid } from "../services/hash.ts"
 import { resolvedModel } from "../services/providers.ts"
@@ -610,6 +611,7 @@ export function ReviewPage() {
           </div>
         </section>
       )}
+      <LocalPaperTools record={record} criteria={air.criteria} documents={docs.filter((doc) => doc.text.trim()).map((doc) => ({ filename: doc.filename, text: doc.text }))} onRead={async () => { await ensureDocs() }} />
       {results.length > 0 && (
         <section className="mt-8">
           <div className="mb-4 rounded-3xl border border-line bg-teal/5 p-4">
