@@ -13,6 +13,7 @@ export interface PersistedSettings {
   baseUrls: Record<string, string>
   models: Record<string, string>
   demoMode: boolean
+  autoPick: boolean
   nodeId: string
   nodeName: string
   orcid: string
@@ -64,6 +65,7 @@ export function defaultSettings(): PersistedSettings {
     baseUrls: {},
     models: {},
     demoMode: true,
+    autoPick: true,
     nodeId: "",
     nodeName: "",
     orcid: "",
@@ -89,6 +91,7 @@ export function loadSettings(): PersistedSettings {
     models: stored.models ?? {},
     customProfiles: Array.isArray(stored.customProfiles) ? stored.customProfiles : [],
     customCriteria: custom && custom.ok ? custom.criteria : null,
+    autoPick: stored.autoPick !== false,
     nodeId: stored.nodeId || crypto.randomUUID(),
     nodeName: stored.nodeName || "guest-node",
   }
@@ -117,6 +120,7 @@ export function clearBrowserData(): void {
   localStorage.removeItem(SETTINGS_KEY)
   localStorage.removeItem(KEYS_KEY)
   localStorage.removeItem(RATE_KEY)
+  localStorage.removeItem("air.router.v1")
 }
 
 export function toProviderSettings(settings: PersistedSettings, keys: Record<string, string>): ProviderSettings {

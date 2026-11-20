@@ -2,7 +2,10 @@ import type { ConversationLink } from "../domain/conversationLinks.ts"
 import { sha256Hex } from "./hash.ts"
 import type { AssessorProfile, Citation, CriteriaSet, CriterionJudgement, MajorIssue, ProviderSettings, ReviewReport, SourceResult, Verdict } from "../domain/types.ts"
 import { buildDemoReport, buildDemoSourceCheck, buildDemoVerdict } from "./mockReview.ts"
+import { FREE_PROVIDER_IDS, jobForText, tokensForJob } from "../domain/freeModels.ts"
 import { completeChat, resolvedModel } from "./providers.ts"
+import { loadRouterHealth, saveRouterHealth } from "./routerStore.ts"
+import { routeComplete } from "./router.ts"
 import {
   buildPacket,
   chunksFor,
@@ -29,11 +32,58 @@ export interface RunContext {
   demo: boolean
   signal?: AbortSignal
   onProgress?: (message: string) => void
+  autoPick?: boolean
+  keys?: Record<string, string>
 }
 
-async function completeText(ctx: RunContext, system: string, user: string, json: boolean): Promise<{ content: string; model: string }> {
+async function completeText(ctx: RunContext, system: string, user: string, json: boolean): Promise<{ content: string; model: string; family?: string; attempts?: string[]; provider?: string }> {
   const model = resolvedModel(ctx.profile, ctx.settings)
-  return completeChat(ctx.profile, ctx.settings, { model, system, user, json, signal: ctx.signal })
+  const providersWithKeys = FREE_PROVIDER_IDS.filter((id) => Boolean(ctx.keys?.[id]?.trim()))
+  const useRouter = Boolean(ctx.autoPick) && providersWithKeys.length > 0
+  if (!useRouter) return completeChat(ctx.profile, ctx.settings, { model, system, user, json, signal: ctx.signal })
+  const job = jobForText(user.length)
+  const routed = await routeComplete({
+    tokens: tokensForJob(job, user.length + system.length),
+    job,
+    providersWithKeys,
+    health: loadRouterHealth(),
+    now: Date.now(),
+    privateMaterial: (ctx.conversationLinks?.length ?? 0) > 0,
+    call: async (candidate) => {
+      const profile = { ...ctx.profile, provider: candidate.provider, defaultModel: candidate.model, defaultBaseUrl: baseUrlFor(candidate.provider) }
+      try {
+        const result = await completeChat(profile, ctx.settings, {
+          model: candidate.model,
+          system,
+          user,
+          json,
+          signal: ctx.signal,
+        })
+        return { status: 200, body: "", content: result.content, servedModel: result.model }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "The provider failed."
+        const status = /429|rate limit|quota/i.test(message) ? 429 : /503|overloaded|high demand/i.test(message) ? 503 : /401|rejected that API key/i.test(message) ? 401 : /credit|spending/i.test(message) ? 403 : 500
+        return { status, body: message }
+      }
+    },
+  })
+  saveRouterHealth(routed.health)
+  if (!routed.ok && routed.attempts.length === 0) {
+    if ((ctx.conversationLinks?.length ?? 0) > 0) {
+      throw new Error("Private notes are not sent to free models that may train on prompts. Use a paid key, or remove the private link.")
+    }
+    return completeChat(ctx.profile, ctx.settings, { model, system, user, json, signal: ctx.signal })
+  }
+  if (!routed.ok) throw new Error(routed.error)
+  return { content: routed.content, model: routed.servedModel, family: routed.family, attempts: routed.attempts, provider: routed.model.provider }
+}
+
+function baseUrlFor(provider: string): string {
+  if (provider === "gemini") return "https://generativelanguage.googleapis.com/v1beta"
+  if (provider === "openrouter") return "https://openrouter.ai/api/v1"
+  if (provider === "groq") return "https://api.groq.com/openai/v1"
+  if (provider === "cohere") return "https://api.cohere.ai/compatibility/v1"
+  return ""
 }
 
 async function completeJson(ctx: RunContext, system: string, user: string): Promise<unknown> {
@@ -47,7 +97,7 @@ async function completeJson(ctx: RunContext, system: string, user: string): Prom
   }
 }
 
-async function validatedReport(ctx: RunContext, packet: string, conversations: ConversationLink[]): Promise<{ report: ReviewReport; model: string }> {
+async function validatedReport(ctx: RunContext, packet: string, conversations: ConversationLink[]): Promise<{ report: ReviewReport; model: string; family?: string; attempts?: string[]; provider?: string }> {
   const system = reviewSystemPrompt(ctx.criteria)
   const user = reviewUserPrompt(ctx.record, ctx.criteria, packet, conversations)
   const first = await completeText(ctx, system, user, true)
@@ -60,7 +110,7 @@ async function validatedReport(ctx: RunContext, packet: string, conversations: C
     parsed = null
   }
   let validated = parsed ? validateReport(parsed, ctx.criteria) : { ok: false as const, errors: ["The output was not JSON."] }
-  if (validated.ok) return { report: validated.report, model }
+  if (validated.ok) return { report: validated.report, model, family: first.family, attempts: first.attempts, provider: first.provider }
   ctx.onProgress?.(`${ctx.profile.name}'s reading did not match the schema. Asking for a repair.`)
   const repaired = await completeText(ctx, system, repairPrompt(raw, validated.errors), true)
   raw = repaired.content
@@ -70,7 +120,7 @@ async function validatedReport(ctx: RunContext, packet: string, conversations: C
   if (!validated.ok) {
     throw new Error(`${ctx.profile.name} did not return a usable reading. ${validated.errors.slice(0, 3).join(" ")}`)
   }
-  return { report: validated.report, model }
+  return { report: validated.report, model, family: repaired.family ?? first.family, attempts: repaired.attempts ?? first.attempts, provider: repaired.provider ?? first.provider }
 }
 
 function verifyQuotes(report: ReviewReport, corpus: string): ReviewReport {
@@ -146,7 +196,15 @@ export async function runReview(ctx: RunContext): Promise<ReviewReport> {
   const summaries = await summariseSections(ctx)
   ctx.onProgress?.(`${ctx.profile.name} is scoring the record.`)
   const scored = await validatedReport(ctx, buildPacket(ctx.record, ctx.documents, summaries), ctx.conversationLinks ?? [])
-  return verifyQuotes({ ...scored.report, reading, servedModel: scored.model }, corpus)
+  return verifyQuotes(
+    {
+      ...scored.report,
+      reading,
+      servedModel: scored.model,
+      router: scored.family ? { family: scored.family, provider: scored.provider, attempts: scored.attempts ?? [], job: jobForText(text.length) } : undefined,
+    },
+    corpus,
+  )
 }
 
 export interface SourceCheckDraft {

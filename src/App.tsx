@@ -5,6 +5,7 @@ import { AirProvider } from "./context/AirContext.tsx"
 import { CriteriaPage } from "./pages/CriteriaPage.tsx"
 import { HomePage } from "./pages/HomePage.tsx"
 import { MethodPage } from "./pages/MethodPage.tsx"
+import { KeysGuidePage } from "./pages/KeysGuidePage.tsx"
 import { NodePage, NodesPage, ReviewerPage, ReviewersPage } from "./pages/Profiles.tsx"
 
 const ReviewPage = lazy(() => import("./pages/ReviewPage.tsx").then((module) => ({ default: module.ReviewPage })))
@@ -26,6 +27,7 @@ export default function App() {
             <Route path="/nodes/:nodeId" element={<NodePage />} />
             <Route path="/criteria" element={<CriteriaPage />} />
             <Route path="/method" element={<MethodPage />} />
+            <Route path="/keys" element={<KeysGuidePage />} />
             <Route
               path="*"
               element={

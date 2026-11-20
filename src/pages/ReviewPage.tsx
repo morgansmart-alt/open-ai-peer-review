@@ -28,6 +28,7 @@ import {
 } from "../services/zenodo.ts"
 import { isPublishedDoi, parseAnyRef, resolvePublishedDoi } from "../services/works.ts"
 import { coverageAllowsPublish } from "../services/textTools.ts"
+import { enoughFamilies, familiesOf } from "../services/fairness.ts"
 
 interface PanelResult {
   assessorId: string
@@ -285,6 +286,8 @@ export function ReviewPage() {
             documents,
             conversationLinks: collected.links,
             demo,
+            autoPick: air.settings.autoPick,
+            keys: air.providerSettings.keys,
             onProgress: setStatus,
           })
           const modelId = demo ? `${resolvedModel(profile, air.providerSettings)} (demo)` : report.servedModel || resolvedModel(profile, air.providerSettings)
@@ -305,7 +308,7 @@ export function ReviewPage() {
             license: record.license,
             assessorId: profile.id,
             modelId,
-            provider: profile.provider,
+            provider: (report.router?.provider as StoredReview["provider"]) || profile.provider,
             criteriaId: air.criteria.id,
             criteriaVersion: air.criteria.version,
             customCriteria: air.customCriteria,
@@ -322,6 +325,10 @@ export function ReviewPage() {
         }
       }),
     )
+    const finished = panel.flatMap((item) => (item.stored && !item.stored.mock ? [item.stored] : []))
+    if (finished.length > 0 && familiesOf(finished).length < 2) {
+      for (const review of finished) review.tier = "provisional"
+    }
     setResults(air.profiles.map((profile) => panel.find((item) => item.assessorId === profile.id)).filter((item): item is PanelResult => Boolean(item)))
     setStatus(null)
     setBusy(false)
@@ -336,6 +343,10 @@ export function ReviewPage() {
     }
     if (!record || !isPublishedDoi(record.doi)) {
       setError("Publishing to the leaderboard needs a published DOI. This reading stays in this browser.")
+      return
+    }
+    if (!enoughFamilies(ready.filter((review) => !review.mock))) {
+      setError("A ranked review needs two different model families, for example Gemini and OpenRouter. This one is saved on this device as provisional.")
       return
     }
     const thin = ready.filter((review) => !coverageAllowsPublish(review.report.reading))
@@ -614,13 +625,24 @@ export function ReviewPage() {
             </label>
             {!acknowledged && <p className="mt-2 text-sm text-ink-soft">Tick the four notices in step 1 before a reading can join the ranking.</p>}
             {record && !isPublishedDoi(record.doi) && <p className="mt-2 text-sm text-ink-soft">Publishing to the leaderboard needs a published DOI. This reading can still run in this browser.</p>}
+            {results.some((result) => result.stored && !result.stored.mock) && !enoughFamilies(results.flatMap((result) => (result.stored && !result.stored.mock ? [result.stored] : []))) && (
+              <p className="mt-2 text-sm text-ink-soft">Only one model family answered. This stays provisional until a second family, such as OpenRouter, also reviews it.</p>
+            )}
             {results.some((result) => result.report && !coverageAllowsPublish(result.report.reading)) && (
               <p className="mt-2 text-sm text-ink-soft">The ranked board needs full coverage, or at least 90% of the pages read.</p>
             )}
             <button
               type="button"
               className={`${btnPrimary} mt-3`}
-              disabled={!optIn || !acknowledged || published || !record || !isPublishedDoi(record.doi) || results.some((result) => result.report && !coverageAllowsPublish(result.report.reading))}
+              disabled={
+                !optIn ||
+                !acknowledged ||
+                published ||
+                !record ||
+                !isPublishedDoi(record.doi) ||
+                results.some((result) => result.report && !coverageAllowsPublish(result.report.reading)) ||
+                !enoughFamilies(results.flatMap((result) => (result.stored && !result.stored.mock ? [result.stored] : [])))
+              }
               onClick={() => void publish()}
             >
               {published ? "Published" : "Publish to the leaderboard"}

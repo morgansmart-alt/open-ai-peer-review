@@ -51,7 +51,7 @@ function spend(): string | null {
   return null
 }
 
-const PRIVATE_PAYLOAD_KEYS = new Set(["conversationLinks", "privateLinks", "chatUrl", "chatNote"])
+const PRIVATE_PAYLOAD_KEYS = new Set(["conversationLinks", "privateLinks", "chatUrl", "chatNote", "apiKey", "authorization"])
 
 /** Drop private chat addresses before a row is stored. The count stays. */
 export function publicPayload<T>(value: T): T {
@@ -69,7 +69,7 @@ function upsertLocal(review: StoredReview): void {
 export async function publishReview(mode: BackendMode, review: StoredReview): Promise<string | null> {
   const limited = spend()
   if (limited) return limited
-  if (mode === "local" || review.mock || review.sample) {
+  if (mode === "local" || review.mock || review.sample || review.tier === "provisional") {
     if (mode === "supabase" && review.mock) {
       const overlay = loadOverlay()
       overlay.reviews = [...overlay.reviews.filter((item) => item.id !== review.id), review]

@@ -26,6 +26,8 @@ interface AirContextValue {
   setModel: (assessorId: string, model: string) => void
   setBaseUrl: (slot: string, url: string) => void
   setDemoMode: (demo: boolean) => void
+  setAutoPick: (autoPick: boolean) => void
+  forgetKeys: () => void
   setNodeName: (name: string) => void
   setOrcid: (orcid: string) => void
   setAuthorName: (name: string) => void
@@ -180,6 +182,11 @@ export function AirProvider({ children }: { children: ReactNode }) {
     setModel: (assessorId, model) => setSettings((current) => ({ ...current, models: { ...current.models, [assessorId]: model } })),
     setBaseUrl: (slot, url) => setSettings((current) => ({ ...current, baseUrls: { ...current.baseUrls, [slot]: url } })),
     setDemoMode: (demoMode) => setSettings((current) => ({ ...current, demoMode })),
+    setAutoPick: (autoPick) => setSettings((current) => ({ ...current, autoPick })),
+    forgetKeys: () => {
+      setKeys({})
+      setSettings((current) => ({ ...current, remember: false }))
+    },
     setNodeName: (nodeName) => setSettings((current) => ({ ...current, nodeName })),
     setOrcid: (orcid) => setSettings((current) => ({ ...current, orcid })),
     setAuthorName: (authorName) => setSettings((current) => ({ ...current, authorName })),

@@ -51,9 +51,9 @@ export const builtinAssessors: AssessorProfile[] = [
     name: "DeepSeek",
     shortName: "DeepSeek",
     provider: "openrouter",
-    defaultModel: "deepseek/deepseek-chat",
+    defaultModel: "nvidia/nemotron-3-ultra-550b-a55b:free",
     defaultBaseUrl: "https://openrouter.ai/api/v1",
-    blurb: "DeepSeek through OpenRouter, which allows browser calls. The same OpenRouter key covers Mistral and Llama.",
+    blurb: "A free OpenRouter model (Nemotron, 1M context). DeepSeek has no :free id on OpenRouter as of 20 Nov 2026, so this column uses a free long-context model instead of a paid id.",
     builtin: true,
   },
   {
@@ -61,9 +61,9 @@ export const builtinAssessors: AssessorProfile[] = [
     name: "Mistral",
     shortName: "Mistral",
     provider: "openrouter",
-    defaultModel: "mistralai/mistral-large",
+    defaultModel: "google/gemma-4-31b-it:free",
     defaultBaseUrl: "https://openrouter.ai/api/v1",
-    blurb: "Mistral through OpenRouter. Change the model id if you want a smaller or newer Mistral checkpoint.",
+    blurb: "Gemma 4 31B through OpenRouter’s free tier. Mistral’s own API is not free, and the old default was a paid OpenRouter id.",
     builtin: true,
   },
   {
@@ -71,9 +71,9 @@ export const builtinAssessors: AssessorProfile[] = [
     name: "Llama",
     shortName: "Llama",
     provider: "openrouter",
-    defaultModel: "meta-llama/llama-3.3-70b-instruct",
+    defaultModel: "inclusionai/ling-3.2-flash:free",
     defaultBaseUrl: "https://openrouter.ai/api/v1",
-    blurb: "Llama through OpenRouter. Any other OpenAI-compatible host can be added as a custom profile.",
+    blurb: "Ling 3.2 Flash through OpenRouter’s free tier (1M context). The previous Llama id on OpenRouter was paid.",
     builtin: true,
   },
 ]
@@ -112,9 +112,13 @@ export function providerLabel(provider: ProviderId): string {
       return "Google Gemini"
     case "openrouter":
       return "OpenRouter"
+    case "groq":
+      return "Groq"
+    case "cohere":
+      return "Cohere"
     case "compatible":
       return "OpenAI-compatible"
   }
 }
 
-export const providerOrder: ProviderId[] = ["xai", "openai", "anthropic", "gemini", "openrouter", "compatible"]
+export const providerOrder: ProviderId[] = ["gemini", "openrouter", "groq", "cohere", "xai", "openai", "anthropic", "compatible"]

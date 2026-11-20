@@ -1,4 +1,5 @@
 import { keySlot } from "../domain/assessors.ts"
+import { AIR_SITE_URL } from "./keyProbe.ts"
 import type { AssessorProfile, ProviderSettings } from "../domain/types.ts"
 
 export interface ChatRequest {
@@ -159,7 +160,7 @@ export async function completeChat(profile: AssessorProfile, settings: ProviderS
   if (profile.provider === "gemini") return gemini(baseUrl, key, ready)
   const headers: Record<string, string> =
     profile.provider === "openrouter"
-      ? { "HTTP-Referer": "https://air-peer-review.local", "X-Title": "AIR Peer Review" }
+      ? { "HTTP-Referer": AIR_SITE_URL, "X-Title": "Open AI Peer Review" }
       : {}
   return openAiCompatible(baseUrl, key, ready, headers, profile.provider === "xai" ? OUTPUT_TOKEN_LIMIT : undefined)
 }
