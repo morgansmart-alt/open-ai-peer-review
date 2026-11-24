@@ -9,6 +9,7 @@ test("landing shows the leaderboard and example-data label", async ({ page }) =>
   await page.goto("/")
   await expect(page.getByRole("heading", { name: /public board for ideas/i })).toBeVisible()
   await expect(page.getByText("Example rows are sample data, not judgements of real work.")).toBeVisible()
+  await expect(page.getByRole("checkbox", { name: "Uncalibrated web-chat" })).toBeChecked()
 })
 
 test("mobile width still shows the board", async ({ page }) => {
@@ -43,6 +44,9 @@ test("notices gate, mocked Zenodo, free screening, private links, and export", a
   await expect(page.getByRole("button", { name: /Publish to the leaderboard/i })).toHaveCount(0)
   await page.getByRole("button", { name: /Try 10\.5281\/zenodo\.18916931/ }).click()
   await expect(page.getByRole("heading", { name: "Smoke-test record" })).toBeVisible()
+  await expect(page.getByTestId("web-chat-panel")).toContainText("Review with a web chat (free, uses your own signed-in chat)")
+  await expect(page.getByText("Load the extension, then reload this page.")).toBeVisible()
+  await expect(page.getByTestId("web-chat-run")).toBeDisabled()
   await expect(page.getByTestId("private-links").locator("input").first()).toHaveValue(EXAMPLE_URL)
   await page.getByTestId("free-review").click()
   const card = page.getByTestId("report-card")

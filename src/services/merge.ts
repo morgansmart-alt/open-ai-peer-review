@@ -12,11 +12,14 @@ export function mergeDatabases(base: AirDatabase, overlay: AirDatabase): AirData
   }
   const claims = new Map(base.claims.map((claim) => [claim.doi, claim]))
   for (const claim of overlay.claims) claims.set(claim.doi, claim)
+  const webChat = new Map((base.webChat ?? []).map((review) => [review.id, review]))
+  for (const review of overlay.webChat ?? []) webChat.set(review.id, review)
   return {
     reviews: [...reviews.values()],
     nodes,
     issues: [...issues.values()],
     claims: [...claims.values()],
+    webChat: [...webChat.values()],
   }
 }
 

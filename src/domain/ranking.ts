@@ -5,6 +5,7 @@ import { issueCounts, issuePenalty } from "./issues.ts"
 import { ASSESSOR_SPREAD, BOARD_PRIOR, boardValue, rankedBoardScore, scoringMismatch } from "./scoring.ts"
 import type { AirDatabase, IssueThread, StoredReview } from "./types.ts"
 import { isCommunityAiRecord } from "./moltbook.ts"
+import { isUncalibratedWebChat } from "../services/webChat/protocol.ts"
 import { isHumanReview } from "./versions.ts"
 
 export const PRIOR = 3
@@ -125,7 +126,7 @@ export function buildRanking(db: AirDatabase, now = Date.now()): RankRow[] {
       humanGroups.set(key, list)
       continue
     }
-    if (review.tier === "free-screening") continue
+    if (review.tier === "free-screening" || isUncalibratedWebChat(review)) continue
     const list = groups.get(key) ?? []
     list.push(review)
     groups.set(key, list)

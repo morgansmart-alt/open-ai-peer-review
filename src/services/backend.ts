@@ -13,6 +13,9 @@ export function commentRejectedByBoard(issue: IssueThread, message: string): boo
 }
 import { loadLocalDatabase, loadOverlay, loadRateStamps, saveLocalDatabase, saveOverlay, saveRateStamps } from "./storage.ts"
 import { rateLimitDecision } from "./rateLimit.ts"
+import { isUncalibratedWebChat } from "./webChat/protocol.ts"
+import { submissionFromReview, submissionToStored, type WebChatSubmission } from "./webChat/submission.ts"
+import { postWebChatSubmission } from "./webChat/submit.ts"
 
 export type BackendMode = "local" | "supabase"
 
@@ -34,13 +37,16 @@ async function loadRemote(sb: SupabaseClient): Promise<AirDatabase> {
     sb.from("air_issues").select("payload").limit(2000),
     sb.from("air_claims").select("payload").limit(1000),
   ])
+  const webChat = await sb.from("air_web_chat").select("id, payload").limit(1000)
   const error = reviews.error || nodes.error || issues.error || claims.error
   if (error) throw new Error(error.message)
+  const webRows = webChat.error ? [] : ((webChat.data as { id?: string; payload: WebChatSubmission }[] | null) ?? [])
   return {
     reviews: payloads<StoredReview>(reviews.data as { payload: StoredReview }[] | null),
     nodes: payloads<NodeSubmission>(nodes.data as { payload: NodeSubmission }[] | null),
     issues: payloads<IssueThread>(issues.data as { payload: IssueThread }[] | null),
     claims: payloads<AuthorClaim>(claims.data as { payload: AuthorClaim }[] | null),
+    webChat: webRows.map((row) => submissionToStored({ ...row.payload, id: row.id })),
   }
 }
 
@@ -62,7 +68,7 @@ function spend(): string | null {
   return null
 }
 
-const PRIVATE_PAYLOAD_KEYS = new Set(["conversationLinks", "privateLinks", "chatUrl", "chatNote"])
+const PRIVATE_PAYLOAD_KEYS = new Set(["conversationLinks", "privateLinks", "chatUrl", "chatNote", "packet", "webChatPrompt", "paperText", "instructions", "defenceTranscript"])
 
 /** Drop private chat addresses before a row is stored. The count stays. */
 export function publicPayload<T>(value: T): T {
@@ -77,7 +83,36 @@ function upsertLocal(review: StoredReview): void {
   saveLocalDatabase(db)
 }
 
+function rememberWebChat(mode: BackendMode, review: StoredReview): void {
+  const stored = publicPayload(review)
+  const db = mode === "supabase" ? loadOverlay() : loadLocalDatabase()
+  db.webChat = [...(db.webChat ?? []).filter((item) => item.id !== stored.id), stored]
+  if (mode === "supabase") saveOverlay(db)
+  else saveLocalDatabase(db)
+}
+
+/** Opt-in uncalibrated web-chat scores go to the existing submit-web-chat function, not air_reviews. */
+export async function publishWebChatReview(mode: BackendMode, review: StoredReview): Promise<string | null> {
+  const built = submissionFromReview(review, review.modelId)
+  if (!built.ok) return built.error
+  const limited = spend()
+  if (limited) return limited
+  rememberWebChat(mode, review)
+  if (mode === "local" || review.mock || review.sample) return null
+  try {
+    const response = await postWebChatSubmission(built.submission)
+    if (response.status === 404 || response.status === 405) {
+      return "The leaderboard is not accepting web-chat scores yet. This score stays on this browser, labelled free web-chat, uncalibrated."
+    }
+    if (!response.ok) return response.error || `The board returned ${response.status}. This score stays on this browser, labelled free web-chat, uncalibrated.`
+    return null
+  } catch {
+    return "The browser could not reach the leaderboard. This score stays on this browser, labelled free web-chat, uncalibrated."
+  }
+}
+
 export async function publishReview(mode: BackendMode, review: StoredReview): Promise<string | null> {
+  if (isUncalibratedWebChat(review)) return publishWebChatReview(mode, review)
   const limited = spend()
   if (limited) return limited
   if (mode === "local" || review.mock || review.sample) {

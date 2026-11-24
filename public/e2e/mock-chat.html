@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Mock chat</title>
+  </head>
+  <body>
+    <p id="status">Mock chat. No real model is called.</p>
+    <textarea id="prompt-textarea"></textarea>
+    <button type="button" id="send" data-testid="send-button">Send</button>
+    <button type="button" data-testid="stop-button" hidden>Stop</button>
+    <div data-message-author-role="assistant" id="assistant"></div>
+    <input id="file" type="file" />
+    <div id="chip" data-attachment-state="pending"></div>
+    <script>
+      window.__sendClicks = 0
+      const file = document.getElementById("file")
+      const chip = document.getElementById("chip")
+      const send = document.getElementById("send")
+      const stop = document.querySelector("[data-testid='stop-button']")
+      const assistant = document.getElementById("assistant")
+      file.addEventListener("change", () => {
+        const name = file.files && file.files[0] ? file.files[0].name : ""
+        chip.textContent = ""
+        chip.setAttribute("data-attachment-state", "pending")
+        setTimeout(() => {
+          chip.textContent = name
+          chip.setAttribute("data-attachment-state", "ready")
+        }, 40)
+      })
+      send.addEventListener("click", () => {
+        window.__sendClicks += 1
+        if (window.__sendClicks > 1) {
+          send.hidden = true
+          stop.hidden = false
+          assistant.textContent = ""
+          return
+        }
+        const text = document.getElementById("prompt-textarea").value || ""
+        const body = {
+          summary: "The record states a narrow claim and shows the weighing steps that support it, with the limit written in the text.",
+          scores: [],
+          recommendation: "accept",
+          overallScore: 82,
+          strengths: ["The files are public."],
+          majorIssues: [],
+          minorIssues: ["The season is narrow."],
+          questionsForAuthors: ["What would a second season change?"],
+          suggestedNextSteps: ["Publish the weighing sheet beside the figure."],
+        }
+        assistant.textContent = text.includes("JSON") || text.includes("criterion") ? JSON.stringify(body) : "RECEIVED 1"
+      })
+    </script>
+  </body>
+</html>

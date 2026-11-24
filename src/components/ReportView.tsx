@@ -6,6 +6,7 @@ import { profileLabel, showsProjectValue } from "../domain/profiles.ts"
 import { scoringMismatch, storedScale, toBoard } from "../domain/scoring.ts"
 import { globalGoals } from "../domain/goals.ts"
 import { DISCLAIMER, type CriteriaSet, type ReviewReport, type StoredReview } from "../domain/types.ts"
+import { WEB_CHAT_LABEL, isUncalibratedWebChat } from "../services/webChat/protocol.ts"
 import { downloadText, reportToMarkdown } from "../services/markdown.ts"
 import { formatVersionLabel } from "../services/zenodo.ts"
 import { btnQuiet } from "./ui.tsx"
@@ -66,6 +67,7 @@ export function ReportView({
     <article data-testid="report-card" className="rounded-3xl border border-line bg-white/70 p-4 sm:p-6">
       <header>
         <p className="text-xs uppercase tracking-wide text-teal">{meta.assessorName}</p>
+        {isUncalibratedWebChat(meta.stored) && <p className="mt-1 text-xs text-gold">{WEB_CHAT_LABEL}</p>}
         <h3 className="mt-1 font-serif text-2xl">{categoryLabel(criteria, report.recommendation)}</h3>
         <p className="mt-2 text-sm text-ink-soft">
           Overall {shown(report.overallScore).toFixed(0)} / 100 · Idea {shown(report.ideaScore).toFixed(0)} / 100
