@@ -2,6 +2,8 @@ import type { ZenodoRecord } from "../zenodo.ts"
 import { stripHtml } from "../zenodo.ts"
 
 export const PAPER_TEXT_ORIGIN = "https://morgansmart-alt.github.io/open-ai-peer-review"
+/** Plain text a chat can fetch. GitHub Pages serves the app shell with HTTP 404. */
+export const PAPER_TEXT_FUNCTION = "https://lotswxboafsenmszijpf.supabase.co/functions/v1/paper-text"
 
 const PRIVATE_CHAT =
   /https?:\/\/(?:www\.)?(?:share\.google\/aimode\/[^\s)"']+|chatgpt\.com\/share\/[^\s)"']+|chat\.openai\.com\/share\/[^\s)"']+|claude\.ai\/share\/[^\s)"']+|grok\.com\/share\/[^\s)"']+)/gi
@@ -19,10 +21,10 @@ export function paperTextPath(recordId: string): string {
   return `/paper/${encodeURIComponent(recordId)}/text`
 }
 
-/** Absolute page a chat can open. The hash is not used, so a fetch keeps the id. */
-export function paperTextUrl(recordId: string, origin = PAPER_TEXT_ORIGIN): string {
-  const base = origin.replace(/\/$/, "")
-  return `${base}${paperTextPath(recordId)}`
+/** Public plain-text endpoint. The id is a query parameter, so a fetch keeps it. */
+export function paperTextUrl(recordId: string, endpoint = PAPER_TEXT_FUNCTION): string {
+  const base = endpoint.replace(/\/$/, "")
+  return `${base}?id=${encodeURIComponent(recordId)}`
 }
 
 export function paperTextRecordIdFromPath(pathname: string): string | null {
@@ -38,8 +40,13 @@ export function paperTextRecordIdFromPath(pathname: string): string | null {
 export function isPublicPaperTextUrl(url: string): boolean {
   try {
     const parsed = new URL(url)
-    if (parsed.origin !== "https://morgansmart-alt.github.io") return false
-    return /\/open-ai-peer-review\/paper\/[^/]+\/text\/?$/.test(parsed.pathname)
+    if (parsed.origin === "https://lotswxboafsenmszijpf.supabase.co" && parsed.pathname === "/functions/v1/paper-text") {
+      return /^\d+$/.test(parsed.searchParams.get("id") ?? "")
+    }
+    if (parsed.origin === "https://morgansmart-alt.github.io") {
+      return /\/open-ai-peer-review\/paper\/[^/]+\/text\/?$/.test(parsed.pathname)
+    }
+    return false
   } catch {
     return false
   }
@@ -122,8 +129,8 @@ export function textPageHasPaper(status: number, body: string): boolean {
   if (status !== 200) return false
   if (/<div id=["']root["']>\s*<\/div>/.test(body) && !/Zenodo record:/.test(body)) return false
   const text = body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()
-  if (text.length < 400) return false
-  return /Zenodo record:|Version DOI:/.test(text)
+  if (!/Zenodo record:|Version DOI:/.test(text)) return false
+  return text.length >= 80
 }
 
 function missingContextText(reply: string): string {
@@ -136,7 +143,7 @@ function missingContextText(reply: string): string {
 export function textPageUntrusted(reply: string): boolean {
   const context = missingContextText(reply)
   const failed = /404|could not open|couldn't open|cannot open|can't open|unable to (?:open|access|reach)|page not found|not reachable|failed to (?:open|load|fetch)|returned 404/i
-  const aboutPage = /paper\/[^/\s"']+\/text|open-ai-peer-review|text page|github\.io/i
+  const aboutPage = /paper\/[^/\s"']+\/text|open-ai-peer-review|text page|github\.io|paper-text|functions\/v1\/paper-text/i
   if (context && failed.test(context) && (aboutPage.test(context) || /url|link|page/i.test(context))) return true
   return aboutPage.test(reply) && failed.test(reply)
 }

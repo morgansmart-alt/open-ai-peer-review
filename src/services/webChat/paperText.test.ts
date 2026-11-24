@@ -46,7 +46,7 @@ const record = {
 
 describe("public paper text", () => {
   it("builds a path a chat can fetch and a page with the public links", () => {
-    expect(paperTextUrl("22826")).toBe("https://morgansmart-alt.github.io/open-ai-peer-review/paper/22826/text")
+    expect(paperTextUrl("22826")).toBe("https://lotswxboafsenmszijpf.supabase.co/functions/v1/paper-text?id=22826")
     expect(paperTextRecordIdFromPath("/open-ai-peer-review/paper/22826/text")).toBe("22826")
     expect(isPublicPaperTextUrl(paperTextUrl("22826"))).toBe(true)
     expect(isPublicPaperTextUrl("https://share.google/aimode/secret")).toBe(false)
