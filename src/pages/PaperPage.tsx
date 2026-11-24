@@ -248,6 +248,9 @@ export function PaperPage() {
           ) : (
             <p className="text-sm text-teal">{record.doi}</p>
           )}
+          <Link className="ml-3 text-sm text-teal underline" to={`/paper/${encodeURIComponent(record.id)}/text`}>
+            Plain text
+          </Link>
           <h1 className="mt-1 font-serif text-4xl">{record.title}</h1>
           <p className="mt-2 text-sm text-ink-soft">
             {record.creators.map((creator) => creator.name).join(", ") || "Creator unlisted"} · {record.license || "license unlisted"} ·{" "}

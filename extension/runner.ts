@@ -4,6 +4,8 @@ import { readingCriteria } from "../src/domain/profiles.ts"
 import { acceptWebChatResult } from "../src/services/webChat/accept.ts"
 import { critiquesFromReport, DEFENCE_PAUSE_MS, runDefenceLoop } from "../src/services/webChat/defence.ts"
 import { sendFollowUp, runTurn, type TurnHooks } from "../src/services/webChat/runTurn.ts"
+import { detectChatModel } from "../src/services/webChat/chatModel.ts"
+import { settleChatJson } from "../src/services/jsonText.ts"
 import { EXTENSION_SOURCE, PROTOCOL_VERSION, type WebChatPacket } from "../src/services/webChat/protocol.ts"
 
 let aborted = false
@@ -45,6 +47,7 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
   aborted = false
   showBanner(provider.label)
   sendResponse({ ok: true, started: true })
+  const observedModel = () => detectChatModel(document, provider.id)
   const hooks: TurnHooks = {
     aborted: () => aborted,
     onProgress: (text) => report({ type: "air-web-chat-progress", requestId: message.requestId, message: text }),
@@ -55,15 +58,25 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
       report({ type: "air-web-chat-done", requestId: message.requestId, ok: false, message: result.message, code: result.code })
       return
     }
-    const rounds = Math.min(3, Math.max(0, Math.round(Number(message.defenceRounds) || 0)))
     const criteria = readingCriteria(officialCriteria, message.packet.criterionProfile, false)
+    const settled = await settleChatJson(
+      result.text,
+      (prompt) => sendFollowUp(document, provider, prompt, hooks),
+      (note) => hooks.onProgress?.(note),
+      (text) => {
+        const accepted = acceptWebChatResult(text, criteria)
+        return accepted.ok ? { ok: true } : { ok: false, errors: accepted.errors }
+      },
+    )
+    const rounds = Math.min(3, Math.max(0, Math.round(Number(message.defenceRounds) || 0)))
+    const notice = result.notice
     if (!rounds) {
-      report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: result.text })
+      report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: settled.text, chatModel: observedModel(), notice })
       return
     }
-    const accepted = acceptWebChatResult(result.text, criteria)
+    const accepted = acceptWebChatResult(settled.text, criteria)
     if (!accepted.ok) {
-      report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: result.text, defendedText: null, transcript: [], stopped: false })
+      report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: settled.text, defendedText: null, transcript: [], stopped: false, chatModel: observedModel(), notice })
       return
     }
     const paperText = message.packet.files.map((file) => file.text).join("\n\n")
@@ -81,18 +94,22 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
         type: "air-web-chat-done",
         requestId: message.requestId,
         ok: true,
-        text: result.text,
+        text: settled.text,
         defendedText: defence.defendedText,
         transcript: defence.transcript,
         stopped: defence.stopped,
+        chatModel: observedModel(),
+        notice,
       })
     } catch (error) {
       report({
         type: "air-web-chat-done",
         requestId: message.requestId,
         ok: true,
-        text: result.text,
+        text: settled.text,
+        notice,
         message: error instanceof Error ? error.message : "The defence stopped early.",
+        chatModel: observedModel(),
       })
     }
   })

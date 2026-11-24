@@ -6,12 +6,39 @@ import { showsProjectValue, storedProfileLabel } from "../domain/profiles.ts"
 import { coveragePhrase, OCR_OR_TEXT_SUGGESTION } from "../services/textTools.ts"
 import { scoringMismatch, storedScale, toBoard } from "../domain/scoring.ts"
 import { globalGoals } from "../domain/goals.ts"
-import { DISCLAIMER, type CriteriaSet, type ReviewReport, type StoredReview } from "../domain/types.ts"
+import { DISCLAIMER, type AirFeedback, type CriteriaSet, type ReviewReport, type StoredReview } from "../domain/types.ts"
+import { hasAirFeedback } from "../services/airFeedback.ts"
 import { WEB_CHAT_LABEL, isUncalibratedWebChat } from "../services/webChat/protocol.ts"
 import { downloadText, reportToMarkdown } from "../services/markdown.ts"
 import { formatVersionLabel } from "../services/zenodo.ts"
 import { btnQuiet } from "./ui.tsx"
 import { formatWhen } from "./ui.tsx"
+
+const FEEDBACK_LABELS: { key: keyof AirFeedback; label: string }[] = [
+  { key: "criteria", label: "Criteria" },
+  { key: "profile", label: "Profile" },
+  { key: "missingContext", label: "Missing context or files" },
+  { key: "prompt", label: "Prompt" },
+  { key: "rubric", label: "Rubric" },
+  { key: "scoringProcess", label: "Scoring process" },
+]
+
+function AirFeedbackPanel({ feedback }: { feedback: AirFeedback }) {
+  return (
+    <details data-testid="air-feedback" className="mt-4 rounded-2xl border border-line bg-paper/40 p-3">
+      <summary className="cursor-pointer text-sm font-medium">Feedback on AIR</summary>
+      <p className="mt-2 text-xs text-ink-soft">About the review process, not the paper. It is not part of the score.</p>
+      <dl className="mt-2 space-y-2 text-sm">
+        {FEEDBACK_LABELS.map((item) => (
+          <div key={item.key}>
+            <dt className="text-xs text-ink-soft">{item.label}</dt>
+            <dd>{feedback[item.key]?.trim() || "none"}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  )
+}
 
 export function ReportView({
   report,
@@ -111,8 +138,10 @@ export function ReportView({
         {meta.stored?.tier === "free-screening" && (
           <p className="mt-3 text-sm text-gold">Free quick review: a smaller model, lower fidelity, screening only. It is not ranked and cannot verify the work.</p>
         )}
+        {meta.stored?.sourceNote ? <p className="mt-3 text-sm text-gold" data-testid="text-page-note">{meta.stored.sourceNote}</p> : null}
         {meta.mock && <p className="mt-3 text-sm text-gold">Demo reading. No model was called. The notes are a local stand-in so the report can be tried.</p>}
         <p className="mt-3 text-sm">{DISCLAIMER}</p>
+        {hasAirFeedback(report.airFeedback) && <AirFeedbackPanel feedback={report.airFeedback} />}
       </header>
       <div className="no-print mt-4 flex flex-wrap gap-2">
         <button

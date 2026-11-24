@@ -3,6 +3,7 @@ import { readingCriteria } from "../../domain/profiles.ts"
 import type { CriteriaSet } from "../../domain/types.ts"
 import { reviewSystemPrompt, reviewUserPrompt } from "../prompts.ts"
 import type { ZenodoRecord } from "../zenodo.ts"
+import { isPublicPaperTextUrl, paperTextRecordId, paperTextUrl } from "./paperText.ts"
 import type { WebChatPacket } from "./protocol.ts"
 
 /** PDFs for this route read further than the 40-page API screening. */
@@ -20,6 +21,10 @@ export function buildWebChatPacket(options: {
   /** Shared paper-type profile. The prompt and the parser both use this set. */
   criterionProfile?: string
   customCriteria?: boolean
+  /** Public text page for this record. Omitted for a local file with no Zenodo id. */
+  textUrl?: string
+  /** Ask the chat to open the public text page instead of pasting the paper. */
+  useTextPage?: boolean
 }): WebChatPacket {
   const criteria = readingCriteria(options.criteria, options.criterionProfile, options.customCriteria ?? false)
   const files = options.documents
@@ -34,6 +39,8 @@ export function buildWebChatPacket(options: {
   if (files.length === 0 && options.record.description.trim()) {
     files.push({ filename: "description.txt", text: options.record.description.slice(0, WEB_CHAT_FILE_CHARS) })
   }
+  const publicId = paperTextRecordId(options.record)
+  const textUrl = options.textUrl ?? (options.useTextPage && publicId ? paperTextUrl(publicId) : "")
   return {
     version: 1,
     requestId: options.requestId,
@@ -47,5 +54,6 @@ export function buildWebChatPacket(options: {
     ),
     files,
     ...(options.criterionProfile ? { criterionProfile: options.criterionProfile } : {}),
+    ...(textUrl && isPublicPaperTextUrl(textUrl) ? { textUrl } : {}),
   }
 }

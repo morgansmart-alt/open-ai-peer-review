@@ -101,6 +101,49 @@ describe("validateReport", () => {
     expect(reviewSystemPrompt(officialCriteria)).toContain("out of 100")
     expect(prompt).toContain("integer 0-100")
     expect(prompt).toContain("0-20")
+    expect(prompt).toContain("https://zenodo.org/records/1")
+    expect(prompt).toContain("https://doi.org/10.5281/zenodo.1")
+    expect(prompt).toContain("Concept record (all versions): https://zenodo.org/records/1")
+  })
+
+  it("puts Zenodo, DOI, and concept links in the shared prompt and leaves private chat links out of that block", () => {
+    const record = {
+      id: "18916931",
+      conceptId: "18916930",
+      doi: "10.5281/zenodo.18916931",
+      conceptDoi: "10.5281/zenodo.18916930",
+      title: "A versioned record",
+      creators: [],
+      description: "",
+      descriptionHtml: "",
+      keywords: [],
+      version: "2",
+      recordVersion: "2",
+      license: "cc-by-4.0",
+      publicationDate: "2026-03-09",
+      related: [],
+      resourceType: "publication",
+      access: { record: "open", files: "open" },
+      files: [],
+      htmlUrl: "https://zenodo.org/records/18916931",
+    } satisfies ZenodoRecord
+    const prompt = reviewUserPrompt(record, officialCriteria, "paper text", [
+      { url: "https://share.google/aimode/EXAMPLE", provider: "Google AI Mode", note: "method" },
+    ])
+    const source = prompt.slice(0, prompt.indexOf("Private AI context links"))
+    expect(source).toContain("This version: https://zenodo.org/records/18916931")
+    expect(source).toContain("DOI: https://doi.org/10.5281/zenodo.18916931")
+    expect(source).toContain("Concept record (all versions): https://zenodo.org/records/18916930")
+    expect(source).toContain("Concept DOI: https://doi.org/10.5281/zenodo.18916930")
+    expect(source).not.toContain("share.google")
+    expect(prompt).toContain("https://share.google/aimode/EXAMPLE")
+    const local = reviewUserPrompt(
+      { ...record, id: "local", conceptId: "local", doi: "local-file", conceptDoi: "local-file", htmlUrl: "" },
+      officialCriteria,
+      "paper text",
+    )
+    expect(local).not.toContain("zenodo.org/records/local")
+    expect(local).not.toContain("doi.org/local")
   })
 
   it("rejects a score outside the scale", () => {

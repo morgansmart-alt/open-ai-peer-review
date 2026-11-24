@@ -18,6 +18,10 @@ import { acceptWebChatResult, draftWebChatReview, scrubPrivateUrls } from "../se
 import { runWebChatExtension, webChatPromptText } from "../services/webChat/client.ts"
 import { planDelivery } from "../services/webChat/deliver.ts"
 import { buildWebChatPacket } from "../services/webChat/packet.ts"
+import { linkReadingPrompt, MANUAL_PASTE_SITE, manualPasteModel, paperTextRecordId } from "../services/webChat/paperText.ts"
+import { submissionFromReview } from "../services/webChat/submission.ts"
+import { postWebChatSubmission } from "../services/webChat/submit.ts"
+import { webChatModelId } from "../services/webChat/chatModel.ts"
 import { isUncalibratedWebChat, WEB_CHAT_LABEL } from "../services/webChat/protocol.ts"
 import { parseExport } from "../services/webChat/standalone.ts"
 import { sha256Hex, uid } from "../services/hash.ts"
@@ -69,6 +73,8 @@ export function ReviewPage() {
   const [webWarning, setWebWarning] = useState<string | null>(null)
   const [acceptedWarning, setAcceptedWarning] = useState("")
   const [copyText, setCopyText] = useState("")
+  const [pasteReply, setPasteReply] = useState("")
+  const [pasteModel, setPasteModel] = useState("")
   const [criterionProfile, setCriterionProfile] = useState<CriterionProfileId>("device")
   const [includeCodeData, setIncludeCodeData] = useState(true)
   const [guideOpen, setGuideOpen] = useState(params.get("guide") === "1")
@@ -406,6 +412,7 @@ export function ReviewPage() {
         record,
         documents,
         conversations: collected.links,
+        useTextPage: true,
       })
       const provider = webChatProvider(providerId)
       if (!provider) return
@@ -425,7 +432,7 @@ export function ReviewPage() {
         return
       }
       const createdAt = new Date().toISOString()
-      const modelId = `${provider.modelLabel} (${WEB_CHAT_LABEL})`
+      const modelId = webChatModelId(provider.modelLabel, outcome.chatModel)
       const report = scrubPrivateUrls(accepted.report, collected.links.map((link) => link.url))
       const stored = draftWebChatReview({
         id: uid("review"),
@@ -452,6 +459,7 @@ export function ReviewPage() {
       stored.modelId = modelId
       stored.tier = "uncalibrated web-chat"
       stored.source = "web-chat extension"
+      if (outcome.notice) stored.sourceNote = outcome.notice
       setResults((current) => [...current.filter((item) => !isUncalibratedWebChat(item.stored)), { assessorId: stored.assessorId, report: stored.report, stored }])
       setStatus(`${WEB_CHAT_LABEL}. The score card is below. Publishing it keeps that label and leaves the calibrated ranking unchanged.`)
     } catch (caught) {
@@ -489,6 +497,106 @@ export function ReviewPage() {
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The packet could not be copied.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function copyPrompt() {
+    if (!record) return
+    setBusy(true)
+    setError(null)
+    try {
+      const usePage = Boolean(paperTextRecordId(record))
+      const extracted = usePage ? [] : await ensureDocs()
+      const documents = extracted.filter((doc) => selected.includes(doc.filename) && doc.text.trim())
+      const packet = buildWebChatPacket({
+        requestId: uid("copy"),
+        providerId: "grok",
+        criteria: air.criteria,
+        criterionProfile,
+        customCriteria: air.customCriteria,
+        record,
+        documents,
+        useTextPage: usePage,
+      })
+      const text = packet.textUrl ? linkReadingPrompt(packet.textUrl, packet.system, packet.instructions) : webChatPromptText(packet)
+      try {
+        await navigator.clipboard.writeText(text)
+        setCopyText("")
+        setStatus("Prompt copied. Paste it into a chat you are signed into. The score stays uncalibrated.")
+      } catch {
+        setCopyText(text)
+        setStatus("The clipboard refused the prompt. It is in the box below, on this device.")
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The prompt could not be copied.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function scorePastedReply() {
+    if (!record) return
+    const criteria = readingCriteria(air.criteria, criterionProfile, air.customCriteria)
+    const accepted = acceptWebChatResult(pasteReply, criteria)
+    if (!accepted.ok) {
+      setError(`The pasted reply was not a usable AIR reading. ${accepted.errors.slice(0, 3).join(" ")}`)
+      return
+    }
+    const model = manualPasteModel(pasteModel)
+    const createdAt = new Date().toISOString()
+    const packet = buildWebChatPacket({
+      requestId: uid("paste"),
+      providerId: "grok",
+      criteria: air.criteria,
+      criterionProfile,
+      customCriteria: air.customCriteria,
+      record,
+      documents: [],
+    })
+    const stored = draftWebChatReview({
+      id: uid("review"),
+      packet,
+      report: accepted.report,
+      record: {
+        doi: record.doi,
+        id: record.id,
+        conceptId: record.conceptId,
+        recordVersion: record.recordVersion,
+        title: record.title,
+        creators: record.creators.map((creator) => creator.name),
+        keywords: record.keywords,
+        publicationDate: record.publicationDate,
+        license: record.license,
+      },
+      criteria,
+      customCriteria: air.customCriteria,
+      outputHash: await sha256Hex(`${MANUAL_PASTE_SITE}\n${model}\n${JSON.stringify(accepted.report)}`),
+      createdAt,
+      privateUrls: [],
+      privateContextCount: 0,
+    })
+    stored.modelId = model
+    stored.tier = "uncalibrated web-chat"
+    stored.source = "web-chat extension"
+    setResults((current) => [...current.filter((item) => !isUncalibratedWebChat(item.stored)), { assessorId: stored.assessorId, report: stored.report, stored }])
+    const built = submissionFromReview(stored, MANUAL_PASTE_SITE)
+    if (!built.ok) {
+      setError(built.error)
+      setStatus("The score card is below. It was not sent.")
+      return
+    }
+    setBusy(true)
+    try {
+      const response = await postWebChatSubmission(built.submission)
+      if (!response.ok) {
+        setStatus(`The score card is below. The leaderboard did not accept it (${response.error || response.status}). It stays on this page as ${WEB_CHAT_LABEL}.`)
+        return
+      }
+      setStatus(response.duplicate ? `That paper, site, and model were already on the board. The score card is below.` : `Sent as ${WEB_CHAT_LABEL} from manual paste. The score card is below.`)
+    } catch {
+      setStatus(`The score card is below. The browser could not reach the leaderboard. It stays on this page as ${WEB_CHAT_LABEL}.`)
     } finally {
       setBusy(false)
     }
@@ -810,6 +918,41 @@ export function ReviewPage() {
                 onImport={(file) => void importWeb(file)}
               />
               {copyText && <textarea className={`${fieldClass} mt-3 min-h-40`} readOnly value={copyText} aria-label="Review packet to copy" />}
+              <div data-testid="manual-paste" className="mt-4 rounded-2xl border border-line p-3">
+                <h3 className="text-sm font-medium">Copy the prompt, or paste a reply</h3>
+                <p className="mt-1 text-xs text-ink-soft">
+                  Copy prompt gives you a short message with the public text page and the rubric. Paste the chat’s JSON reply to score it here. It is sent as site manual paste and labelled {WEB_CHAT_LABEL}.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button type="button" data-testid="copy-prompt" className={btnQuiet} disabled={busy || !record} onClick={() => void copyPrompt()}>
+                    Copy prompt
+                  </button>
+                </div>
+                <label className="mt-3 block text-xs text-ink-soft">
+                  Model
+                  <input
+                    className={`${fieldClass} mt-1`}
+                    data-testid="paste-model"
+                    value={pasteModel}
+                    placeholder="unknown"
+                    aria-label="Model name"
+                    onChange={(event) => setPasteModel(event.target.value)}
+                  />
+                </label>
+                <label className="mt-3 block text-xs text-ink-soft">
+                  Paste the chat’s reply
+                  <textarea
+                    className={`${fieldClass} mt-1 min-h-32`}
+                    data-testid="paste-reply"
+                    value={pasteReply}
+                    aria-label="Paste the chat's reply"
+                    onChange={(event) => setPasteReply(event.target.value)}
+                  />
+                </label>
+                <button type="button" data-testid="score-pasted-reply" className={`${btnPrimary} mt-3`} disabled={busy || !record || !pasteReply.trim()} onClick={() => void scorePastedReply()}>
+                  Score the pasted reply
+                </button>
+              </div>
             </fieldset>
           </div>
         </section>

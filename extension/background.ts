@@ -20,6 +20,11 @@ function requestAllowed(sender: { url?: string }): boolean {
   return fromExtensionPage(sender) || originAllowed(senderOrigin(sender))
 }
 
+function keepAirPanel(): void {
+  if (!chrome.sidePanel?.setOptions) return
+  void chrome.sidePanel.setOptions({ path: "review.html", enabled: true }).catch(() => undefined)
+}
+
 function emit(message: Record<string, unknown>, airTabId: number): void {
   chrome.runtime.sendMessage(message, () => {
     void chrome.runtime.lastError
@@ -32,6 +37,7 @@ function emitDecision(job: JobRecord, senderTabId: number | undefined, message: 
   if (decision.kind === "ignore") return
   const envelope = extensionEnvelope(decision)
   const targets = { panel: true as const, airTabId: decision.airTabId > 0 ? decision.airTabId : 0 }
+  if (decision.kind === "result" || decision.kind === "error") keepAirPanel()
   emit(envelope, targets.airTabId)
 }
 

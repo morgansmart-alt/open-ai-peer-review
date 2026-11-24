@@ -4,6 +4,8 @@ import { sha256Hex, uid } from "../hash.ts"
 import { scoringMismatch } from "../../domain/scoring.ts"
 import { draftWebChatReview, scrubPrivateUrls } from "./accept.ts"
 import { buildWebChatPacket } from "./packet.ts"
+import { paperTextRecordId } from "./paperText.ts"
+import { hasAirFeedback } from "../airFeedback.ts"
 import { WEB_CHAT_LABEL, type WebChatPacket } from "./protocol.ts"
 
 export const RESULT_STORAGE_KEY = "air-web-chat-results"
@@ -40,6 +42,28 @@ export function localPaperRecord(filename: string): ZenodoRecord {
   }
 }
 
+/** Pull a Zenodo version id and DOI out of uploaded paper text. Private chat links are ignored. */
+export function sourceRecordFromText(filename: string, text: string): ZenodoRecord | null {
+  const base = localPaperRecord(filename)
+  const withoutChats = text.replace(/https?:\/\/(?:www\.)?(?:share\.google|chatgpt\.com\/share|claude\.ai\/share|grok\.com\/share)\S+/gi, "")
+  const recordIds = [...withoutChats.matchAll(/zenodo\.org\/records\/(\d+)/gi)].map((match) => match[1] ?? "").filter(Boolean)
+  const dois = [...withoutChats.matchAll(/\b(10\.5281\/zenodo\.(\d+))\b/gi)].map((match) => ({ doi: match[1] ?? "", id: match[2] ?? "" }))
+  const versionId = recordIds[0] || dois[0]?.id || ""
+  const doi = dois[0]?.doi || (versionId ? `10.5281/zenodo.${versionId}` : "")
+  if (!versionId && !doi) return null
+  const concept = withoutChats.match(/concept(?:recid|doi)?[:\s]+(?:10\.5281\/zenodo\.)?(\d{5,})/i)?.[1] ?? ""
+  const conceptId = concept || versionId
+  return {
+    ...base,
+    id: versionId || base.id,
+    conceptId: conceptId || base.conceptId,
+    doi: doi || base.doi,
+    conceptDoi: conceptId ? `10.5281/zenodo.${conceptId}` : doi || base.conceptDoi,
+    htmlUrl: versionId ? `https://zenodo.org/records/${versionId}` : "",
+    title: base.title,
+  }
+}
+
 export function packetForLocalPaper(options: {
   requestId: string
   providerId: string
@@ -47,14 +71,18 @@ export function packetForLocalPaper(options: {
   filename: string
   text: string
   criterionProfile?: string
+  /** Lookup result. When absent, a DOI or Zenodo URL in the paper text is used. */
+  source?: ZenodoRecord | null
 }): WebChatPacket {
+  const record = options.source ?? sourceRecordFromText(options.filename, options.text) ?? localPaperRecord(options.filename)
   return buildWebChatPacket({
     requestId: options.requestId,
     providerId: options.providerId,
     criteria: options.criteria,
     criterionProfile: options.criterionProfile,
-    record: localPaperRecord(options.filename),
+    record,
     documents: [{ filename: options.filename, text: options.text }],
+    useTextPage: Boolean(paperTextRecordId(record)),
   })
 }
 
@@ -183,8 +211,21 @@ export function resultCard(review: StoredReview): {
   label: string
   defendedOverall: number | null
   defendedLabel: string
+  scores: { criterionId: string; score: number }[]
+  feedback: { label: string; text: string }[]
+  model: string
+  notice: string
 } {
   const check = scoringMismatch(review)
+  const feedback = hasAirFeedback(review.report.airFeedback) ? review.report.airFeedback : undefined
+  const labels: { key: keyof NonNullable<typeof feedback>; label: string }[] = [
+    { key: "criteria", label: "Criteria" },
+    { key: "profile", label: "Profile" },
+    { key: "missingContext", label: "Missing context or files" },
+    { key: "prompt", label: "Prompt" },
+    { key: "rubric", label: "Rubric" },
+    { key: "scoringProcess", label: "Scoring process" },
+  ]
   return {
     title: review.title,
     overall: review.report.overallScore,
@@ -194,6 +235,10 @@ export function resultCard(review: StoredReview): {
     label: WEB_CHAT_LABEL,
     defendedOverall: review.defended?.overallScore ?? null,
     defendedLabel: review.defended?.label ?? "",
+    model: review.modelId,
+    scores: review.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score })),
+    feedback: feedback ? labels.map((item) => ({ label: item.label, text: feedback[item.key]?.trim() || "none" })) : [],
+    notice: review.sourceNote ?? "",
   }
 }
 

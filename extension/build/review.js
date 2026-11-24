@@ -142,22 +142,36 @@
     modelLabel: "Grok on x.com",
     startUrl: "https://x.com/i/grok",
     origins: ["https://x.com/i/grok*"],
-    pasteLimit: 32e3,
+    pasteLimit: 1e5,
     fileCharLimit: 4e5,
     maxFiles: 4,
     comfortableTurns: 6,
     fileUpload: true,
-    limits: "Grok on X is at x.com/i/grok. AIR tries a file up to about 400,000 characters, then pastes 32,000 characters at a time. X rate-limits long threads. That limit was not measured here.",
+    limits: "Grok on X is at x.com/i/grok. AIR sends one message when the paper and the instructions fit in about 100,000 characters, attaches a file when the site accepts one, and otherwise pastes in parts. X rate-limits long threads. That limit was not measured here.",
     selectors: {
       composer: [
+        'textarea[aria-label="Ask anything"]',
+        'textarea[placeholder="Ask anything"]',
+        '[contenteditable="true"][aria-label="Ask anything"]',
+        '[contenteditable="true"][placeholder="Ask anything"]',
+        '[role="textbox"][aria-label*="Ask"]',
+        '[role="textbox"][placeholder*="Ask"]',
         'textarea[aria-label="Ask Grok"]',
         'textarea[aria-label*="Ask Grok"]',
+        'textarea[aria-label*="Ask"]',
+        'textarea[placeholder*="Ask"]',
         'div[data-testid="grokComposer"] textarea',
         'div[contenteditable="true"][role="textbox"]'
       ],
-      submit: ['button[aria-label="Send"]', 'button[data-testid="grok-send"]', 'button[aria-label*="Send"]'],
-      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]'],
-      assistant: ['[data-testid="assistant-message"]', '[data-testid="grok-message"]'],
+      submit: [
+        'button[aria-label="Send"]',
+        'button[aria-label*="Send"]',
+        'button[aria-label*="Submit"]',
+        'button[aria-label*="Grok"]',
+        'button[data-testid="grok-send"]'
+      ],
+      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]', 'button[aria-label*="Stop generating"]'],
+      assistant: ['[data-testid="assistant-message"]', '[data-testid="grok-message"]', '[class*="assistant-message"]', '[data-message-author="assistant"]'],
       fileInput: ['input[type="file"]'],
       login: ['a[href*="/login"]', 'a[href*="/i/flow/login"]', 'a[data-testid="login"]']
     }
@@ -180,14 +194,26 @@
     limits: "AIR attaches a paper up to about 1.2 million characters, or pastes 48,000 characters at a time. Grok's free web chat rate-limits long threads. The exact cap is set by xAI and was not measured here.",
     selectors: {
       composer: [
+        'textarea[aria-label="Message Grok"]',
+        'textarea[aria-label*="Message Grok"]',
+        '[contenteditable="true"][aria-label="Message Grok"]',
+        '[contenteditable="true"][aria-label*="Message Grok"]',
+        '[role="textbox"][aria-label="Message Grok"]',
+        '[role="textbox"][aria-label*="Message Grok"]',
         'textarea[aria-label="Ask Grok anything"]',
         'textarea[aria-label*="Ask Grok"]',
+        'textarea[placeholder*="What do you want to know"]',
+        'textarea[aria-label*="What do you want to know"]',
+        'textarea[placeholder*="Ask anything"]',
+        'textarea[aria-label*="Ask anything"]',
         'textarea[placeholder*="Ask"]',
+        '[contenteditable="true"][placeholder*="Ask"]',
+        '[contenteditable="true"][aria-label*="Ask"]',
         'div[contenteditable="true"][role="textbox"]'
       ],
-      submit: ['button[aria-label="Submit"]', 'button[aria-label*="Send"]', 'button[type="submit"]'],
-      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]'],
-      assistant: ['[data-testid="assistant-message"]', '[data-message-author="assistant"]'],
+      submit: ['button[aria-label="Submit"]', 'button[aria-label*="Send"]', 'button[aria-label*="Submit"]', 'button[type="submit"]'],
+      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]', 'button[aria-label*="Stop generating"]'],
+      assistant: ['[data-testid="assistant-message"]', '[data-message-author="assistant"]', '[class*="assistant-message"]'],
       fileInput: ['input[type="file"]'],
       login: ['a[href*="accounts.x.com"]', 'a[href*="/login"]', 'button[data-testid="login"]']
     }
@@ -1148,7 +1174,7 @@ ${parsed2.errors.join("\n")}`);
     return "not-ready";
   }
   function recommendationMatchesBand(recommendation, board) {
-    const expected = expectedVerdict(board);
+    const expected = expectedVerdict(Math.round(board));
     if (recommendation === expected) return true;
     return recommendation === "accept" && expected === "encourage";
   }
@@ -1195,24 +1221,884 @@ ${parsed2.errors.join("\n")}`);
     return { mismatch: reasons.length > 0, reason: reason || null, internal };
   }
 
+  // src/services/airFeedback.ts
+  var ALIASES = {
+    criteria: "criteria",
+    criterion: "criteria",
+    profile: "profile",
+    missingContext: "missingContext",
+    missing_context: "missingContext",
+    missing: "missingContext",
+    files: "missingContext",
+    prompt: "prompt",
+    rubric: "rubric",
+    scoringProcess: "scoringProcess",
+    scoring_process: "scoringProcess",
+    scoring: "scoringProcess"
+  };
+  function clip(value) {
+    if (typeof value !== "string") return "";
+    return value.trim().replace(/https?:\/\/(?:www\.)?(?:share\.google\/aimode|chatgpt\.com\/share|chat\.openai\.com\/share|claude\.ai\/share|grok\.com\/share)\/\S+/gi, "[private link]").slice(0, 1e3);
+  }
+  function parseAirFeedback(input) {
+    if (input == null || input === "") return void 0;
+    if (typeof input === "string") {
+      const note = clip(input);
+      return note ? { scoringProcess: note } : void 0;
+    }
+    if (typeof input !== "object" || Array.isArray(input)) return void 0;
+    const feedback = {};
+    for (const [key, value] of Object.entries(input)) {
+      const field = ALIASES[key];
+      const text2 = clip(value);
+      if (!field || !text2) continue;
+      feedback[field] = text2;
+    }
+    return Object.keys(feedback).length > 0 ? feedback : void 0;
+  }
+  function hasAirFeedback(feedback) {
+    return Boolean(feedback && Object.values(feedback).some((item) => item && item.trim()));
+  }
+
+  // node_modules/jsonrepair/lib/esm/utils/JSONRepairError.js
+  var JSONRepairError = class extends Error {
+    constructor(message, position) {
+      super(`${message} at position ${position}`);
+      this.position = position;
+    }
+  };
+
+  // node_modules/jsonrepair/lib/esm/utils/stringUtils.js
+  var codeSpace = 32;
+  var codeNewline = 10;
+  var codeTab = 9;
+  var codeReturn = 13;
+  var codeNonBreakingSpace = 160;
+  var codeMongolianVowelSeparator = 6158;
+  var codeEnQuad = 8192;
+  var codeZeroWidthSpace = 8203;
+  var codeNarrowNoBreakSpace = 8239;
+  var codeMediumMathematicalSpace = 8287;
+  var codeIdeographicSpace = 12288;
+  var codeZeroWidthNoBreakSpace = 65279;
+  function isHex(char) {
+    return /^[0-9A-Fa-f]$/.test(char);
+  }
+  function isDigit(char) {
+    return char >= "0" && char <= "9";
+  }
+  function isValidStringCharacter(char) {
+    return char >= " ";
+  }
+  function isDelimiter(char) {
+    return ",:[]/{}()\n+".includes(char);
+  }
+  function isFunctionNameCharStart(char) {
+    return char >= "a" && char <= "z" || char >= "A" && char <= "Z" || char === "_" || char === "$";
+  }
+  function isFunctionNameChar(char) {
+    return char >= "a" && char <= "z" || char >= "A" && char <= "Z" || char === "_" || char === "$" || char >= "0" && char <= "9";
+  }
+  var regexUrlStart = /^(http|https|ftp|mailto|file|data|irc):\/\/$/;
+  var regexUrlChar = /^[A-Za-z0-9-._~:/?#@!$&'()*+;=]$/;
+  function isUnquotedStringDelimiter(char) {
+    return ",[]/{}\n+".includes(char);
+  }
+  function isStartOfValue(char) {
+    return isQuote(char) || regexStartOfValue.test(char);
+  }
+  var regexStartOfValue = /^[[{\w-]$/;
+  function isControlCharacter(char) {
+    return char === "\n" || char === "\r" || char === "	" || char === "\b" || char === "\f";
+  }
+  function isWhitespace(text2, index) {
+    const code = text2.charCodeAt(index);
+    return code === codeSpace || code === codeNewline || code === codeTab || code === codeReturn;
+  }
+  function isWhitespaceExceptNewline(text2, index) {
+    const code = text2.charCodeAt(index);
+    return code === codeSpace || code === codeTab || code === codeReturn;
+  }
+  function isSpecialWhitespace(text2, index) {
+    const code = text2.charCodeAt(index);
+    return code === codeNonBreakingSpace || code === codeMongolianVowelSeparator || code >= codeEnQuad && code <= codeZeroWidthSpace || code === codeNarrowNoBreakSpace || code === codeMediumMathematicalSpace || code === codeIdeographicSpace || code === codeZeroWidthNoBreakSpace;
+  }
+  function isQuote(char) {
+    return isDoubleQuoteLike(char) || isSingleQuoteLike(char);
+  }
+  function isDoubleQuoteLike(char) {
+    return char === '"' || char === "\u201C" || char === "\u201D";
+  }
+  function isDoubleQuote(char) {
+    return char === '"';
+  }
+  function isSingleQuoteLike(char) {
+    return char === "'" || char === "\u2018" || char === "\u2019" || char === "`" || char === "\xB4";
+  }
+  function isSingleQuote(char) {
+    return char === "'";
+  }
+  function stripLastOccurrence(text2, textToStrip) {
+    let stripRemainingText = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : false;
+    const index = text2.lastIndexOf(textToStrip);
+    return index !== -1 ? text2.substring(0, index) + (stripRemainingText ? "" : text2.substring(index + 1)) : text2;
+  }
+  function insertBeforeLastWhitespace(text2, textToInsert) {
+    let index = text2.length;
+    if (!isWhitespace(text2, index - 1)) {
+      return text2 + textToInsert;
+    }
+    while (isWhitespace(text2, index - 1)) {
+      index--;
+    }
+    return text2.substring(0, index) + textToInsert + text2.substring(index);
+  }
+  function removeAtIndex(text2, start, count) {
+    return text2.substring(0, start) + text2.substring(start + count);
+  }
+  function endsWithCommaOrNewline(text2) {
+    return /[,\n][ \t\r]*$/.test(text2);
+  }
+  var namedHtmlEntities = {
+    "&quot;": '"',
+    "&amp;": "&",
+    "&lt;": "<",
+    "&gt;": ">",
+    "&apos;": "'"
+  };
+  var maxHtmlEntityLength = 12;
+  function matchHtmlEntity(fragment) {
+    if (fragment.charAt(0) !== "&") {
+      return null;
+    }
+    const semicolon = fragment.indexOf(";");
+    if (semicolon === -1) {
+      return null;
+    }
+    const entity = fragment.substring(0, semicolon + 1);
+    const named = namedHtmlEntities[entity];
+    if (named !== void 0) {
+      return {
+        char: named,
+        length: entity.length
+      };
+    }
+    if (fragment.charAt(1) === "#") {
+      const body = fragment.substring(2, semicolon);
+      const hex = body.charAt(0) === "x" || body.charAt(0) === "X";
+      const digits = hex ? body.substring(1) : body;
+      if (digits.length > 0) {
+        const code = Number.parseInt(digits, hex ? 16 : 10);
+        if (!Number.isNaN(code) && code >= 0 && code <= 1114111) {
+          return {
+            char: String.fromCodePoint(code),
+            length: entity.length
+          };
+        }
+      }
+    }
+    return null;
+  }
+  function isDoubleQuoteEntity(match) {
+    return match !== null && match.char === '"';
+  }
+  function isSingleQuoteEntity(match) {
+    return match !== null && match.char === "'";
+  }
+  function countOccurrences(text2, char) {
+    let count = 0;
+    for (let i = 0; i < text2.length; i++) {
+      if (text2.charAt(i) === char) {
+        count++;
+      }
+    }
+    return count;
+  }
+  function isInsideUnclosedBracket(text2, closeChar) {
+    switch (closeChar) {
+      case ")":
+        return countOccurrences(text2, "(") > countOccurrences(text2, ")");
+      case "]":
+        return countOccurrences(text2, "[") > countOccurrences(text2, "]");
+      case "}":
+        return countOccurrences(text2, "{") > countOccurrences(text2, "}");
+      default:
+        return false;
+    }
+  }
+
+  // node_modules/jsonrepair/lib/esm/regular/jsonrepair.js
+  var controlCharacters = {
+    "\b": "\\b",
+    "\f": "\\f",
+    "\n": "\\n",
+    "\r": "\\r",
+    "	": "\\t"
+  };
+  var escapeCharacters = {
+    '"': '"',
+    "\\": "\\",
+    "/": "/",
+    b: "\b",
+    f: "\f",
+    n: "\n",
+    r: "\r",
+    t: "	"
+    // note that \u is handled separately in parseString()
+  };
+  function jsonrepair(text2) {
+    let i = 0;
+    let output = "";
+    parseMarkdownCodeBlock(["```", "[```", "{```"]);
+    const processed = parseValue();
+    if (!processed) {
+      throwUnexpectedEnd();
+    }
+    parseMarkdownCodeBlock(["```", "```]", "```}"]);
+    const processedComma = parseCharacter(",");
+    if (processedComma) {
+      parseWhitespaceAndSkipComments();
+    }
+    if (isStartOfValue(text2[i]) && endsWithCommaOrNewline(output)) {
+      if (!processedComma) {
+        output = insertBeforeLastWhitespace(output, ",");
+      }
+      parseNewlineDelimitedJSON();
+    } else if (processedComma) {
+      output = stripLastOccurrence(output, ",");
+    }
+    while (text2[i] === "}" || text2[i] === "]") {
+      i++;
+      parseWhitespaceAndSkipComments();
+    }
+    if (i >= text2.length) {
+      return output;
+    }
+    throwUnexpectedCharacter();
+    function parseValue() {
+      parseWhitespaceAndSkipComments();
+      const processed2 = parseObject() || parseArray() || parseString() || parseNumber() || parseKeywords() || parseUnquotedString(false) || parseRegex();
+      parseWhitespaceAndSkipComments();
+      return processed2;
+    }
+    function parseWhitespaceAndSkipComments() {
+      let skipNewline = arguments.length > 0 && arguments[0] !== void 0 ? arguments[0] : true;
+      const start = i;
+      let changed = parseWhitespace(skipNewline);
+      do {
+        changed = parseComment();
+        if (changed) {
+          changed = parseWhitespace(skipNewline);
+        }
+      } while (changed);
+      return i > start;
+    }
+    function parseWhitespace(skipNewline) {
+      const _isWhiteSpace = skipNewline ? isWhitespace : isWhitespaceExceptNewline;
+      let whitespace = "";
+      while (true) {
+        if (_isWhiteSpace(text2, i)) {
+          whitespace += text2[i];
+          i++;
+        } else if (isSpecialWhitespace(text2, i)) {
+          whitespace += " ";
+          i++;
+        } else {
+          break;
+        }
+      }
+      if (whitespace.length > 0) {
+        output += whitespace;
+        return true;
+      }
+      return false;
+    }
+    function parseComment() {
+      if (text2[i] === "/" && text2[i + 1] === "*") {
+        while (i < text2.length && !atEndOfBlockComment(text2, i)) {
+          i++;
+        }
+        i += 2;
+        return true;
+      }
+      if (text2[i] === "/" && text2[i + 1] === "/") {
+        while (i < text2.length && text2[i] !== "\n") {
+          i++;
+        }
+        return true;
+      }
+      return false;
+    }
+    function parseMarkdownCodeBlock(blocks) {
+      if (skipMarkdownCodeBlock(blocks)) {
+        if (isFunctionNameCharStart(text2[i])) {
+          while (i < text2.length && isFunctionNameChar(text2[i])) {
+            i++;
+          }
+        }
+        parseWhitespaceAndSkipComments();
+        return true;
+      }
+      return false;
+    }
+    function skipMarkdownCodeBlock(blocks) {
+      parseWhitespace(true);
+      for (const block of blocks) {
+        const end = i + block.length;
+        if (text2.slice(i, end) === block) {
+          i = end;
+          return true;
+        }
+      }
+      return false;
+    }
+    function parseCharacter(char) {
+      if (text2[i] === char) {
+        output += text2[i];
+        i++;
+        return true;
+      }
+      return false;
+    }
+    function skipCharacter(char) {
+      if (text2[i] === char) {
+        i++;
+        return true;
+      }
+      return false;
+    }
+    function skipEscapeCharacter() {
+      return skipCharacter("\\");
+    }
+    function skipEllipsis() {
+      parseWhitespaceAndSkipComments();
+      if (text2[i] === "." && text2[i + 1] === "." && text2[i + 2] === ".") {
+        i += 3;
+        parseWhitespaceAndSkipComments();
+        skipCharacter(",");
+        return true;
+      }
+      return false;
+    }
+    function parseObject() {
+      if (text2[i] === "{") {
+        output += "{";
+        i++;
+        parseWhitespaceAndSkipComments();
+        if (skipCharacter(",")) {
+          parseWhitespaceAndSkipComments();
+        }
+        let initial = true;
+        while (i < text2.length && text2[i] !== "}") {
+          let processedComma2;
+          if (!initial) {
+            processedComma2 = parseCharacter(",");
+            if (!processedComma2) {
+              output = insertBeforeLastWhitespace(output, ",");
+            }
+            parseWhitespaceAndSkipComments();
+          } else {
+            processedComma2 = true;
+          }
+          skipEllipsis();
+          const processedKey = parseString() || parseUnquotedString(true);
+          if (!processedKey) {
+            if (text2[i] === "}" || text2[i] === "{" || text2[i] === "]" || text2[i] === "[" || text2[i] === void 0) {
+              if (!initial) {
+                output = stripLastOccurrence(output, ",");
+              }
+            } else {
+              throwObjectKeyExpected();
+            }
+            break;
+          }
+          parseWhitespaceAndSkipComments();
+          const processedColon = parseCharacter(":");
+          const truncatedText = i >= text2.length;
+          if (!processedColon) {
+            if (isStartOfValue(text2[i]) || truncatedText) {
+              output = insertBeforeLastWhitespace(output, ":");
+            } else {
+              throwColonExpected();
+            }
+          }
+          const processedValue = parseValue();
+          if (!processedValue) {
+            if (processedColon || truncatedText) {
+              output += "null";
+            } else {
+              throwColonExpected();
+            }
+          }
+          initial = false;
+        }
+        if (text2[i] === "}") {
+          output += "}";
+          i++;
+        } else {
+          output = insertBeforeLastWhitespace(output, "}");
+        }
+        return true;
+      }
+      return false;
+    }
+    function parseArray() {
+      if (text2[i] === "[") {
+        output += "[";
+        i++;
+        parseWhitespaceAndSkipComments();
+        if (skipCharacter(",")) {
+          parseWhitespaceAndSkipComments();
+        }
+        let initial = true;
+        while (i < text2.length && text2[i] !== "]") {
+          if (!initial) {
+            const processedComma2 = parseCharacter(",");
+            if (!processedComma2) {
+              output = insertBeforeLastWhitespace(output, ",");
+            }
+          }
+          skipEllipsis();
+          const processedValue = parseValue();
+          if (!processedValue) {
+            if (!initial) {
+              output = stripLastOccurrence(output, ",");
+            }
+            break;
+          }
+          initial = false;
+        }
+        if (text2[i] === "]") {
+          output += "]";
+          i++;
+        } else {
+          output = insertBeforeLastWhitespace(output, "]");
+        }
+        return true;
+      }
+      return false;
+    }
+    function parseNewlineDelimitedJSON() {
+      let initial = true;
+      let processedValue = true;
+      while (processedValue) {
+        if (!initial) {
+          const processedComma2 = parseCharacter(",");
+          if (!processedComma2) {
+            output = insertBeforeLastWhitespace(output, ",");
+          }
+        } else {
+          initial = false;
+        }
+        processedValue = parseValue();
+      }
+      if (!processedValue) {
+        output = stripLastOccurrence(output, ",");
+      }
+      output = `[
+${output}
+]`;
+    }
+    function parseString() {
+      let stopAtDelimiter = arguments.length > 0 && arguments[0] !== void 0 ? arguments[0] : false;
+      let stopAtIndex = arguments.length > 1 && arguments[1] !== void 0 ? arguments[1] : -1;
+      const skipEscapeChars = text2[i] === "\\";
+      if (skipEscapeChars) {
+        i++;
+        if (!isQuote(text2[i])) {
+          throwUnexpectedCharacter();
+        }
+      }
+      const openEntity = text2[i] === "&" ? matchHtmlEntity(text2.slice(i, i + maxHtmlEntityLength)) : null;
+      const openedByEntity = isDoubleQuoteEntity(openEntity) || isSingleQuoteEntity(openEntity);
+      if (isQuote(text2[i]) || openedByEntity) {
+        const isEndQuote = isDoubleQuote(text2[i]) ? isDoubleQuote : isSingleQuote(text2[i]) ? isSingleQuote : isSingleQuoteLike(text2[i]) ? isSingleQuoteLike : isDoubleQuoteLike;
+        const iBefore = i;
+        const oBefore = output.length;
+        let str = '"';
+        i += openedByEntity && openEntity ? openEntity.length : 1;
+        while (true) {
+          if (i >= text2.length) {
+            const iPrev = prevNonWhitespaceIndex(i - 1);
+            if (!stopAtDelimiter && isDelimiter(text2.charAt(iPrev))) {
+              i = iBefore;
+              output = output.substring(0, oBefore);
+              return parseString(true);
+            }
+            str = insertBeforeLastWhitespace(str, '"');
+            output += str;
+            return true;
+          }
+          if (i === stopAtIndex) {
+            str = insertBeforeLastWhitespace(str, '"');
+            output += str;
+            return true;
+          }
+          const entity = openedByEntity && text2[i] === "&" ? matchHtmlEntity(text2.slice(i, i + maxHtmlEntityLength)) : null;
+          const isEnd = entity && openEntity ? entity.char === openEntity.char : isEndQuote(text2[i]);
+          if (isEnd) {
+            const iQuote = i;
+            const oQuote = str.length;
+            str += '"';
+            i += entity ? entity.length : 1;
+            output += str;
+            parseWhitespaceAndSkipComments(false);
+            if (stopAtDelimiter || i >= text2.length || isDelimiter(text2[i]) && // only count the brackets inside the string when actually needed,
+            // i.e. when the quote is directly followed by a closing bracket
+            !isInsideUnclosedBracket(str, text2[i]) || isQuote(text2[i]) && !nextQuoteIsEndQuote(i) || isDigit(text2[i])) {
+              parseConcatenatedString();
+              return true;
+            }
+            if (text2[i] === "\\") {
+              throwUnexpectedCharacter();
+            }
+            const iPrevChar = prevNonWhitespaceIndex(iQuote - 1);
+            const prevChar = text2.charAt(iPrevChar);
+            if (prevChar === ",") {
+              i = iBefore;
+              output = output.substring(0, oBefore);
+              return parseString(false, iPrevChar);
+            }
+            if (isDelimiter(prevChar)) {
+              i = iBefore;
+              output = output.substring(0, oBefore);
+              return parseString(true);
+            }
+            output = output.substring(0, oBefore);
+            i = iQuote + (entity ? entity.length : 1);
+            str = `${str.substring(0, oQuote)}\\${str.substring(oQuote)}`;
+          } else if (stopAtDelimiter && isUnquotedStringDelimiter(text2[i])) {
+            if (text2[i - 1] === ":" && regexUrlStart.test(text2.substring(iBefore + 1, i + 2))) {
+              while (i < text2.length && regexUrlChar.test(text2[i])) {
+                str += text2[i];
+                i++;
+              }
+            }
+            str = insertBeforeLastWhitespace(str, '"');
+            output += str;
+            parseConcatenatedString();
+            return true;
+          } else if (entity) {
+            const char = entity.char;
+            if (char === '"') {
+              str += '\\"';
+            } else if (isControlCharacter(char)) {
+              str += controlCharacters[char];
+            } else {
+              str += char;
+            }
+            i += entity.length;
+          } else if (text2[i] === "\\") {
+            const char = text2.charAt(i + 1);
+            const escapeChar = escapeCharacters[char];
+            if (escapeChar !== void 0) {
+              str += text2.slice(i, i + 2);
+              i += 2;
+            } else if (char === "u") {
+              let j = 2;
+              while (j < 6 && isHex(text2[i + j])) {
+                j++;
+              }
+              if (j === 6) {
+                str += text2.slice(i, i + 6);
+                i += 6;
+              } else if (i + j >= text2.length) {
+                i = text2.length;
+              } else {
+                throwInvalidUnicodeCharacter();
+              }
+            } else if (char === "\n") {
+              str += "\\n";
+              i += 2;
+            } else {
+              str += char;
+              i += 2;
+            }
+          } else {
+            const char = text2.charAt(i);
+            if (char === '"' && text2[i - 1] !== "\\") {
+              str += `\\${char}`;
+              i++;
+            } else if (isControlCharacter(char)) {
+              str += controlCharacters[char];
+              i++;
+            } else {
+              if (!isValidStringCharacter(char)) {
+                throwInvalidCharacter(char);
+              }
+              str += char;
+              i++;
+            }
+          }
+          if (skipEscapeChars) {
+            skipEscapeCharacter();
+          }
+        }
+      }
+      return false;
+    }
+    function parseConcatenatedString() {
+      let processed2 = false;
+      parseWhitespaceAndSkipComments();
+      while (text2[i] === "+") {
+        processed2 = true;
+        i++;
+        parseWhitespaceAndSkipComments();
+        output = stripLastOccurrence(output, '"', true);
+        const start = output.length;
+        const parsedStr = parseString();
+        if (parsedStr) {
+          output = removeAtIndex(output, start, 1);
+        } else {
+          output = insertBeforeLastWhitespace(output, '"');
+        }
+      }
+      return processed2;
+    }
+    function parseNumber() {
+      const start = i;
+      let num = "";
+      let invalid = false;
+      if (text2[i] === "-") {
+        num += text2[i];
+        i++;
+        if (!isDigit(text2[i]) && atEndOfNumber()) {
+          num += "0";
+        }
+      }
+      if (text2[i] === "0" && isDigit(text2[i + 1])) {
+        invalid = true;
+      }
+      while (isDigit(text2[i])) {
+        num += text2[i];
+        i++;
+      }
+      if (text2[i] === ".") {
+        if (num === "" || num === "-") {
+          num += "0";
+        }
+        num += text2[i];
+        i++;
+        if (!isDigit(text2[i])) {
+          num += "0";
+        }
+        while (isDigit(text2[i])) {
+          num += text2[i];
+          i++;
+        }
+      }
+      if (i > start) {
+        if (text2[i] === "e" || text2[i] === "E") {
+          if (num === "-") {
+            invalid = true;
+          }
+          num += text2[i];
+          i++;
+          if (text2[i] === "-" || text2[i] === "+") {
+            num += text2[i];
+            i++;
+          }
+          if (!isDigit(text2[i])) {
+            num += "0";
+          }
+          while (isDigit(text2[i])) {
+            num += text2[i];
+            i++;
+          }
+        }
+        if (!atEndOfNumber()) {
+          i = start;
+          return false;
+        }
+        output += invalid ? `"${text2.substring(start, i)}"` : num;
+        return true;
+      }
+      return false;
+    }
+    function parseKeywords() {
+      return parseKeyword("true", "true") || parseKeyword("false", "false") || parseKeyword("null", "null") || // repair Python keywords True, False, None
+      parseKeyword("True", "true") || parseKeyword("False", "false") || parseKeyword("None", "null");
+    }
+    function parseKeyword(name, value) {
+      if (text2.slice(i, i + name.length) === name && !isFunctionNameChar(text2[i + name.length])) {
+        output += value;
+        i += name.length;
+        return true;
+      }
+      return false;
+    }
+    function parseUnquotedString(isKey) {
+      const start = i;
+      if (isFunctionNameCharStart(text2[i])) {
+        while (i < text2.length && isFunctionNameChar(text2[i])) {
+          i++;
+        }
+        let j = i;
+        while (isWhitespace(text2, j)) {
+          j++;
+        }
+        if (text2[j] === "(") {
+          i = j + 1;
+          parseValue();
+          if (text2[i] === ")") {
+            i++;
+            if (text2[i] === ";") {
+              i++;
+            }
+          }
+          return true;
+        }
+      }
+      while (i < text2.length && !isUnquotedStringDelimiter(text2[i]) && !isQuote(text2[i]) && (!isKey || text2[i] !== ":")) {
+        i++;
+      }
+      if (text2[i - 1] === ":" && regexUrlStart.test(text2.substring(start, i + 2))) {
+        while (i < text2.length && regexUrlChar.test(text2[i])) {
+          i++;
+        }
+      }
+      if (i > start) {
+        while (isWhitespace(text2, i - 1) && i > 0) {
+          i--;
+        }
+        const symbol = text2.slice(start, i);
+        output += symbol === "undefined" ? "null" : JSON.stringify(symbol);
+        if (text2[i] === '"') {
+          i++;
+        }
+        return true;
+      }
+    }
+    function parseRegex() {
+      if (text2[i] === "/") {
+        const start = i;
+        i++;
+        while (i < text2.length && (text2[i] !== "/" || text2[i - 1] === "\\")) {
+          i++;
+        }
+        i++;
+        output += JSON.stringify(text2.substring(start, i));
+        return true;
+      }
+    }
+    function prevNonWhitespaceIndex(start) {
+      let prev = start;
+      while (prev > 0 && isWhitespace(text2, prev)) {
+        prev--;
+      }
+      return prev;
+    }
+    function nextQuoteIsEndQuote(index) {
+      let next = index + 1;
+      while (next < text2.length && isWhitespace(text2, next)) {
+        next++;
+      }
+      return next >= text2.length || isDelimiter(text2[next]);
+    }
+    function atEndOfNumber() {
+      return i >= text2.length || isDelimiter(text2[i]) || isWhitespace(text2, i);
+    }
+    function throwInvalidCharacter(char) {
+      throw new JSONRepairError(`Invalid character ${JSON.stringify(char)}`, i);
+    }
+    function throwUnexpectedCharacter() {
+      throw new JSONRepairError(`Unexpected character ${JSON.stringify(text2[i])}`, i);
+    }
+    function throwUnexpectedEnd() {
+      throw new JSONRepairError("Unexpected end of json string", text2.length);
+    }
+    function throwObjectKeyExpected() {
+      throw new JSONRepairError("Object key expected", i);
+    }
+    function throwColonExpected() {
+      throw new JSONRepairError("Colon expected", i);
+    }
+    function throwInvalidUnicodeCharacter() {
+      const chars = text2.slice(i, i + 6);
+      throw new JSONRepairError(`Invalid unicode character "${chars}"`, i);
+    }
+  }
+  function atEndOfBlockComment(text2, i) {
+    return text2[i] === "*" && text2[i + 1] === "/";
+  }
+
+  // src/services/jsonText.ts
+  function fenced(raw) {
+    const trimmed = raw.trim();
+    const match = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    return (match?.[1] ?? trimmed).trim();
+  }
+  function matchingBrace(text2, start) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < text2.length; index += 1) {
+      const char = text2[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') inString = true;
+      else if (char === "{") depth += 1;
+      else if (char === "}") {
+        depth -= 1;
+        if (depth === 0) return index;
+      }
+    }
+    return -1;
+  }
+  function parseSlice(slice) {
+    try {
+      return { value: JSON.parse(slice), text: slice, repaired: false };
+    } catch {
+      try {
+        const repaired = jsonrepair(slice);
+        return { value: JSON.parse(repaired), text: repaired, repaired: true };
+      } catch {
+        return null;
+      }
+    }
+  }
+  function hasNumericScore(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value) && typeof value.overallScore === "number";
+  }
+  function lastScoreJson(raw) {
+    const windowText = raw.length > 4e5 ? raw.slice(-2e5) : raw;
+    let last = null;
+    for (let index = 0; index < windowText.length; index += 1) {
+      if (windowText[index] !== "{") continue;
+      const end = matchingBrace(windowText, index);
+      if (end < 0) continue;
+      const slice = windowText.slice(index, end + 1);
+      if (/"overallScore"\s*:/.test(slice)) {
+        const parsed2 = parseSlice(slice);
+        if (parsed2 && hasNumericScore(parsed2.value)) last = parsed2;
+      }
+      index = end;
+    }
+    return last;
+  }
+  function parseModelJson(raw) {
+    const scored = lastScoreJson(raw);
+    if (scored) return { ok: true, value: scored.value, text: scored.text, repaired: scored.repaired };
+    const slice = fenced(raw);
+    const parsed2 = slice.includes("{") ? parseSlice(slice) : null;
+    if (parsed2) return { ok: true, ...parsed2 };
+    return { ok: false, error: "No JSON object found in the model output." };
+  }
+
   // src/services/validateReport.ts
   function isRecord2(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
   }
   function extractJsonValue(raw) {
-    const trimmed = raw.trim();
-    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-    const body = (fenced?.[1] ?? trimmed).trim();
-    try {
-      return JSON.parse(body);
-    } catch {
-      const start = body.indexOf("{");
-      const end = body.lastIndexOf("}");
-      if (start >= 0 && end > start) return JSON.parse(body.slice(start, end + 1));
-      throw new Error("No JSON object found in the model output.");
-    }
+    const parsed2 = parseModelJson(raw);
+    if (!parsed2.ok) throw new Error(parsed2.error);
+    return parsed2.value;
   }
-  function clip(value, max) {
+  function clip2(value, max) {
     return typeof value === "string" ? value.trim().slice(0, max) : "";
   }
   function citationsFrom(value, errors, path) {
@@ -1223,23 +2109,56 @@ ${parsed2.errors.join("\n")}`);
     return value.flatMap((item) => {
       if (typeof item === "string") return [{ quote: item.slice(0, 500), location: "Record" }];
       if (!isRecord2(item)) return [];
-      const quote = clip(item.quote ?? item.passage ?? item.text, 500);
+      const quote = clip2(item.quote ?? item.passage ?? item.text, 500);
       if (!quote) return [];
-      return [{ quote, location: clip(item.location ?? item.where ?? "Record", 160) || "Record" }];
+      return [{ quote, location: clip2(item.location ?? item.where ?? "Record", 160) || "Record" }];
     });
   }
   function stringArray(value, maxItems, maxLen) {
-    if (!Array.isArray(value)) return [];
-    return value.map((item) => clip(item, maxLen)).filter(Boolean).slice(0, maxItems);
+    const items = typeof value === "string" ? [value] : Array.isArray(value) ? value : [];
+    return items.map((item) => clip2(item, maxLen)).filter((item) => Boolean(item) && item.toLowerCase() !== "string").slice(0, maxItems);
+  }
+  function criterionKey(raw, criteria) {
+    const compact = raw.toLowerCase().replace(/[_\s]+/g, "-").replace(/[^a-z0-9-]/g, "");
+    const found = criteria.criteria.find(
+      (item) => item.id === compact || item.id.replace(/-/g, "") === compact.replace(/-/g, "") || item.name.toLowerCase().replace(/[\s_]+/g, "-") === compact
+    );
+    return found?.id ?? compact;
+  }
+  function recommendationId(raw, criteria) {
+    const trimmed = raw.trim().toLowerCase().replace(/\s+/g, " ");
+    const cleaned = trimmed.replace(/[._]+$/g, "").replace(/[_/]+/g, " ").replace(/\s+/g, " ").trim();
+    const exact = criteria.recommendationCategories.find((item) => item.id.toLowerCase() === cleaned || item.id.replace(/-/g, " ") === cleaned || item.label.toLowerCase() === trimmed);
+    if (exact) return exact.id;
+    const synonyms = {
+      minor: "revise",
+      "minor revision": "revise",
+      "minor revisions": "revise",
+      "needs revision": "revise",
+      major: "major-revision",
+      "major revision": "major-revision",
+      "major revisions": "major-revision",
+      reject: "not-ready",
+      rejected: "not-ready",
+      rejection: "not-ready",
+      "not ready": "not-ready",
+      accepted: "accept",
+      sound: "accept",
+      "accept sound": "accept"
+    };
+    const alias = synonyms[cleaned];
+    if (alias && criteria.recommendationCategories.some((item) => item.id === alias)) return alias;
+    const hits = criteria.recommendationCategories.filter((item) => new RegExp(`\\b${item.id.replace("-", "[- ]")}\\b`, "i").test(cleaned));
+    return hits.length === 1 ? hits[0].id : "";
   }
   function validateReport(input, criteria) {
     const errors = [];
     if (!isRecord2(input)) return { ok: false, errors: ["The model output was not a JSON object."] };
-    const summary = clip(input.summary, 4e3);
+    const summary = clip2(input.summary, 4e3);
     if (summary.length < 40) errors.push("summary must be at least 40 characters.");
     const scoresRaw = Array.isArray(input.scores) ? input.scores : [];
     const scores = criteria.criteria.map((criterion) => {
-      const found = scoresRaw.find((item) => isRecord2(item) && clip(item.criterionId ?? item.id, 80) === criterion.id);
+      const found = scoresRaw.find((item) => isRecord2(item) && criterionKey(clip2(item.criterionId ?? item.id, 80), criteria) === criterion.id);
       if (!isRecord2(found)) {
         errors.push(`Missing score for ${criterion.id}.`);
         return null;
@@ -1248,21 +2167,18 @@ ${parsed2.errors.join("\n")}`);
       if (!Number.isInteger(score) || score < criteria.scale.min || score > criteria.scale.max) {
         errors.push(`${criterion.id} score must be an integer from ${criteria.scale.min} to ${criteria.scale.max}.`);
       }
-      const rationale = clip(found.rationale ?? found.reason, 2e3);
+      const rationale = clip2(found.rationale ?? found.reason, 2e3);
       if (rationale.length < 20) errors.push(`${criterion.id} rationale is too short.`);
       const citations = citationsFrom(found.citations ?? found.quotes, errors, criterion.id);
       if (citations.length === 0) errors.push(`${criterion.id} needs at least one citation.`);
-      const confidenceRaw = clip(found.confidence, 16).toLowerCase();
+      const confidenceRaw = clip2(found.confidence, 16).toLowerCase();
       const confidence = confidenceRaw === "low" || confidenceRaw === "med" || confidenceRaw === "medium" || confidenceRaw === "high" ? confidenceRaw : "";
       if (criteria.reportSchema === "0.2" && !confidence) errors.push(`${criterion.id} needs a confidence of low, medium, or high.`);
       const normalizedConfidence = confidence === "high" ? "high" : confidence === "medium" || confidence === "med" ? "medium" : confidence === "low" ? "low" : void 0;
       return { criterionId: criterion.id, score, rationale, citations, confidence: normalizedConfidence };
     });
-    const recommendationRaw = clip(input.recommendation, 120).toLowerCase();
-    const recommendation = criteria.recommendationCategories.find(
-      (item) => item.id.toLowerCase() === recommendationRaw || item.label.toLowerCase() === recommendationRaw
-    )?.id ?? "";
-    if (!recommendation) errors.push("recommendation must be one of the criteria category ids.");
+    const recommendation = recommendationId(clip2(input.recommendation, 160), criteria);
+    if (!recommendation) errors.push(`recommendation must be one of: ${criteria.recommendationCategories.map((item) => item.id).join(", ")}.`);
     const strengths = stringArray(input.strengths, 6, 400);
     const questions = stringArray(input.questionsForAuthors ?? input.questions, 6, 400);
     const nextSteps = stringArray(input.suggestedNextSteps ?? input.nextSteps, 6, 400);
@@ -1277,16 +2193,16 @@ ${parsed2.errors.join("\n")}`);
         return [{ criterionId: criteria.criteria[0]?.id ?? "clarity", claim: item.slice(0, 500), quotedPassage: "", reason: item.slice(0, 800) }];
       }
       if (!isRecord2(item)) return [];
-      const criterionId = clip(item.criterionId ?? item.criterion, 80);
-      if (criterionId && !known.has(criterionId)) errors.push(`Unknown criterion on a major issue: ${criterionId}.`);
-      const claim = clip(item.claim ?? item.summary ?? item.issue, 500);
+      const criterionId = criterionKey(clip2(item.criterionId ?? item.criterion, 80), criteria);
+      if (clip2(item.criterionId ?? item.criterion, 80) && !known.has(criterionId)) errors.push(`Unknown criterion on a major issue: ${criterionId}.`);
+      const claim = clip2(item.claim ?? item.summary ?? item.issue, 500);
       if (!claim) return [];
       return [
         {
           criterionId: known.has(criterionId) ? criterionId : criteria.criteria[0]?.id ?? "clarity",
           claim,
-          quotedPassage: clip(item.quotedPassage ?? item.quote ?? "", 500),
-          reason: clip(item.reason ?? item.why ?? claim, 800)
+          quotedPassage: clip2(item.quotedPassage ?? item.quote ?? "", 500),
+          reason: clip2(item.reason ?? item.why ?? claim, 800)
         }
       ];
     });
@@ -1298,6 +2214,7 @@ ${parsed2.errors.join("\n")}`);
     const idea = weightedMean(ready, criteria, criteria.ideaCriterionIds);
     if (overall === null || idea === null) return { ok: false, errors: ["Could not weight the scores."] };
     const statedRaw = Number(input.overallScore);
+    const airFeedback = parseAirFeedback(input.air_feedback ?? input.airFeedback);
     const check = describeScoring({
       scores: ready,
       statedOverall: Number.isFinite(statedRaw) ? statedRaw : null,
@@ -1320,6 +2237,7 @@ ${parsed2.errors.join("\n")}`);
         minorIssues,
         questionsForAuthors: questions,
         suggestedNextSteps: nextSteps,
+        ...airFeedback ? { airFeedback } : {},
         ...v2
       }
     };
@@ -1330,22 +2248,22 @@ ${parsed2.errors.join("\n")}`);
   function rangeFrom(value, fallbackUnit) {
     const record = isRecord2(value) ? value : {};
     return {
-      low: clip(record.low, 80) || "not estimated",
-      central: clip(record.central, 80) || "not estimated",
-      high: clip(record.high, 80) || "not estimated",
-      unit: clip(record.unit, 40) || fallbackUnit
+      low: clip2(record.low, 80) || "not estimated",
+      central: clip2(record.central, 80) || "not estimated",
+      high: clip2(record.high, 80) || "not estimated",
+      unit: clip2(record.unit, 40) || fallbackUnit
     };
   }
   function readV2(input, errors, includeValue) {
-    const ontologyClass = clip(input.ontologyClass, 80);
+    const ontologyClass = clip2(input.ontologyClass, 80);
     if (!ontologyClasses.has(ontologyClass)) errors.push("ontologyClass must be one of the four AIR classes.");
     const physicsRaw = isRecord2(input.physics) ? input.physics : null;
-    const classification = clip(physicsRaw?.classification, 20).toUpperCase();
+    const classification = clip2(physicsRaw?.classification, 20).toUpperCase();
     if (!physicsClasses.has(classification)) errors.push("physics.classification must be CONSISTENT, EXTENDS, or CHALLENGES.");
     const physics = {
       classification: physicsClasses.has(classification) ? classification : "CONSISTENT",
       laws: stringArray(physicsRaw?.laws, 8, 120),
-      howAddressed: clip(physicsRaw?.howAddressed, 800)
+      howAddressed: clip2(physicsRaw?.howAddressed, 800)
     };
     if (physics.laws.length === 0) errors.push("physics.laws needs at least one named law or an explicit 'none used'.");
     const simulationRaw = isRecord2(input.simulation) ? input.simulation : null;
@@ -1354,7 +2272,7 @@ ${parsed2.errors.join("\n")}`);
     const simulation = {
       reported: Number.isInteger(reported) ? reported : null,
       passed: Number.isInteger(passed) ? passed : null,
-      methods: clip(simulationRaw?.methods, 400),
+      methods: clip2(simulationRaw?.methods, 400),
       inputsAvailable: Boolean(simulationRaw?.inputsAvailable)
     };
     if (!simulation.methods) errors.push("simulation.methods must say what was run, or that simulation does not apply.");
@@ -1362,7 +2280,7 @@ ${parsed2.errors.join("\n")}`);
     const valueEstimate = {
       confidence: "low",
       assumptions: stringArray(valueRaw?.assumptions, 8, 240),
-      marketDisruption: clip(valueRaw?.marketDisruption, 400) || "Not estimated from the record.",
+      marketDisruption: clip2(valueRaw?.marketDisruption, 400) || "Not estimated from the record.",
       addressableMarket: rangeFrom(valueRaw?.addressableMarket, "not estimated"),
       units: rangeFrom(valueRaw?.units, "units"),
       valuePerUnit: rangeFrom(valueRaw?.valuePerUnit, "per unit"),
@@ -1372,11 +2290,11 @@ ${parsed2.errors.join("\n")}`);
     if (includeValue && valueEstimate.assumptions.length === 0) errors.push("valueEstimate.assumptions needs at least one assumption.");
     const goals = Array.isArray(input.goals) ? input.goals.flatMap((item) => {
       if (!isRecord2(item)) return [];
-      const level = clip(item.level, 20);
+      const level = clip2(item.level, 20);
       if (!goalLevels.has(level)) return [];
-      const goalId = clip(item.goalId, 80);
+      const goalId = clip2(item.goalId, 80);
       if (!goalId) return [];
-      return [{ goalId, level, note: clip(item.note, 300) }];
+      return [{ goalId, level, note: clip2(item.note, 300) }];
     }) : [];
     if (goals.length === 0) errors.push("goals must list a level for the documented public goals you considered.");
     return {
@@ -1449,6 +2367,13 @@ ${parsed2.errors.join("\n")}`);
       createdAt: options.createdAt,
       privateContextCount: options.privateContextCount
     };
+  }
+
+  // src/services/webChat/chatModel.ts
+  var UNKNOWN_CHAT_MODEL = "unknown (site default)";
+  function webChatModelId(siteLabel, detected) {
+    const mode = (detected ?? "").trim() || UNKNOWN_CHAT_MODEL;
+    return `${siteLabel} \xB7 ${mode} (web chat, uncalibrated)`;
   }
 
   // src/domain/conversationLinks.ts
@@ -1776,6 +2701,7 @@ ${parsed2.errors.join("\n")}`);
       "Be specific and kind. Every criticism needs a way to resolve it.",
       "Quote only passages that appear in the text you were given. Do not invent page numbers, results, or citations.",
       `Score every criterion with an integer from ${criteria.scale.min} to ${criteria.scale.max}.`,
+      'Include air_feedback about AIR itself. Give at least one concrete, honest item: an unclear or misfitting criterion, a profile that does not fit, missing context or files, a prompt problem, a rubric suggestion, or a correction to your own scoring. If a field does not apply, write "none" and the reason, for example "none: the data profile matched this record". Never use an empty string. This note must not change any score.',
       criteria.scale.max >= 100 ? "The board is out of 100. AIR weights the criterion scores itself. If you include overallScore, keep it within 10 points of that weighted total. recommendation must match the band: accept or encourage from 80 (accept means sound as it stands; encourage means the idea is ready to build on), revise from 60, major-revision from 40, otherwise not-ready." : "",
       criteria.criteria.some((criterion) => criterion.id === "estimated-value") ? "" : "This profile does not score estimated project value. Omit valueEstimate. Use accept when the work is sound as it stands.",
       "Image pixels are not read. When the text says Figures not read, say so on availability. Do not treat an unseen figure as missing data unless the claim needs the image itself.",
@@ -1789,6 +2715,31 @@ ${parsed2.errors.join("\n")}`);
       "Principles:",
       ...criteria.principles.map((principle) => `- ${principle}`)
     ].join("\n");
+  }
+  function publicDoiUrl(doi) {
+    const cleaned = (doi ?? "").trim().replace(/^https?:\/\/doi\.org\//i, "").replace(/^doi:/i, "");
+    if (!/^10\.\S+/.test(cleaned)) return null;
+    return `https://doi.org/${cleaned}`;
+  }
+  function zenodoRecordsUrl(id) {
+    const cleaned = (id ?? "").trim();
+    if (!/^\d+$/.test(cleaned)) return null;
+    return `https://zenodo.org/records/${cleaned}`;
+  }
+  function sourceRecordBlock(record) {
+    const versionUrl = zenodoRecordsUrl(record.id) || (record.htmlUrl.startsWith("https://zenodo.org/records/") ? record.htmlUrl : "");
+    const doiUrl = publicDoiUrl(record.doi);
+    const conceptUrl = zenodoRecordsUrl(record.conceptId);
+    const conceptDoiUrl = publicDoiUrl(record.conceptDoi);
+    const lines = [
+      "Source record. These are the public record links. Cite them and use them to cross-check versions. They are not private chat links."
+    ];
+    if (versionUrl) lines.push(`This version: ${versionUrl}`);
+    if (doiUrl) lines.push(`DOI: ${doiUrl}`);
+    if (conceptUrl) lines.push(`Concept record (all versions): ${conceptUrl}`);
+    if (conceptDoiUrl && conceptDoiUrl !== doiUrl) lines.push(`Concept DOI: ${conceptDoiUrl}`);
+    if (lines.length === 1) return "";
+    return lines.join("\n");
   }
   function reviewUserPrompt(record, criteria, packet, conversations = []) {
     const schema = {
@@ -1822,7 +2773,15 @@ ${parsed2.errors.join("\n")}`);
       majorIssues: [{ criterionId: "id", claim: "what is wrong", quotedPassage: "verbatim or empty", reason: "why it matters and how to fix it" }],
       minorIssues: ["string"],
       questionsForAuthors: ["string"],
-      suggestedNextSteps: ["string"]
+      suggestedNextSteps: ["string"],
+      air_feedback: {
+        criteria: 'A concrete note, or "none" with a reason. Never an empty string.',
+        profile: 'A concrete note, or "none" with a reason. Never an empty string.',
+        missingContext: 'A concrete note, or "none" with a reason. Never an empty string.',
+        prompt: 'A concrete note, or "none" with a reason. Never an empty string.',
+        rubric: 'A concrete note, or "none" with a reason. Never an empty string.',
+        scoringProcess: 'A concrete note, or "none" with a reason. Never an empty string. Do not change the scores to match this note.'
+      }
     };
     const guide = criteria.criteria.map((criterion) => {
       const bands = criterion.bands?.map((band) => `${band.min}-${band.max}: ${band.label}`).join(" ") ?? "";
@@ -1837,6 +2796,8 @@ ${parsed2.errors.join("\n")}`);
       `License: ${record.license || "unspecified"}`,
       `Keywords: ${record.keywords.join(", ") || "none"}`,
       "",
+      sourceRecordBlock(record),
+      "",
       "Criteria:",
       guide,
       goalsGuide,
@@ -1847,10 +2808,36 @@ ${parsed2.errors.join("\n")}`);
       conversationPromptBlock(conversations),
       "",
       "Use majorIssues only for failure modes a reviser must face. Leave it empty if nothing rises to that level.",
+      'Fill air_feedback. At least one field must be a concrete observation, or "none" plus a reason. Do not return empty strings.',
       "",
       "Record text:",
       packet
     ].join("\n");
+  }
+
+  // src/services/webChat/paperText.ts
+  var PAPER_TEXT_ORIGIN = "https://morgansmart-alt.github.io/open-ai-peer-review";
+  function paperTextRecordId(record) {
+    const id = (record.id ?? "").trim();
+    if (/^\d+$/.test(id)) return id;
+    const doi = (record.doi ?? "").replace(/^https?:\/\/doi\.org\//i, "");
+    return doi.match(/zenodo\.(\d+)$/i)?.[1] ?? "";
+  }
+  function paperTextPath(recordId) {
+    return `/paper/${encodeURIComponent(recordId)}/text`;
+  }
+  function paperTextUrl(recordId, origin = PAPER_TEXT_ORIGIN) {
+    const base = origin.replace(/\/$/, "");
+    return `${base}${paperTextPath(recordId)}`;
+  }
+  function isPublicPaperTextUrl(url) {
+    try {
+      const parsed2 = new URL(url);
+      if (parsed2.origin !== "https://morgansmart-alt.github.io") return false;
+      return /\/open-ai-peer-review\/paper\/[^/]+\/text\/?$/.test(parsed2.pathname);
+    } catch {
+      return false;
+    }
   }
 
   // src/services/webChat/packet.ts
@@ -1867,6 +2854,8 @@ ${parsed2.errors.join("\n")}`);
     if (files.length === 0 && options.record.description.trim()) {
       files.push({ filename: "description.txt", text: options.record.description.slice(0, WEB_CHAT_FILE_CHARS) });
     }
+    const publicId = paperTextRecordId(options.record);
+    const textUrl = options.textUrl ?? (options.useTextPage && publicId ? paperTextUrl(publicId) : "");
     return {
       version: 1,
       requestId: options.requestId,
@@ -1879,7 +2868,8 @@ ${parsed2.errors.join("\n")}`);
         options.conversations ?? []
       ),
       files,
-      ...options.criterionProfile ? { criterionProfile: options.criterionProfile } : {}
+      ...options.criterionProfile ? { criterionProfile: options.criterionProfile } : {},
+      ...textUrl && isPublicPaperTextUrl(textUrl) ? { textUrl } : {}
     };
   }
 
@@ -2037,12 +3027,36 @@ ${parsed2.errors.join("\n")}`);
       el(card, "p", model.result.label, "label");
       el(card, "h2", model.result.title);
       el(card, "p", `Blind score ${Math.round(model.result.overall)} out of 100 \xB7 ${model.result.recommendation}`, "score");
+      if (model.result.model) {
+        const line = el(card, "p", `Model: ${model.result.model}`, "note");
+        line.id = "chat-model";
+      }
       if (model.result.defendedOverall != null) {
         el(card, "p", `${model.result.defendedLabel || "after author defence"} ${Math.round(model.result.defendedOverall)} out of 100`, "score");
       }
+      if (model.result.notice) {
+        const note = el(card, "p", model.result.notice, "mismatch");
+        note.id = "text-page-note";
+      }
       if (model.result.mismatch) el(card, "p", model.result.mismatch, "mismatch");
       el(card, "p", model.result.summary);
-      el(card, "p", "This score stays in this browser. It is off the public board and out of the two-family count.", "note");
+      if (model.result.scores && model.result.scores.length > 0) {
+        const list = el(card, "ul");
+        list.id = "criterion-scores";
+        for (const score of model.result.scores) {
+          el(list, "li", `${score.criterionId}: ${Math.round(score.score)}`);
+        }
+      }
+      if (model.result.feedback && model.result.feedback.length > 0) {
+        const details = el(card, "details");
+        details.id = "air-feedback";
+        const summary = el(details, "summary", "Feedback on AIR");
+        summary.id = "air-feedback-summary";
+        for (const note of model.result.feedback) {
+          el(details, "p", `${note.label}: ${note.text}`);
+        }
+      }
+      el(card, "p", "This score stays in this browser until you send it. It is labelled free web-chat, uncalibrated.", "note");
     }
     if (model.history.length > 0) {
       el(form, "h2", "Saved on this browser");
@@ -2125,7 +3139,8 @@ ${parsed2.errors.join("\n")}`);
       doi: record.doi,
       url: record.htmlUrl || `https://zenodo.org/records/${record.id}`,
       pdfUrl: pdf?.downloadUrl ?? "",
-      filename
+      filename,
+      source: record
     };
   }
   function filenameFrom(url) {
@@ -2228,14 +3243,36 @@ ${parsed2.errors.join("\n")}`);
       htmlUrl: ""
     };
   }
+  function sourceRecordFromText(filename, text2) {
+    const base = localPaperRecord(filename);
+    const withoutChats = text2.replace(/https?:\/\/(?:www\.)?(?:share\.google|chatgpt\.com\/share|claude\.ai\/share|grok\.com\/share)\S+/gi, "");
+    const recordIds = [...withoutChats.matchAll(/zenodo\.org\/records\/(\d+)/gi)].map((match) => match[1] ?? "").filter(Boolean);
+    const dois = [...withoutChats.matchAll(/\b(10\.5281\/zenodo\.(\d+))\b/gi)].map((match) => ({ doi: match[1] ?? "", id: match[2] ?? "" }));
+    const versionId = recordIds[0] || dois[0]?.id || "";
+    const doi = dois[0]?.doi || (versionId ? `10.5281/zenodo.${versionId}` : "");
+    if (!versionId && !doi) return null;
+    const concept = withoutChats.match(/concept(?:recid|doi)?[:\s]+(?:10\.5281\/zenodo\.)?(\d{5,})/i)?.[1] ?? "";
+    const conceptId = concept || versionId;
+    return {
+      ...base,
+      id: versionId || base.id,
+      conceptId: conceptId || base.conceptId,
+      doi: doi || base.doi,
+      conceptDoi: conceptId ? `10.5281/zenodo.${conceptId}` : doi || base.conceptDoi,
+      htmlUrl: versionId ? `https://zenodo.org/records/${versionId}` : "",
+      title: base.title
+    };
+  }
   function packetForLocalPaper(options) {
+    const record = options.source ?? sourceRecordFromText(options.filename, options.text) ?? localPaperRecord(options.filename);
     return buildWebChatPacket({
       requestId: options.requestId,
       providerId: options.providerId,
       criteria: options.criteria,
       criterionProfile: options.criterionProfile,
-      record: localPaperRecord(options.filename),
-      documents: [{ filename: options.filename, text: options.text }]
+      record,
+      documents: [{ filename: options.filename, text: options.text }],
+      useTextPage: Boolean(paperTextRecordId(record))
     });
   }
   function stripChatShareLinks(value) {
@@ -2311,6 +3348,15 @@ ${JSON.stringify(report)}`),
   }
   function resultCard(review) {
     const check = scoringMismatch(review);
+    const feedback = hasAirFeedback(review.report.airFeedback) ? review.report.airFeedback : void 0;
+    const labels = [
+      { key: "criteria", label: "Criteria" },
+      { key: "profile", label: "Profile" },
+      { key: "missingContext", label: "Missing context or files" },
+      { key: "prompt", label: "Prompt" },
+      { key: "rubric", label: "Rubric" },
+      { key: "scoringProcess", label: "Scoring process" }
+    ];
     return {
       title: review.title,
       overall: review.report.overallScore,
@@ -2319,7 +3365,11 @@ ${JSON.stringify(report)}`),
       mismatch: check.mismatch ? `Scoring mismatch, needs re-check. ${check.reason ?? ""}`.trim() : null,
       label: WEB_CHAT_LABEL,
       defendedOverall: review.defended?.overallScore ?? null,
-      defendedLabel: review.defended?.label ?? ""
+      defendedLabel: review.defended?.label ?? "",
+      model: review.modelId,
+      scores: review.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score })),
+      feedback: feedback ? labels.map((item) => ({ label: item.label, text: feedback[item.key]?.trim() || "none" })) : [],
+      notice: review.sourceNote ?? ""
     };
   }
   async function textFromPdfDocument(pdf, pageCap) {
@@ -2341,13 +3391,13 @@ ${JSON.stringify(report)}`),
   // src/services/webChat/submission.ts
   var SUBMIT_WINDOW_MS = 10 * 60 * 1e3;
   var WEB_CHAT_SUBMIT_URL = "https://lotswxboafsenmszijpf.supabase.co/functions/v1/submit-web-chat";
-  var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended"]);
+  var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback"]);
   var DEFENDED_KEYS = /* @__PURE__ */ new Set(["label", "overallScore", "recommendation", "summary", "scores"]);
   var PAPER_KEYS = /* @__PURE__ */ new Set(["title", "doi", "url"]);
   function isRecord4(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
   }
-  function clip2(value, max) {
+  function clip3(value, max) {
     return typeof value === "string" ? value.trim().slice(0, max) : "";
   }
   function submissionFromReview(review, site) {
@@ -2378,7 +3428,8 @@ ${JSON.stringify(report)}`),
       overallScore: review.report.overallScore,
       recommendation: review.report.recommendation,
       createdAt: review.createdAt,
-      ...review.defended ? { defended: review.defended } : {}
+      ...review.defended ? { defended: review.defended } : {},
+      ...review.report.airFeedback ? { airFeedback: review.report.airFeedback } : {}
     };
     const checked = validateWebChatSubmission(submission, criteria);
     if (checked.ok) return { ok: true, submission: checked.submission };
@@ -2402,22 +3453,22 @@ ${JSON.stringify(report)}`),
     for (const key of Object.keys(input.paper)) {
       if (!PAPER_KEYS.has(key)) return { ok: false, error: "The paper field included extra text." };
     }
-    const title = clip2(input.paper.title, 300);
-    const doi = clip2(input.paper.doi, 300);
-    const url = clip2(input.paper.url, 500);
+    const title = clip3(input.paper.title, 300);
+    const doi = clip3(input.paper.doi, 300);
+    const url = clip3(input.paper.url, 500);
     if (!title) return { ok: false, error: "The paper needs a title." };
     if (!doi && !url) return { ok: false, error: "The paper needs a DOI or a link." };
-    const site = clip2(input.site, 80);
-    const model = clip2(input.model, 160);
+    const site = clip3(input.site, 80);
+    const model = clip3(input.model, 160);
     if (!site || !model) return { ok: false, error: "The chat site and model name are missing." };
-    const criteriaVersion = clip2(input.criteriaVersion, 40);
+    const criteriaVersion = clip3(input.criteriaVersion, 40);
     if (!criteriaVersion.startsWith("0.2")) return { ok: false, error: "The board accepts AIR v0.2 scores." };
-    const criterionProfile = clip2(input.criterionProfile, 40);
+    const criterionProfile = clip3(input.criterionProfile, 40);
     if (!Array.isArray(input.scores)) return { ok: false, error: "The criterion scores are missing." };
     const scores = input.scores.map((item) => {
       if (!isRecord4(item)) return null;
       if (Object.keys(item).some((key) => key !== "criterionId" && key !== "score")) return null;
-      const criterionId = clip2(item.criterionId, 80);
+      const criterionId = clip3(item.criterionId, 80);
       const score = Number(item.score);
       return { criterionId, score };
     });
@@ -2427,22 +3478,23 @@ ${JSON.stringify(report)}`),
     if (ready.length !== wanted.size || ready.some((item) => !wanted.has(item.criterionId) || !Number.isInteger(item.score))) {
       return { ok: false, error: "Every criterion in this profile needs an integer score." };
     }
-    const summary = stripChatShareLinks(clip2(input.summary, 4e3));
+    const summary = stripChatShareLinks(clip3(input.summary, 4e3));
     if (summary.length < 40) return { ok: false, error: "The summary is too short." };
     if (/https?:\/\/(?:share\.google|chatgpt\.com\/share|claude\.ai\/share|grok\.com\/share)/i.test(summary)) {
       return { ok: false, error: "A private chat link was still in the summary." };
     }
     const overallScore = Number(input.overallScore);
     if (!Number.isInteger(overallScore)) return { ok: false, error: "The overall score must be an integer." };
-    const recommendation = clip2(input.recommendation, 80);
+    const recommendation = clip3(input.recommendation, 80);
     const described = describeScoring({ scores: ready, statedOverall: overallScore, recommendation, criteria });
     if (described.scoringCheck.mismatch) {
       return { ok: false, error: "Scoring mismatch, needs re-check. This score was not sent." };
     }
-    const createdAt = clip2(input.createdAt, 40);
+    const createdAt = clip3(input.createdAt, 40);
     if (!Number.isFinite(Date.parse(createdAt))) return { ok: false, error: "The score needs a timestamp." };
     const defended = readDefended(input.defended, criteria);
     if (!defended.ok) return defended;
+    const airFeedback = parseAirFeedback(input.airFeedback);
     return {
       ok: true,
       submission: {
@@ -2458,7 +3510,8 @@ ${JSON.stringify(report)}`),
         overallScore,
         recommendation,
         createdAt,
-        ...defended.score ? { defended: defended.score } : {}
+        ...defended.score ? { defended: defended.score } : {},
+        ...airFeedback ? { airFeedback } : {}
       }
     };
   }
@@ -2472,7 +3525,7 @@ ${JSON.stringify(report)}`),
     if (!Array.isArray(input.scores)) return { ok: false, error: "The defended score is missing its criterion scores." };
     const scores = input.scores.flatMap((item) => {
       if (!isRecord4(item) || Object.keys(item).some((key) => key !== "criterionId" && key !== "score")) return [];
-      const criterionId = clip2(item.criterionId, 80);
+      const criterionId = clip3(item.criterionId, 80);
       const score = Number(item.score);
       return Number.isInteger(score) && criterionId ? [{ criterionId, score }] : [];
     });
@@ -2480,14 +3533,14 @@ ${JSON.stringify(report)}`),
     if (scores.length !== wanted.size || scores.some((item) => !wanted.has(item.criterionId))) {
       return { ok: false, error: "The defended score needs every criterion in this profile." };
     }
-    const summary = stripChatShareLinks(clip2(input.summary, 4e3));
+    const summary = stripChatShareLinks(clip3(input.summary, 4e3));
     if (summary.length < 40) return { ok: false, error: "The defended summary is too short." };
     if (/https?:\/\/(?:share\.google|chatgpt\.com\/share|claude\.ai\/share|grok\.com\/share)/i.test(summary)) {
       return { ok: false, error: "A private chat link was still in the defended summary." };
     }
     const overallScore = Number(input.overallScore);
     if (!Number.isInteger(overallScore)) return { ok: false, error: "The defended score must be an integer." };
-    const recommendation = clip2(input.recommendation, 80);
+    const recommendation = clip3(input.recommendation, 80);
     const described = describeScoring({ scores, statedOverall: overallScore, recommendation, criteria });
     if (described.scoringCheck.mismatch) return { ok: false, error: "The defended score clashes with its own weighted total, so it was not sent." };
     return { ok: true, score: { label: "after author defence", overallScore, recommendation, summary, scores } };
@@ -2716,7 +3769,8 @@ ${JSON.stringify(report)}`),
         criteria: officialCriteria,
         criterionProfile: profileId,
         filename: paper.filename,
-        text: paper.text
+        text: paper.text,
+        source: publication?.source ?? null
       });
       status = paper.note ? `${paper.note} Opening ${provider.label}. Stay on that tab.` : `Opening ${provider.label}. Stay on that tab.`;
       paint();
@@ -2744,10 +3798,10 @@ ${JSON.stringify(report)}`),
       return;
     }
     if (message.type === "air-web-chat-result") {
-      void finish(message.text ?? "", message.defendedText ?? null, message.transcript ?? [], Boolean(message.stopped));
+      void finish(message.text ?? "", message.defendedText ?? null, message.transcript ?? [], Boolean(message.stopped), message.chatModel, message.notice);
     }
   });
-  async function finish(raw, defendedRaw, transcript, stopped) {
+  async function finish(raw, defendedRaw, transcript, stopped, chatModel, notice) {
     const accepted = acceptWebChatResult(raw, readingCriteria(officialCriteria, profileId, false));
     if (!accepted.ok) {
       busy = false;
@@ -2767,6 +3821,9 @@ ${JSON.stringify(report)}`),
     });
     stored.defenceTranscript = transcript;
     if (defended?.ok) stored.defended = defended.defended;
+    const provider = webChatProvider(providerId);
+    stored.modelId = webChatModelId(provider?.modelLabel ?? providerId, chatModel);
+    if (notice?.trim()) stored.sourceNote = notice.trim();
     reviews = appendResult(reviews, stored);
     await storageSet(RESULT_STORAGE_KEY, reviews);
     busy = false;
@@ -2806,11 +3863,17 @@ ${JSON.stringify(report)}`),
     error = "";
     paint();
   }
-  void storageGet(ONBOARD_STORAGE_KEY).then((seen) => {
-    showOnboarding = seen !== true;
-    return storageGet(RESULT_STORAGE_KEY);
-  }).then((saved) => {
-    reviews = Array.isArray(saved) ? saved : [];
-    paint();
+  function restoreSaved() {
+    return storageGet(ONBOARD_STORAGE_KEY).then((seen) => {
+      showOnboarding = seen !== true;
+      return storageGet(RESULT_STORAGE_KEY);
+    }).then((saved) => {
+      reviews = Array.isArray(saved) ? saved : [];
+      paint();
+    });
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void restoreSaved();
   });
+  void restoreSaved();
 })();
