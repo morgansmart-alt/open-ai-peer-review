@@ -105,6 +105,8 @@ describe("public paper text", () => {
     expect(couldNotReadPaper('{"overallScore":86,"summary":"fine"}')).toBe(false)
     const linked = linkReadingPrompt(paperTextUrl("22826"), packet.instructions)
     expect(linked).toContain("https://doi.org/10.5281/zenodo.22826")
+    expect(linked).toContain("Anchors:")
+    expect(linked).toContain("reference, dataset, or standards paper")
     expect(linked).not.toContain("You are an AIR reviewer")
     expect(linked.length).toBeLessThan(packet.system.length + packet.instructions.length)
   })

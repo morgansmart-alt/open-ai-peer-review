@@ -2359,23 +2359,38 @@ ${output}
     if (!Number.isFinite(value)) return DEFENCE_DEFAULT_ROUNDS;
     return Math.min(DEFENCE_MAX_ROUNDS, Math.max(1, Math.round(value)));
   }
+  function clipDefence(text, limit) {
+    const trimmed = text.replace(/\s+/g, " ").trim();
+    if (trimmed.length <= limit) return trimmed;
+    return `${trimmed.slice(0, limit - 1)}\u2026`;
+  }
   function critiquesFromReport(report2) {
     const issues = (report2.majorIssues ?? []).flatMap((issue) => {
       const claim = issue.claim?.trim();
       if (!claim) return [];
-      return [{ criterionId: issue.criterionId, claim, reason: issue.reason?.trim() || "", quotedPassage: issue.quotedPassage?.trim() || "" }];
+      return [{
+        criterionId: issue.criterionId,
+        claim: clipDefence(claim, 220),
+        reason: clipDefence(issue.reason?.trim() || "", 180),
+        quotedPassage: clipDefence(issue.quotedPassage?.trim() || "", 120)
+      }];
     });
-    if (issues.length > 0) return issues.slice(0, 6);
+    if (issues.length > 0) return issues.slice(0, 4);
     const summary = report2.summary?.trim();
-    return summary ? [{ criterionId: "summary", claim: summary.slice(0, 500), reason: "", quotedPassage: "" }] : [];
+    return summary ? [{ criterionId: "summary", claim: clipDefence(summary, 320), reason: "", quotedPassage: "" }] : [];
+  }
+  function defenceFailureNotice(reason) {
+    const detail = reason.replace(/\s+/g, " ").trim().replace(/\.+$/, "") || "the defence step did not finish";
+    return `Defence step failed: ${detail}. Blind score saved.`;
   }
   function rebuttalPrompt(options) {
     const includeExcerpt = options.includeExcerpt !== false;
     const excerpt = includeExcerpt ? options.paperText.replace(/\s+/g, " ").trim().slice(0, 6e3) : "";
-    const lines = options.critiques.map((critique, index) => {
-      const quote = critique.quotedPassage ? ` Quoted passage: "${critique.quotedPassage}"` : "";
-      const reason = critique.reason ? ` Why it was raised: ${critique.reason}` : "";
-      return `${index + 1}. [${critique.criterionId}] ${critique.claim}${reason}${quote}`;
+    const lines = options.critiques.slice(0, 4).map((critique, index) => {
+      const claim = clipDefence(critique.claim, 220);
+      const reason = critique.reason ? ` Why it was raised: ${clipDefence(critique.reason, 180)}` : "";
+      const quote = critique.quotedPassage ? ` Quoted passage: "${clipDefence(critique.quotedPassage, 120)}"` : "";
+      return `${index + 1}. [${critique.criterionId}] ${claim}${reason}${quote}`;
     });
     return [
       `Author defence, round ${options.round} of ${options.rounds}.`,
@@ -3029,17 +3044,50 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     const usable = nodes.filter((el) => {
       if (isIgnoredRegion(el)) return false;
       if (composer && (el === composer || composer.contains(el) || el.contains(composer))) return false;
-      return elementText(el).length >= 40;
+      return elementText(el).length >= 20;
     });
-    const leaves = usable.filter((el) => !usable.some((other) => other !== el && el.contains(other)));
-    return leaves.map((el) => elementText(el));
+    return usable.map((el) => elementText(el));
   }
-  function blockAfterPrompt(blocks, beforeRegion) {
+  function hasSentence(text) {
+    return /[.!?](?:\s|$)/.test(text);
+  }
+  function isPromptEcho(text, prompt) {
+    const block = normaliseComposerText(text);
+    const sent = normaliseComposerText(prompt);
+    if (!sent || !block) return false;
+    if (block === sent) return true;
+    if (sent.startsWith(block) && block.length >= 40) return true;
+    if (sent.endsWith(block) && block.length >= 40) return true;
+    const head = sent.slice(0, 80);
+    if (head.length >= 40 && block.startsWith(head) && block.length <= sent.length + 40) return true;
+    return false;
+  }
+  function isUiLabel(text) {
+    const trimmed = text.replace(/\s+/g, " ").trim();
+    if (trimmed.length >= 80) return false;
+    if (reviewJsonBlock(text)) return false;
+    if (hasSentence(trimmed)) return false;
+    return true;
+  }
+  function longestLast(blocks) {
+    if (blocks.length === 0) return "";
+    const longest = Math.max(...blocks.map((block) => block.length));
+    const tied = blocks.filter((block) => block.length === longest);
+    return tied[tied.length - 1] ?? "";
+  }
+  function chooseReplyBlock(blocks, beforeRegion, sentPrompt, expect = "text") {
     const fresh = blocks.filter((block) => {
-      const probe = block.replace(/\s+/g, " ").trim().slice(0, 80);
-      return probe.length >= 40 && !beforeRegion.includes(probe);
+      const trimmed = block.replace(/\s+/g, " ").trim();
+      if (!trimmed || isUiLabel(block) || isPromptEcho(block, sentPrompt)) return false;
+      const probe = trimmed.slice(0, 80);
+      return !(probe.length >= 40 && beforeRegion.includes(probe));
     });
-    return fresh[fresh.length - 1] ?? "";
+    if (expect === "json") {
+      const withJson = fresh.filter((block) => reviewJsonBlock(block));
+      if (withJson.length > 0) return longestLast(withJson);
+      return "";
+    }
+    return longestLast(fresh.filter((block) => block.trim().length >= 80 || reviewJsonBlock(block) || hasSentence(block)));
   }
   function walkReplyText(node, composer, chunks) {
     if (node instanceof Element) {
@@ -3200,10 +3248,18 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     }
     actual = composerText(el);
     if (messageMatches(actual, text)) return { ok: true, chunk: text, method: placed.method, actual };
-    if (placed.truncated && placed.actual.trim().length >= 20 && messageMatches(placed.actual, text.slice(0, placed.actual.length))) {
-      return { ok: true, chunk: text.slice(0, placed.actual.length), method: placed.method, actual: placed.actual };
-    }
+    const prefix = heldPrefix(actual, text);
+    if (prefix) return { ok: true, chunk: prefix, method: placed.method, actual };
     return { ok: false, actual, method: placed.method };
+  }
+  function heldPrefix(actual, intended) {
+    const cleaned = actual.replace(/[…\u2026]+$/g, "").replace(/\.{3}$/g, "").trimEnd();
+    if (cleaned.length < 80) return null;
+    if (intended.startsWith(cleaned)) return cleaned;
+    const normActual = normaliseComposerText(cleaned);
+    const normIntended = normaliseComposerText(intended);
+    if (normActual.length >= 80 && normIntended.startsWith(normActual)) return cleaned;
+    return null;
   }
   var clickLock = /* @__PURE__ */ new WeakMap();
   function pressEnterSequence(el) {
@@ -3428,13 +3484,22 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     const when = lastChange === null ? "none" : `${Math.max(0, Math.round((Date.now() - lastChange) / 1e3))}s ago`;
     return `candidate ${candidate || "none"}, ${length} characters, last change ${when}`;
   }
-  function regionReply(doc, composer, beforeRegion) {
-    const now = visibleReplyText(doc, composer);
-    const added = addedText(beforeRegion, now);
-    if (added) return { text: added, candidate: "conversation-region" };
-    const block = blockAfterPrompt(messageBlocks(doc, composer), beforeRegion);
+  function preferredReply(fromSelector, selectorName, fromRegion, expect) {
+    if (expect === "json") {
+      if (reviewJsonBlock(fromRegion.text)) return fromRegion;
+      if (reviewJsonBlock(fromSelector)) return { text: fromSelector, candidate: selectorName };
+      return { text: "", candidate: fromRegion.candidate || selectorName };
+    }
+    if (fromRegion.text.length >= fromSelector.length && fromRegion.text) return fromRegion;
+    if (fromSelector) return { text: fromSelector, candidate: selectorName };
+    return fromRegion;
+  }
+  function regionReply(doc, composer, beforeRegion, sentPrompt, expect) {
+    const block = chooseReplyBlock(messageBlocks(doc, composer), beforeRegion, sentPrompt, expect);
     if (block) return { text: block, candidate: "message-block" };
-    return { text: "", candidate: "" };
+    const added = addedText(beforeRegion, visibleReplyText(doc, composer));
+    if (!added || chooseReplyBlock([added], beforeRegion, sentPrompt, expect) === "") return { text: "", candidate: "" };
+    return { text: added, candidate: "conversation-region" };
   }
   async function focusComposer(el, hooks) {
     const html = el;
@@ -3452,7 +3517,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     if (expect === "json" && !reviewJsonBlock(reply)) return "reply seen, JSON not parsed";
     return "reply seen";
   }
-  async function waitForReply(doc, provider, beforeMessages, hooks, composer, label = "review", expect = "json", attempt = 1, beforeRegion = "") {
+  async function waitForReply(doc, provider, beforeMessages, hooks, composer, label = "review", expect = "json", attempt = 1, beforeRegion = "", sentPrompt = "") {
     note(hooks, label, "waiting", `Waiting for the reply: ${label}.`);
     await hooks.keepAwake?.();
     const pollMs = hooks.pollMs ?? 400;
@@ -3475,9 +3540,10 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.");
       const snapshot2 = assistantSnapshot(doc, provider.selectors.assistant, composer);
       const fromSelector2 = replyAfter(beforeMessages, snapshot2.texts);
-      const fromRegion2 = regionReply(doc, composer, beforeRegion);
-      const reply2 = fromSelector2 || fromRegion2.text;
-      selector = fromSelector2 ? snapshot2.selector : fromRegion2.candidate;
+      const fromRegion2 = regionReply(doc, composer, beforeRegion, sentPrompt, expect);
+      const picked2 = preferredReply(fromSelector2, snapshot2.selector, fromRegion2, expect);
+      const reply2 = picked2.text;
+      selector = picked2.candidate;
       const json = reviewJsonBlock(reply2);
       const ack = ackReply(doc, composer);
       const streaming = stopControlActive(doc, provider.selectors.stop);
@@ -3520,13 +3586,13 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       }
       const settled = Boolean(reply2) && reply2 === lastReply && stableFor >= stableMs;
       if (expect === "text" && settled) return reply2;
-      if (settled && idle) return json || reply2;
+      if (expect === "json" && settled && idle && json) return json;
       if (!reply2 && Date.now() - start >= silentMs) {
         const empty = replyDiagnostic(selector, 0, null);
         if (attempt < 2) {
           note(hooks, label, "error", `No reply container yet. Re-polling. ${empty}`);
           await hooks.keepAwake?.();
-          return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion);
+          return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion, sentPrompt);
         }
         throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} timed out with no reply. ${empty}.`);
       }
@@ -3540,15 +3606,17 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     }
     const snapshot = assistantSnapshot(doc, provider.selectors.assistant, composer);
     const fromSelector = replyAfter(beforeMessages, snapshot.texts);
-    const fromRegion = regionReply(doc, composer, beforeRegion);
-    const reply = fromSelector || fromRegion.text;
-    const diagnostic = replyDiagnostic(fromSelector ? snapshot.selector : fromRegion.candidate, reply.length, lastChange);
+    const fromRegion = regionReply(doc, composer, beforeRegion, sentPrompt, expect);
+    const picked = preferredReply(fromSelector, snapshot.selector, fromRegion, expect);
+    const reply = picked.text;
+    const seen = fromSelector || fromRegion.text || reply;
+    const diagnostic = replyDiagnostic(picked.candidate || (fromSelector ? snapshot.selector : ""), reply.length || seen.length, lastChange);
     if (attempt < 2) {
       note(hooks, label, "error", `Reply step (${label}) timed out. Re-polling. ${diagnostic}`);
       await hooks.keepAwake?.();
-      return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion);
+      return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion, sentPrompt);
     }
-    throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} did not finish. ${diagnostic}. ${replyTimeoutReason(reply, expect)}.`);
+    throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} did not finish. ${diagnostic}. ${replyTimeoutReason(seen, expect)}.`);
   }
   async function waitForEnabledSubmit(doc, provider, composer, hooks) {
     const timeoutMs = hooks.submitReadyMs ?? 5e3;
@@ -3647,10 +3715,10 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       note(hooks, label, "sending", `Sending ${label}${rest ? ` part ${part}` : ""} on ${provider.label}. ${chunk.length} characters verified in the message box.`);
       const method = await commitSend(doc, provider, composer, beforeAssistant, hooks);
       note(hooks, label, "sent", `Send step on ${provider.label}. Method that sent: ${method}.`);
-      if (!rest) return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, 1, beforeRegion);
+      if (!rest) return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, 1, beforeRegion, chunk);
       part += 1;
       pending = rest;
-      await waitForReply(doc, provider, beforeMessages, hooks, composer, `${label} part ${part - 1}`, "text", 1, beforeRegion);
+      await waitForReply(doc, provider, beforeMessages, hooks, composer, `${label} part ${part - 1}`, "text", 1, beforeRegion, chunk);
     }
     throw new TurnError("insert-miss", `The message for ${label} was empty.`);
   }
@@ -3935,13 +4003,14 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
           notice
         });
       } catch (error) {
+        const reason = error instanceof Error ? error.message : "The defence stopped early.";
         report({
           type: "air-web-chat-done",
           requestId: message.requestId,
           ok: true,
           text: settled.text,
-          notice,
-          message: error instanceof Error ? error.message : "The defence stopped early.",
+          notice: [notice, defenceFailureNotice(reason)].filter(Boolean).join(" "),
+          message: reason,
           chatModel: observedModel()
         });
       }

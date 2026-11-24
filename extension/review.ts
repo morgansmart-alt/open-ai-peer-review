@@ -331,11 +331,18 @@ async function finish(raw: string, defendedRaw: string | null, transcript: { rou
   if (defended?.ok) stored.defended = defended.defended
   const provider = webChatProvider(providerId)
   stored.modelId = webChatModelId(provider?.modelLabel ?? providerId, chatModel)
+  const failure = notice?.includes("Defence step failed:") ? notice.slice(notice.indexOf("Defence step failed:")) : ""
   if (notice?.trim()) stored.sourceNote = notice.trim()
   reviews = appendResult(reviews, stored)
   await storageSet(RESULT_STORAGE_KEY, reviews)
   busy = false
-  status = stopped ? "Stopped. The blind score is kept. The chat tab stays open." : defended?.ok ? "Done. The blind score and the score after author defence are below." : "Done. The blind score is below."
+  status = failure
+    ? failure
+    : stopped
+      ? "Stopped. The blind score is kept. The chat tab stays open."
+      : defended?.ok
+        ? "Done. The blind score and the score after author defence are below."
+        : "Done. The blind score is below."
   error = ""
   paint()
 }

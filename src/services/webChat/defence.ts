@@ -27,15 +27,31 @@ export function clampDefenceRounds(value: number): number {
   return Math.min(DEFENCE_MAX_ROUNDS, Math.max(1, Math.round(value)))
 }
 
+function clipDefence(text: string, limit: number): string {
+  const trimmed = text.replace(/\s+/g, " ").trim()
+  if (trimmed.length <= limit) return trimmed
+  return `${trimmed.slice(0, limit - 1)}…`
+}
+
 export function critiquesFromReport(report: Pick<ReviewReport, "majorIssues" | "summary">): Critique[] {
   const issues = (report.majorIssues ?? []).flatMap((issue) => {
     const claim = issue.claim?.trim()
     if (!claim) return []
-    return [{ criterionId: issue.criterionId, claim, reason: issue.reason?.trim() || "", quotedPassage: issue.quotedPassage?.trim() || "" }]
+    return [{
+      criterionId: issue.criterionId,
+      claim: clipDefence(claim, 220),
+      reason: clipDefence(issue.reason?.trim() || "", 180),
+      quotedPassage: clipDefence(issue.quotedPassage?.trim() || "", 120),
+    }]
   })
-  if (issues.length > 0) return issues.slice(0, 6)
+  if (issues.length > 0) return issues.slice(0, 4)
   const summary = report.summary?.trim()
-  return summary ? [{ criterionId: "summary", claim: summary.slice(0, 500), reason: "", quotedPassage: "" }] : []
+  return summary ? [{ criterionId: "summary", claim: clipDefence(summary, 320), reason: "", quotedPassage: "" }] : []
+}
+
+export function defenceFailureNotice(reason: string): string {
+  const detail = reason.replace(/\s+/g, " ").trim().replace(/\.+$/, "") || "the defence step did not finish"
+  return `Defence step failed: ${detail}. Blind score saved.`
 }
 
 export function rebuttalPrompt(options: {
@@ -48,10 +64,11 @@ export function rebuttalPrompt(options: {
 }): string {
   const includeExcerpt = options.includeExcerpt !== false
   const excerpt = includeExcerpt ? options.paperText.replace(/\s+/g, " ").trim().slice(0, 6_000) : ""
-  const lines = options.critiques.map((critique, index) => {
-    const quote = critique.quotedPassage ? ` Quoted passage: "${critique.quotedPassage}"` : ""
-    const reason = critique.reason ? ` Why it was raised: ${critique.reason}` : ""
-    return `${index + 1}. [${critique.criterionId}] ${critique.claim}${reason}${quote}`
+  const lines = options.critiques.slice(0, 4).map((critique, index) => {
+    const claim = clipDefence(critique.claim, 220)
+    const reason = critique.reason ? ` Why it was raised: ${clipDefence(critique.reason, 180)}` : ""
+    const quote = critique.quotedPassage ? ` Quoted passage: "${clipDefence(critique.quotedPassage, 120)}"` : ""
+    return `${index + 1}. [${critique.criterionId}] ${claim}${reason}${quote}`
   })
   return [
     `Author defence, round ${options.round} of ${options.rounds}.`,
