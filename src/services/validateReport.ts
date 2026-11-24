@@ -1,6 +1,7 @@
 import { categoryLabel, clamp, weightedMean } from "../domain/criteria.ts"
 import { describeScoring } from "../domain/scoring.ts"
 import { parseAirFeedback } from "./airFeedback.ts"
+import { parseModelJson } from "./jsonText.ts"
 import type {
   Citation,
   Confidence,
@@ -21,17 +22,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function extractJsonValue(raw: string): unknown {
-  const trimmed = raw.trim()
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
-  const body = (fenced?.[1] ?? trimmed).trim()
-  try {
-    return JSON.parse(body)
-  } catch {
-    const start = body.indexOf("{")
-    const end = body.lastIndexOf("}")
-    if (start >= 0 && end > start) return JSON.parse(body.slice(start, end + 1))
-    throw new Error("No JSON object found in the model output.")
-  }
+  const parsed = parseModelJson(raw)
+  if (!parsed.ok) throw new Error(parsed.error)
+  return parsed.value
 }
 
 function clip(value: unknown, max: number): string {

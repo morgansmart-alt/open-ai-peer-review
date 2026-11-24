@@ -16,12 +16,13 @@ export interface ProviderEvent {
   transcript?: unknown
   stopped?: boolean
   chatModel?: string
+  notice?: string
 }
 
 export type RelayDecision =
   | { kind: "ignore" }
   | { kind: "progress"; requestId: string; message: string; airTabId: number }
-  | { kind: "result"; requestId: string; airTabId: number; text: string; defendedText: string | null; transcript: unknown; stopped: boolean; chatModel: string }
+  | { kind: "result"; requestId: string; airTabId: number; text: string; defendedText: string | null; transcript: unknown; stopped: boolean; chatModel: string; notice: string }
   | { kind: "error"; requestId: string; airTabId: number; message: string }
 
 /** A review started from the extension panel has no AIR tab. A review started from the site does. */
@@ -51,6 +52,7 @@ export function relayFromProvider(job: RelayJob | null, senderTabId: number | un
         transcript: message.transcript ?? [],
         stopped: Boolean(message.stopped),
         chatModel: typeof message.chatModel === "string" && message.chatModel.trim() ? message.chatModel.trim() : "unknown (site default)",
+        notice: typeof message.notice === "string" ? message.notice : "",
       }
     }
     return { kind: "error", requestId: job.requestId, airTabId: job.airTabId, message: message.message || "The chat did not return a review." }
@@ -73,6 +75,7 @@ export function extensionEnvelope(decision: Exclude<RelayDecision, { kind: "igno
       transcript: decision.transcript,
       stopped: decision.stopped,
       chatModel: decision.chatModel,
+      notice: decision.notice,
     }
   }
   return { source: EXTENSION_SOURCE, version: PROTOCOL_VERSION, type: "air-web-chat-error", requestId: decision.requestId, message: decision.message }

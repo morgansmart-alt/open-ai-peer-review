@@ -28,16 +28,12 @@ function AirFeedbackPanel({ feedback }: { feedback: AirFeedback }) {
       <summary className="cursor-pointer text-sm font-medium">Feedback on AIR</summary>
       <p className="mt-2 text-xs text-ink-soft">About the review process, not the paper. It is not part of the score.</p>
       <dl className="mt-2 space-y-2 text-sm">
-        {FEEDBACK_LABELS.flatMap((item) => {
-          const text = feedback[item.key]
-          if (!text) return []
-          return [
-            <div key={item.key}>
-              <dt className="text-xs text-ink-soft">{item.label}</dt>
-              <dd>{text}</dd>
-            </div>,
-          ]
-        })}
+        {FEEDBACK_LABELS.map((item) => (
+          <div key={item.key}>
+            <dt className="text-xs text-ink-soft">{item.label}</dt>
+            <dd>{feedback[item.key]?.trim() || "none"}</dd>
+          </div>
+        ))}
       </dl>
     </details>
   )
@@ -134,6 +130,7 @@ export function ReportView({
         {meta.stored?.tier === "free-screening" && (
           <p className="mt-3 text-sm text-gold">Free quick review: a smaller model, lower fidelity, screening only. It is not ranked and cannot verify the work.</p>
         )}
+        {meta.stored?.sourceNote ? <p className="mt-3 text-sm text-gold" data-testid="text-page-note">{meta.stored.sourceNote}</p> : null}
         {meta.mock && <p className="mt-3 text-sm text-gold">Demo reading. No model was called. The notes are a local stand-in so the report can be tried.</p>}
         <p className="mt-3 text-sm">{DISCLAIMER}</p>
         {hasAirFeedback(report.airFeedback) && <AirFeedbackPanel feedback={report.airFeedback} />}

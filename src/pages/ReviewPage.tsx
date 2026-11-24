@@ -431,6 +431,7 @@ export function ReviewPage() {
       stored.modelId = modelId
       stored.tier = "uncalibrated web-chat"
       stored.source = "web-chat extension"
+      if (outcome.notice) stored.sourceNote = outcome.notice
       setResults((current) => [...current.filter((item) => !isUncalibratedWebChat(item.stored)), { assessorId: stored.assessorId, report: stored.report, stored }])
       setStatus(`${WEB_CHAT_LABEL}. The score card is below. Publishing it keeps that label and leaves the calibrated ranking unchanged.`)
     } catch (caught) {

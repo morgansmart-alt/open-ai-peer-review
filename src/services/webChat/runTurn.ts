@@ -1,6 +1,6 @@
 import type { ProviderAdapter } from "../../../extension/adapters/index.ts"
 import { planDelivery, type DeliveryStep } from "./deliver.ts"
-import { couldNotReadPaper } from "./paperText.ts"
+import { couldNotReadPaper, TEXT_PAGE_NOTE, textPageHasPaper, textPageUntrusted } from "./paperText.ts"
 import {
   assistantText,
   attachTextFiles,
@@ -47,9 +47,11 @@ export interface TurnHooks {
   submitStableMs?: number
   /** How long to wait after a send attempt before trying the other method. */
   sendVerifyMs?: number
+  /** Probe the public text page. Absent means a normal fetch. */
+  loadTextPage?(url: string): Promise<{ status: number; body: string }>
 }
 
-export type TurnResult = { ok: true; text: string; steps: number } | { ok: false; code: string; message: string }
+export type TurnResult = { ok: true; text: string; steps: number; notice?: string } | { ok: false; code: string; message: string }
 
 class TurnError extends Error {
   code: string
@@ -259,6 +261,15 @@ export async function sendFollowUp(doc: Document, provider: ProviderAdapter, tex
   return sendStep(doc, provider, step, hooks)
 }
 
+async function pageIsLive(url: string, hooks: TurnHooks): Promise<boolean> {
+  try {
+    const loaded = hooks.loadTextPage ? await hooks.loadTextPage(url) : await fetch(url).then(async (response) => ({ status: response.status, body: await response.text() }))
+    return textPageHasPaper(loaded.status, loaded.body)
+  } catch {
+    return false
+  }
+}
+
 export async function runTurn(doc: Document, provider: ProviderAdapter, packet: WebChatPacket, hooks: TurnHooks): Promise<TurnResult> {
   try {
     const composer = await waitForComposer(doc, provider, hooks)
@@ -268,6 +279,16 @@ export async function runTurn(doc: Document, provider: ProviderAdapter, packet: 
     }
     let providerForPlan = provider
     let activePacket = packet
+    let notice: string | undefined
+    if (activePacket.textUrl) {
+      const live = await pageIsLive(activePacket.textUrl, hooks)
+      if (!live) {
+        hooks.onProgress?.("The public text page is not available. Sending the paper in the chat instead.")
+        const { textUrl: dropped, ...rest } = activePacket
+        void dropped
+        activePacket = rest
+      }
+    }
     let planned = planDelivery(activePacket, providerForPlan)
     if (planned.warning) hooks.onProgress?.(planned.warning)
     let steps = planned.steps
@@ -279,9 +300,10 @@ export async function runTurn(doc: Document, provider: ProviderAdapter, packet: 
       hooks.onProgress?.(`Sending part ${step.index} of ${step.total} on ${provider.label}. Stay on this tab.`)
       try {
         const reply = await sendStep(doc, provider, step, hooks)
-        if (step.link && !linkFellBack && couldNotReadPaper(reply)) {
+        if (step.link && !linkFellBack && (couldNotReadPaper(reply) || textPageUntrusted(reply))) {
           linkFellBack = true
-          hooks.onProgress?.(`${provider.label} could not open the paper page. Sending the paper in the chat instead.`)
+          notice = TEXT_PAGE_NOTE
+          hooks.onProgress?.(`${TEXT_PAGE_NOTE}. Sending the paper in the chat instead.`)
           const { textUrl: dropped, ...rest } = activePacket
           void dropped
           activePacket = rest
@@ -291,7 +313,7 @@ export async function runTurn(doc: Document, provider: ProviderAdapter, packet: 
           index = -1
           continue
         }
-        if (step.final) return { ok: true, text: reply, steps: steps.length }
+        if (step.final) return { ok: true, text: reply, steps: steps.length, ...(notice ? { notice } : {}) }
       } catch (error) {
         if (error instanceof TurnError && error.code === "upload-miss" && !fellBack) {
           fellBack = true

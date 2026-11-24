@@ -1260,22 +1260,804 @@ ${parsed2.errors.join("\n")}`);
     return Boolean(feedback && Object.values(feedback).some((item) => item && item.trim()));
   }
 
+  // node_modules/jsonrepair/lib/esm/utils/JSONRepairError.js
+  var JSONRepairError = class extends Error {
+    constructor(message, position) {
+      super(`${message} at position ${position}`);
+      this.position = position;
+    }
+  };
+
+  // node_modules/jsonrepair/lib/esm/utils/stringUtils.js
+  var codeSpace = 32;
+  var codeNewline = 10;
+  var codeTab = 9;
+  var codeReturn = 13;
+  var codeNonBreakingSpace = 160;
+  var codeMongolianVowelSeparator = 6158;
+  var codeEnQuad = 8192;
+  var codeZeroWidthSpace = 8203;
+  var codeNarrowNoBreakSpace = 8239;
+  var codeMediumMathematicalSpace = 8287;
+  var codeIdeographicSpace = 12288;
+  var codeZeroWidthNoBreakSpace = 65279;
+  function isHex(char) {
+    return /^[0-9A-Fa-f]$/.test(char);
+  }
+  function isDigit(char) {
+    return char >= "0" && char <= "9";
+  }
+  function isValidStringCharacter(char) {
+    return char >= " ";
+  }
+  function isDelimiter(char) {
+    return ",:[]/{}()\n+".includes(char);
+  }
+  function isFunctionNameCharStart(char) {
+    return char >= "a" && char <= "z" || char >= "A" && char <= "Z" || char === "_" || char === "$";
+  }
+  function isFunctionNameChar(char) {
+    return char >= "a" && char <= "z" || char >= "A" && char <= "Z" || char === "_" || char === "$" || char >= "0" && char <= "9";
+  }
+  var regexUrlStart = /^(http|https|ftp|mailto|file|data|irc):\/\/$/;
+  var regexUrlChar = /^[A-Za-z0-9-._~:/?#@!$&'()*+;=]$/;
+  function isUnquotedStringDelimiter(char) {
+    return ",[]/{}\n+".includes(char);
+  }
+  function isStartOfValue(char) {
+    return isQuote(char) || regexStartOfValue.test(char);
+  }
+  var regexStartOfValue = /^[[{\w-]$/;
+  function isControlCharacter(char) {
+    return char === "\n" || char === "\r" || char === "	" || char === "\b" || char === "\f";
+  }
+  function isWhitespace(text2, index) {
+    const code = text2.charCodeAt(index);
+    return code === codeSpace || code === codeNewline || code === codeTab || code === codeReturn;
+  }
+  function isWhitespaceExceptNewline(text2, index) {
+    const code = text2.charCodeAt(index);
+    return code === codeSpace || code === codeTab || code === codeReturn;
+  }
+  function isSpecialWhitespace(text2, index) {
+    const code = text2.charCodeAt(index);
+    return code === codeNonBreakingSpace || code === codeMongolianVowelSeparator || code >= codeEnQuad && code <= codeZeroWidthSpace || code === codeNarrowNoBreakSpace || code === codeMediumMathematicalSpace || code === codeIdeographicSpace || code === codeZeroWidthNoBreakSpace;
+  }
+  function isQuote(char) {
+    return isDoubleQuoteLike(char) || isSingleQuoteLike(char);
+  }
+  function isDoubleQuoteLike(char) {
+    return char === '"' || char === "\u201C" || char === "\u201D";
+  }
+  function isDoubleQuote(char) {
+    return char === '"';
+  }
+  function isSingleQuoteLike(char) {
+    return char === "'" || char === "\u2018" || char === "\u2019" || char === "`" || char === "\xB4";
+  }
+  function isSingleQuote(char) {
+    return char === "'";
+  }
+  function stripLastOccurrence(text2, textToStrip) {
+    let stripRemainingText = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : false;
+    const index = text2.lastIndexOf(textToStrip);
+    return index !== -1 ? text2.substring(0, index) + (stripRemainingText ? "" : text2.substring(index + 1)) : text2;
+  }
+  function insertBeforeLastWhitespace(text2, textToInsert) {
+    let index = text2.length;
+    if (!isWhitespace(text2, index - 1)) {
+      return text2 + textToInsert;
+    }
+    while (isWhitespace(text2, index - 1)) {
+      index--;
+    }
+    return text2.substring(0, index) + textToInsert + text2.substring(index);
+  }
+  function removeAtIndex(text2, start, count) {
+    return text2.substring(0, start) + text2.substring(start + count);
+  }
+  function endsWithCommaOrNewline(text2) {
+    return /[,\n][ \t\r]*$/.test(text2);
+  }
+  var namedHtmlEntities = {
+    "&quot;": '"',
+    "&amp;": "&",
+    "&lt;": "<",
+    "&gt;": ">",
+    "&apos;": "'"
+  };
+  var maxHtmlEntityLength = 12;
+  function matchHtmlEntity(fragment) {
+    if (fragment.charAt(0) !== "&") {
+      return null;
+    }
+    const semicolon = fragment.indexOf(";");
+    if (semicolon === -1) {
+      return null;
+    }
+    const entity = fragment.substring(0, semicolon + 1);
+    const named = namedHtmlEntities[entity];
+    if (named !== void 0) {
+      return {
+        char: named,
+        length: entity.length
+      };
+    }
+    if (fragment.charAt(1) === "#") {
+      const body = fragment.substring(2, semicolon);
+      const hex = body.charAt(0) === "x" || body.charAt(0) === "X";
+      const digits = hex ? body.substring(1) : body;
+      if (digits.length > 0) {
+        const code = Number.parseInt(digits, hex ? 16 : 10);
+        if (!Number.isNaN(code) && code >= 0 && code <= 1114111) {
+          return {
+            char: String.fromCodePoint(code),
+            length: entity.length
+          };
+        }
+      }
+    }
+    return null;
+  }
+  function isDoubleQuoteEntity(match) {
+    return match !== null && match.char === '"';
+  }
+  function isSingleQuoteEntity(match) {
+    return match !== null && match.char === "'";
+  }
+  function countOccurrences(text2, char) {
+    let count = 0;
+    for (let i = 0; i < text2.length; i++) {
+      if (text2.charAt(i) === char) {
+        count++;
+      }
+    }
+    return count;
+  }
+  function isInsideUnclosedBracket(text2, closeChar) {
+    switch (closeChar) {
+      case ")":
+        return countOccurrences(text2, "(") > countOccurrences(text2, ")");
+      case "]":
+        return countOccurrences(text2, "[") > countOccurrences(text2, "]");
+      case "}":
+        return countOccurrences(text2, "{") > countOccurrences(text2, "}");
+      default:
+        return false;
+    }
+  }
+
+  // node_modules/jsonrepair/lib/esm/regular/jsonrepair.js
+  var controlCharacters = {
+    "\b": "\\b",
+    "\f": "\\f",
+    "\n": "\\n",
+    "\r": "\\r",
+    "	": "\\t"
+  };
+  var escapeCharacters = {
+    '"': '"',
+    "\\": "\\",
+    "/": "/",
+    b: "\b",
+    f: "\f",
+    n: "\n",
+    r: "\r",
+    t: "	"
+    // note that \u is handled separately in parseString()
+  };
+  function jsonrepair(text2) {
+    let i = 0;
+    let output = "";
+    parseMarkdownCodeBlock(["```", "[```", "{```"]);
+    const processed = parseValue();
+    if (!processed) {
+      throwUnexpectedEnd();
+    }
+    parseMarkdownCodeBlock(["```", "```]", "```}"]);
+    const processedComma = parseCharacter(",");
+    if (processedComma) {
+      parseWhitespaceAndSkipComments();
+    }
+    if (isStartOfValue(text2[i]) && endsWithCommaOrNewline(output)) {
+      if (!processedComma) {
+        output = insertBeforeLastWhitespace(output, ",");
+      }
+      parseNewlineDelimitedJSON();
+    } else if (processedComma) {
+      output = stripLastOccurrence(output, ",");
+    }
+    while (text2[i] === "}" || text2[i] === "]") {
+      i++;
+      parseWhitespaceAndSkipComments();
+    }
+    if (i >= text2.length) {
+      return output;
+    }
+    throwUnexpectedCharacter();
+    function parseValue() {
+      parseWhitespaceAndSkipComments();
+      const processed2 = parseObject() || parseArray() || parseString() || parseNumber() || parseKeywords() || parseUnquotedString(false) || parseRegex();
+      parseWhitespaceAndSkipComments();
+      return processed2;
+    }
+    function parseWhitespaceAndSkipComments() {
+      let skipNewline = arguments.length > 0 && arguments[0] !== void 0 ? arguments[0] : true;
+      const start = i;
+      let changed = parseWhitespace(skipNewline);
+      do {
+        changed = parseComment();
+        if (changed) {
+          changed = parseWhitespace(skipNewline);
+        }
+      } while (changed);
+      return i > start;
+    }
+    function parseWhitespace(skipNewline) {
+      const _isWhiteSpace = skipNewline ? isWhitespace : isWhitespaceExceptNewline;
+      let whitespace = "";
+      while (true) {
+        if (_isWhiteSpace(text2, i)) {
+          whitespace += text2[i];
+          i++;
+        } else if (isSpecialWhitespace(text2, i)) {
+          whitespace += " ";
+          i++;
+        } else {
+          break;
+        }
+      }
+      if (whitespace.length > 0) {
+        output += whitespace;
+        return true;
+      }
+      return false;
+    }
+    function parseComment() {
+      if (text2[i] === "/" && text2[i + 1] === "*") {
+        while (i < text2.length && !atEndOfBlockComment(text2, i)) {
+          i++;
+        }
+        i += 2;
+        return true;
+      }
+      if (text2[i] === "/" && text2[i + 1] === "/") {
+        while (i < text2.length && text2[i] !== "\n") {
+          i++;
+        }
+        return true;
+      }
+      return false;
+    }
+    function parseMarkdownCodeBlock(blocks) {
+      if (skipMarkdownCodeBlock(blocks)) {
+        if (isFunctionNameCharStart(text2[i])) {
+          while (i < text2.length && isFunctionNameChar(text2[i])) {
+            i++;
+          }
+        }
+        parseWhitespaceAndSkipComments();
+        return true;
+      }
+      return false;
+    }
+    function skipMarkdownCodeBlock(blocks) {
+      parseWhitespace(true);
+      for (const block of blocks) {
+        const end = i + block.length;
+        if (text2.slice(i, end) === block) {
+          i = end;
+          return true;
+        }
+      }
+      return false;
+    }
+    function parseCharacter(char) {
+      if (text2[i] === char) {
+        output += text2[i];
+        i++;
+        return true;
+      }
+      return false;
+    }
+    function skipCharacter(char) {
+      if (text2[i] === char) {
+        i++;
+        return true;
+      }
+      return false;
+    }
+    function skipEscapeCharacter() {
+      return skipCharacter("\\");
+    }
+    function skipEllipsis() {
+      parseWhitespaceAndSkipComments();
+      if (text2[i] === "." && text2[i + 1] === "." && text2[i + 2] === ".") {
+        i += 3;
+        parseWhitespaceAndSkipComments();
+        skipCharacter(",");
+        return true;
+      }
+      return false;
+    }
+    function parseObject() {
+      if (text2[i] === "{") {
+        output += "{";
+        i++;
+        parseWhitespaceAndSkipComments();
+        if (skipCharacter(",")) {
+          parseWhitespaceAndSkipComments();
+        }
+        let initial = true;
+        while (i < text2.length && text2[i] !== "}") {
+          let processedComma2;
+          if (!initial) {
+            processedComma2 = parseCharacter(",");
+            if (!processedComma2) {
+              output = insertBeforeLastWhitespace(output, ",");
+            }
+            parseWhitespaceAndSkipComments();
+          } else {
+            processedComma2 = true;
+          }
+          skipEllipsis();
+          const processedKey = parseString() || parseUnquotedString(true);
+          if (!processedKey) {
+            if (text2[i] === "}" || text2[i] === "{" || text2[i] === "]" || text2[i] === "[" || text2[i] === void 0) {
+              if (!initial) {
+                output = stripLastOccurrence(output, ",");
+              }
+            } else {
+              throwObjectKeyExpected();
+            }
+            break;
+          }
+          parseWhitespaceAndSkipComments();
+          const processedColon = parseCharacter(":");
+          const truncatedText = i >= text2.length;
+          if (!processedColon) {
+            if (isStartOfValue(text2[i]) || truncatedText) {
+              output = insertBeforeLastWhitespace(output, ":");
+            } else {
+              throwColonExpected();
+            }
+          }
+          const processedValue = parseValue();
+          if (!processedValue) {
+            if (processedColon || truncatedText) {
+              output += "null";
+            } else {
+              throwColonExpected();
+            }
+          }
+          initial = false;
+        }
+        if (text2[i] === "}") {
+          output += "}";
+          i++;
+        } else {
+          output = insertBeforeLastWhitespace(output, "}");
+        }
+        return true;
+      }
+      return false;
+    }
+    function parseArray() {
+      if (text2[i] === "[") {
+        output += "[";
+        i++;
+        parseWhitespaceAndSkipComments();
+        if (skipCharacter(",")) {
+          parseWhitespaceAndSkipComments();
+        }
+        let initial = true;
+        while (i < text2.length && text2[i] !== "]") {
+          if (!initial) {
+            const processedComma2 = parseCharacter(",");
+            if (!processedComma2) {
+              output = insertBeforeLastWhitespace(output, ",");
+            }
+          }
+          skipEllipsis();
+          const processedValue = parseValue();
+          if (!processedValue) {
+            if (!initial) {
+              output = stripLastOccurrence(output, ",");
+            }
+            break;
+          }
+          initial = false;
+        }
+        if (text2[i] === "]") {
+          output += "]";
+          i++;
+        } else {
+          output = insertBeforeLastWhitespace(output, "]");
+        }
+        return true;
+      }
+      return false;
+    }
+    function parseNewlineDelimitedJSON() {
+      let initial = true;
+      let processedValue = true;
+      while (processedValue) {
+        if (!initial) {
+          const processedComma2 = parseCharacter(",");
+          if (!processedComma2) {
+            output = insertBeforeLastWhitespace(output, ",");
+          }
+        } else {
+          initial = false;
+        }
+        processedValue = parseValue();
+      }
+      if (!processedValue) {
+        output = stripLastOccurrence(output, ",");
+      }
+      output = `[
+${output}
+]`;
+    }
+    function parseString() {
+      let stopAtDelimiter = arguments.length > 0 && arguments[0] !== void 0 ? arguments[0] : false;
+      let stopAtIndex = arguments.length > 1 && arguments[1] !== void 0 ? arguments[1] : -1;
+      const skipEscapeChars = text2[i] === "\\";
+      if (skipEscapeChars) {
+        i++;
+        if (!isQuote(text2[i])) {
+          throwUnexpectedCharacter();
+        }
+      }
+      const openEntity = text2[i] === "&" ? matchHtmlEntity(text2.slice(i, i + maxHtmlEntityLength)) : null;
+      const openedByEntity = isDoubleQuoteEntity(openEntity) || isSingleQuoteEntity(openEntity);
+      if (isQuote(text2[i]) || openedByEntity) {
+        const isEndQuote = isDoubleQuote(text2[i]) ? isDoubleQuote : isSingleQuote(text2[i]) ? isSingleQuote : isSingleQuoteLike(text2[i]) ? isSingleQuoteLike : isDoubleQuoteLike;
+        const iBefore = i;
+        const oBefore = output.length;
+        let str = '"';
+        i += openedByEntity && openEntity ? openEntity.length : 1;
+        while (true) {
+          if (i >= text2.length) {
+            const iPrev = prevNonWhitespaceIndex(i - 1);
+            if (!stopAtDelimiter && isDelimiter(text2.charAt(iPrev))) {
+              i = iBefore;
+              output = output.substring(0, oBefore);
+              return parseString(true);
+            }
+            str = insertBeforeLastWhitespace(str, '"');
+            output += str;
+            return true;
+          }
+          if (i === stopAtIndex) {
+            str = insertBeforeLastWhitespace(str, '"');
+            output += str;
+            return true;
+          }
+          const entity = openedByEntity && text2[i] === "&" ? matchHtmlEntity(text2.slice(i, i + maxHtmlEntityLength)) : null;
+          const isEnd = entity && openEntity ? entity.char === openEntity.char : isEndQuote(text2[i]);
+          if (isEnd) {
+            const iQuote = i;
+            const oQuote = str.length;
+            str += '"';
+            i += entity ? entity.length : 1;
+            output += str;
+            parseWhitespaceAndSkipComments(false);
+            if (stopAtDelimiter || i >= text2.length || isDelimiter(text2[i]) && // only count the brackets inside the string when actually needed,
+            // i.e. when the quote is directly followed by a closing bracket
+            !isInsideUnclosedBracket(str, text2[i]) || isQuote(text2[i]) && !nextQuoteIsEndQuote(i) || isDigit(text2[i])) {
+              parseConcatenatedString();
+              return true;
+            }
+            if (text2[i] === "\\") {
+              throwUnexpectedCharacter();
+            }
+            const iPrevChar = prevNonWhitespaceIndex(iQuote - 1);
+            const prevChar = text2.charAt(iPrevChar);
+            if (prevChar === ",") {
+              i = iBefore;
+              output = output.substring(0, oBefore);
+              return parseString(false, iPrevChar);
+            }
+            if (isDelimiter(prevChar)) {
+              i = iBefore;
+              output = output.substring(0, oBefore);
+              return parseString(true);
+            }
+            output = output.substring(0, oBefore);
+            i = iQuote + (entity ? entity.length : 1);
+            str = `${str.substring(0, oQuote)}\\${str.substring(oQuote)}`;
+          } else if (stopAtDelimiter && isUnquotedStringDelimiter(text2[i])) {
+            if (text2[i - 1] === ":" && regexUrlStart.test(text2.substring(iBefore + 1, i + 2))) {
+              while (i < text2.length && regexUrlChar.test(text2[i])) {
+                str += text2[i];
+                i++;
+              }
+            }
+            str = insertBeforeLastWhitespace(str, '"');
+            output += str;
+            parseConcatenatedString();
+            return true;
+          } else if (entity) {
+            const char = entity.char;
+            if (char === '"') {
+              str += '\\"';
+            } else if (isControlCharacter(char)) {
+              str += controlCharacters[char];
+            } else {
+              str += char;
+            }
+            i += entity.length;
+          } else if (text2[i] === "\\") {
+            const char = text2.charAt(i + 1);
+            const escapeChar = escapeCharacters[char];
+            if (escapeChar !== void 0) {
+              str += text2.slice(i, i + 2);
+              i += 2;
+            } else if (char === "u") {
+              let j = 2;
+              while (j < 6 && isHex(text2[i + j])) {
+                j++;
+              }
+              if (j === 6) {
+                str += text2.slice(i, i + 6);
+                i += 6;
+              } else if (i + j >= text2.length) {
+                i = text2.length;
+              } else {
+                throwInvalidUnicodeCharacter();
+              }
+            } else if (char === "\n") {
+              str += "\\n";
+              i += 2;
+            } else {
+              str += char;
+              i += 2;
+            }
+          } else {
+            const char = text2.charAt(i);
+            if (char === '"' && text2[i - 1] !== "\\") {
+              str += `\\${char}`;
+              i++;
+            } else if (isControlCharacter(char)) {
+              str += controlCharacters[char];
+              i++;
+            } else {
+              if (!isValidStringCharacter(char)) {
+                throwInvalidCharacter(char);
+              }
+              str += char;
+              i++;
+            }
+          }
+          if (skipEscapeChars) {
+            skipEscapeCharacter();
+          }
+        }
+      }
+      return false;
+    }
+    function parseConcatenatedString() {
+      let processed2 = false;
+      parseWhitespaceAndSkipComments();
+      while (text2[i] === "+") {
+        processed2 = true;
+        i++;
+        parseWhitespaceAndSkipComments();
+        output = stripLastOccurrence(output, '"', true);
+        const start = output.length;
+        const parsedStr = parseString();
+        if (parsedStr) {
+          output = removeAtIndex(output, start, 1);
+        } else {
+          output = insertBeforeLastWhitespace(output, '"');
+        }
+      }
+      return processed2;
+    }
+    function parseNumber() {
+      const start = i;
+      let num = "";
+      let invalid = false;
+      if (text2[i] === "-") {
+        num += text2[i];
+        i++;
+        if (!isDigit(text2[i]) && atEndOfNumber()) {
+          num += "0";
+        }
+      }
+      if (text2[i] === "0" && isDigit(text2[i + 1])) {
+        invalid = true;
+      }
+      while (isDigit(text2[i])) {
+        num += text2[i];
+        i++;
+      }
+      if (text2[i] === ".") {
+        if (num === "" || num === "-") {
+          num += "0";
+        }
+        num += text2[i];
+        i++;
+        if (!isDigit(text2[i])) {
+          num += "0";
+        }
+        while (isDigit(text2[i])) {
+          num += text2[i];
+          i++;
+        }
+      }
+      if (i > start) {
+        if (text2[i] === "e" || text2[i] === "E") {
+          if (num === "-") {
+            invalid = true;
+          }
+          num += text2[i];
+          i++;
+          if (text2[i] === "-" || text2[i] === "+") {
+            num += text2[i];
+            i++;
+          }
+          if (!isDigit(text2[i])) {
+            num += "0";
+          }
+          while (isDigit(text2[i])) {
+            num += text2[i];
+            i++;
+          }
+        }
+        if (!atEndOfNumber()) {
+          i = start;
+          return false;
+        }
+        output += invalid ? `"${text2.substring(start, i)}"` : num;
+        return true;
+      }
+      return false;
+    }
+    function parseKeywords() {
+      return parseKeyword("true", "true") || parseKeyword("false", "false") || parseKeyword("null", "null") || // repair Python keywords True, False, None
+      parseKeyword("True", "true") || parseKeyword("False", "false") || parseKeyword("None", "null");
+    }
+    function parseKeyword(name, value) {
+      if (text2.slice(i, i + name.length) === name && !isFunctionNameChar(text2[i + name.length])) {
+        output += value;
+        i += name.length;
+        return true;
+      }
+      return false;
+    }
+    function parseUnquotedString(isKey) {
+      const start = i;
+      if (isFunctionNameCharStart(text2[i])) {
+        while (i < text2.length && isFunctionNameChar(text2[i])) {
+          i++;
+        }
+        let j = i;
+        while (isWhitespace(text2, j)) {
+          j++;
+        }
+        if (text2[j] === "(") {
+          i = j + 1;
+          parseValue();
+          if (text2[i] === ")") {
+            i++;
+            if (text2[i] === ";") {
+              i++;
+            }
+          }
+          return true;
+        }
+      }
+      while (i < text2.length && !isUnquotedStringDelimiter(text2[i]) && !isQuote(text2[i]) && (!isKey || text2[i] !== ":")) {
+        i++;
+      }
+      if (text2[i - 1] === ":" && regexUrlStart.test(text2.substring(start, i + 2))) {
+        while (i < text2.length && regexUrlChar.test(text2[i])) {
+          i++;
+        }
+      }
+      if (i > start) {
+        while (isWhitespace(text2, i - 1) && i > 0) {
+          i--;
+        }
+        const symbol = text2.slice(start, i);
+        output += symbol === "undefined" ? "null" : JSON.stringify(symbol);
+        if (text2[i] === '"') {
+          i++;
+        }
+        return true;
+      }
+    }
+    function parseRegex() {
+      if (text2[i] === "/") {
+        const start = i;
+        i++;
+        while (i < text2.length && (text2[i] !== "/" || text2[i - 1] === "\\")) {
+          i++;
+        }
+        i++;
+        output += JSON.stringify(text2.substring(start, i));
+        return true;
+      }
+    }
+    function prevNonWhitespaceIndex(start) {
+      let prev = start;
+      while (prev > 0 && isWhitespace(text2, prev)) {
+        prev--;
+      }
+      return prev;
+    }
+    function nextQuoteIsEndQuote(index) {
+      let next = index + 1;
+      while (next < text2.length && isWhitespace(text2, next)) {
+        next++;
+      }
+      return next >= text2.length || isDelimiter(text2[next]);
+    }
+    function atEndOfNumber() {
+      return i >= text2.length || isDelimiter(text2[i]) || isWhitespace(text2, i);
+    }
+    function throwInvalidCharacter(char) {
+      throw new JSONRepairError(`Invalid character ${JSON.stringify(char)}`, i);
+    }
+    function throwUnexpectedCharacter() {
+      throw new JSONRepairError(`Unexpected character ${JSON.stringify(text2[i])}`, i);
+    }
+    function throwUnexpectedEnd() {
+      throw new JSONRepairError("Unexpected end of json string", text2.length);
+    }
+    function throwObjectKeyExpected() {
+      throw new JSONRepairError("Object key expected", i);
+    }
+    function throwColonExpected() {
+      throw new JSONRepairError("Colon expected", i);
+    }
+    function throwInvalidUnicodeCharacter() {
+      const chars = text2.slice(i, i + 6);
+      throw new JSONRepairError(`Invalid unicode character "${chars}"`, i);
+    }
+  }
+  function atEndOfBlockComment(text2, i) {
+    return text2[i] === "*" && text2[i + 1] === "/";
+  }
+
+  // src/services/jsonText.ts
+  function fenced(raw) {
+    const trimmed = raw.trim();
+    const match = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    return (match?.[1] ?? trimmed).trim();
+  }
+  function objectSlice(body) {
+    const start = body.indexOf("{");
+    const end = body.lastIndexOf("}");
+    if (start >= 0 && end > start) return body.slice(start, end + 1);
+    return body;
+  }
+  function parseModelJson(raw) {
+    const slice = objectSlice(fenced(raw));
+    if (!slice.includes("{")) return { ok: false, error: "No JSON object found in the model output." };
+    try {
+      return { ok: true, value: JSON.parse(slice), text: slice, repaired: false };
+    } catch (strictError) {
+      try {
+        const repaired = jsonrepair(slice);
+        return { ok: true, value: JSON.parse(repaired), text: repaired, repaired: true };
+      } catch {
+        const message = strictError instanceof Error ? strictError.message : "The JSON could not be parsed.";
+        return { ok: false, error: message };
+      }
+    }
+  }
+
   // src/services/validateReport.ts
   function isRecord2(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
   }
   function extractJsonValue(raw) {
-    const trimmed = raw.trim();
-    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-    const body = (fenced?.[1] ?? trimmed).trim();
-    try {
-      return JSON.parse(body);
-    } catch {
-      const start = body.indexOf("{");
-      const end = body.lastIndexOf("}");
-      if (start >= 0 && end > start) return JSON.parse(body.slice(start, end + 1));
-      throw new Error("No JSON object found in the model output.");
-    }
+    const parsed2 = parseModelJson(raw);
+    if (!parsed2.ok) throw new Error(parsed2.error);
+    return parsed2.value;
   }
   function clip2(value, max) {
     return typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -2183,6 +2965,10 @@ ${parsed2.errors.join("\n")}`);
       if (model.result.defendedOverall != null) {
         el(card, "p", `${model.result.defendedLabel || "after author defence"} ${Math.round(model.result.defendedOverall)} out of 100`, "score");
       }
+      if (model.result.notice) {
+        const note = el(card, "p", model.result.notice, "mismatch");
+        note.id = "text-page-note";
+      }
       if (model.result.mismatch) el(card, "p", model.result.mismatch, "mismatch");
       el(card, "p", model.result.summary);
       if (model.result.scores && model.result.scores.length > 0) {
@@ -2513,7 +3299,8 @@ ${JSON.stringify(report)}`),
       defendedLabel: review.defended?.label ?? "",
       model: review.modelId,
       scores: review.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score })),
-      feedback: feedback ? labels.flatMap((item) => feedback[item.key] ? [{ label: item.label, text: feedback[item.key] }] : []) : []
+      feedback: feedback ? labels.map((item) => ({ label: item.label, text: feedback[item.key]?.trim() || "none" })) : [],
+      notice: review.sourceNote ?? ""
     };
   }
   async function textFromPdfDocument(pdf, pageCap) {
@@ -2942,10 +3729,10 @@ ${JSON.stringify(report)}`),
       return;
     }
     if (message.type === "air-web-chat-result") {
-      void finish(message.text ?? "", message.defendedText ?? null, message.transcript ?? [], Boolean(message.stopped), message.chatModel);
+      void finish(message.text ?? "", message.defendedText ?? null, message.transcript ?? [], Boolean(message.stopped), message.chatModel, message.notice);
     }
   });
-  async function finish(raw, defendedRaw, transcript, stopped, chatModel) {
+  async function finish(raw, defendedRaw, transcript, stopped, chatModel, notice) {
     const accepted = acceptWebChatResult(raw, readingCriteria(officialCriteria, profileId, false));
     if (!accepted.ok) {
       busy = false;
@@ -2967,6 +3754,7 @@ ${JSON.stringify(report)}`),
     if (defended?.ok) stored.defended = defended.defended;
     const provider = webChatProvider(providerId);
     stored.modelId = webChatModelId(provider?.modelLabel ?? providerId, chatModel);
+    if (notice?.trim()) stored.sourceNote = notice.trim();
     reviews = appendResult(reviews, stored);
     await storageSet(RESULT_STORAGE_KEY, reviews);
     busy = false;

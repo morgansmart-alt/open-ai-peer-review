@@ -6,6 +6,7 @@ import type { ZenodoRecord } from "../zenodo.ts"
 import { acceptWebChatResult, draftWebChatReview } from "./accept.ts"
 import { planDelivery } from "./deliver.ts"
 import { buildWebChatPacket } from "./packet.ts"
+import { parseModelJson, settleChatJson } from "../jsonText.ts"
 import {
   couldNotReadPaper,
   formatPaperText,
@@ -15,7 +16,11 @@ import {
   manualPasteModel,
   paperTextRecordIdFromPath,
   paperTextUrl,
+  TEXT_PAGE_NOTE,
+  textPageHasPaper,
+  textPageUntrusted,
 } from "./paperText.ts"
+import { resultCard } from "./standalone.ts"
 import { submissionFromReview } from "./submission.ts"
 
 const record = {
@@ -118,6 +123,46 @@ describe("public paper text", () => {
   })
 })
 
+describe("json repair and the text page check", () => {
+  it("repairs a missing comma and asks once when repair is not enough", async () => {
+    const missingComma = '{"scores":[{"criterionId":"a","score":80} {"criterionId":"b","score":80}],"overallScore":80}'
+    const repaired = parseModelJson(missingComma)
+    expect(repaired.ok).toBe(true)
+    if (!repaired.ok) return
+    expect(repaired.repaired).toBe(true)
+    expect(repaired.value).toMatchObject({ overallScore: 80 })
+    const trailing = parseModelJson('{"overallScore":80,}')
+    expect(trailing.ok && trailing.repaired).toBe(true)
+    const notes: string[] = []
+    const asked: string[] = []
+    const settled = await settleChatJson(
+      "this is not json",
+      async (prompt) => {
+        asked.push(prompt)
+        return '{"overallScore":84}'
+      },
+      (note) => notes.push(note),
+    )
+    expect(asked).toHaveLength(1)
+    expect(asked[0]).toContain("Reply again with only the corrected JSON object.")
+    expect(notes.join(" ")).toContain("Asked once for corrected JSON.")
+    expect(settled.reasked).toBe(true)
+    expect(settled.text).toContain("84")
+  })
+
+  it("treats a 404 page as down and a scored reply that cites that 404 as untrusted", () => {
+    const live = `${"A public paper paragraph. ".repeat(30)}\nZenodo record: https://zenodo.org/records/22826\nVersion DOI: https://doi.org/10.5281/zenodo.22826`
+    expect(textPageHasPaper(200, live)).toBe(true)
+    expect(textPageHasPaper(404, live)).toBe(false)
+    expect(textPageHasPaper(200, '<div id="root"></div>')).toBe(false)
+    const silent = '{"overallScore":84,"summary":"https://morgansmart-alt.github.io/open-ai-peer-review/paper/22826/text returned 404, so the arXiv copy was used.","air_feedback":{"missingContext":"The text page URL returned 404.","scoringProcess":"I scored the arXiv text."}}'
+    expect(couldNotReadPaper(silent)).toBe(false)
+    expect(textPageUntrusted(silent)).toBe(true)
+    expect(textPageUntrusted('{"overallScore":84,"summary":"The record is sound."}')).toBe(false)
+    expect(TEXT_PAGE_NOTE).toBe("text page unreachable, model used other sources")
+  })
+})
+
 describe("manual paste", () => {
   it("stores an uncalibrated score for manual paste and a typed or unknown model", () => {
     expect(manualPasteModel("  ")).toBe("unknown")
@@ -178,5 +223,10 @@ describe("manual paste", () => {
     expect(built.submission.model).toBe("unknown")
     expect(built.submission.tier).toBe("uncalibrated web-chat")
     expect(built.submission.overallScore).toBe(80)
+    stored.report.airFeedback = { scoringProcess: "I kept the weighted total." }
+    const card = resultCard(stored)
+    expect(card.feedback.map((item) => item.label)).toContain("Scoring process")
+    expect(card.feedback.find((item) => item.label === "Scoring process")?.text).toContain("weighted total")
+    expect(card.feedback.find((item) => item.label === "Criteria")?.text).toBe("none")
   })
 })

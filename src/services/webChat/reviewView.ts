@@ -13,6 +13,7 @@ export interface ReviewCard {
   scores?: { criterionId: string; score: number }[]
   feedback?: { label: string; text: string }[]
   model?: string
+  notice?: string
 }
 
 export interface HistoryItem {
@@ -241,6 +242,10 @@ export function renderReviewApp(root: HTMLElement, model: ReviewModel, actions: 
     }
     if (model.result.defendedOverall != null) {
       el(card, "p", `${model.result.defendedLabel || "after author defence"} ${Math.round(model.result.defendedOverall)} out of 100`, "score")
+    }
+    if (model.result.notice) {
+      const note = el(card, "p", model.result.notice, "mismatch")
+      note.id = "text-page-note"
     }
     if (model.result.mismatch) el(card, "p", model.result.mismatch, "mismatch")
     el(card, "p", model.result.summary)

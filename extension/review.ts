@@ -256,7 +256,7 @@ async function run(): Promise<void> {
   }
 }
 
-chrome.runtime.onMessage.addListener((message: { source?: string; type?: string; requestId?: string; text?: string; message?: string; defendedText?: string | null; transcript?: { round: number; kind: string; text: string }[]; stopped?: boolean; chatModel?: string }) => {
+chrome.runtime.onMessage.addListener((message: { source?: string; type?: string; requestId?: string; text?: string; message?: string; defendedText?: string | null; transcript?: { round: number; kind: string; text: string }[]; stopped?: boolean; chatModel?: string; notice?: string }) => {
   if (!message || message.source !== EXTENSION_SOURCE || message.requestId !== requestId) return
   if (message.type === "air-web-chat-progress" && message.message) {
     status = message.message
@@ -271,11 +271,11 @@ chrome.runtime.onMessage.addListener((message: { source?: string; type?: string;
     return
   }
   if (message.type === "air-web-chat-result") {
-    void finish(message.text ?? "", message.defendedText ?? null, message.transcript ?? [], Boolean(message.stopped), message.chatModel)
+    void finish(message.text ?? "", message.defendedText ?? null, message.transcript ?? [], Boolean(message.stopped), message.chatModel, message.notice)
   }
 })
 
-async function finish(raw: string, defendedRaw: string | null, transcript: { round: number; kind: string; text: string }[], stopped: boolean, chatModel?: string): Promise<void> {
+async function finish(raw: string, defendedRaw: string | null, transcript: { round: number; kind: string; text: string }[], stopped: boolean, chatModel?: string, notice?: string): Promise<void> {
   const accepted = acceptWebChatResult(raw, readingCriteria(officialCriteria, profileId, false))
   if (!accepted.ok) {
     busy = false
@@ -299,6 +299,7 @@ async function finish(raw: string, defendedRaw: string | null, transcript: { rou
   if (defended?.ok) stored.defended = defended.defended
   const provider = webChatProvider(providerId)
   stored.modelId = webChatModelId(provider?.modelLabel ?? providerId, chatModel)
+  if (notice?.trim()) stored.sourceNote = notice.trim()
   reviews = appendResult(reviews, stored)
   await storageSet(RESULT_STORAGE_KEY, reviews)
   busy = false

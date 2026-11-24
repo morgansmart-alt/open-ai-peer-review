@@ -215,6 +215,8 @@ export interface StoredReview {
   tier?: "free-screening" | "free-web-chat" | "uncalibrated web-chat" | "in-depth" | "demo" | "community-ai"
   /** Set when the reading was sent from the browser extension or published as a web-chat score. */
   source?: "web-chat extension"
+  /** Shown on the score card when the text page was down and the first reply used another source. */
+  sourceNote?: string
   /** Public paper address. Private chat links are never stored here. */
   paperUrl?: string
   /** Second score after Defend my paper. The blind overallScore stays the displayed score. */

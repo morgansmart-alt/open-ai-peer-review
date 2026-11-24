@@ -439,13 +439,52 @@ describe("live chat composers", () => {
       sent.push(text)
       ;(document.getElementById("box") as HTMLTextAreaElement).value = ""
       document.getElementById("reply")!.textContent = text.includes("public text page")
-        ? "I could not access the URL."
+        ? '{"overallScore":84,"summary":"https://morgansmart-alt.github.io/open-ai-peer-review/paper/1/text returned 404 so another source was used."}'
         : text.includes("Do not review yet.")
           ? `RECEIVED ${sent.length}`
           : '{"overallScore":86}'
     })
     const packet = buildWebChatPacket({
       requestId: "link-fallback",
+      providerId: "grok",
+      criteria: officialCriteria,
+      record,
+      documents: [{ filename: "paper.md", text: "UNIQUEYIELD in one season." }],
+      useTextPage: true,
+    })
+    const livePage = `${"The public paper text is long enough to count as the record. ".repeat(12)}\nZenodo record: https://zenodo.org/records/1\nVersion DOI: https://doi.org/10.5281/zenodo.1`
+    const result = await runTurn(document, { ...provider, fileUpload: false, pasteLimit: 200_000 }, packet, {
+      aborted: () => false,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      pollMs: 5,
+      stableMs: 0,
+      stepTimeoutMs: 2000,
+      replyStartTimeoutMs: 400,
+      submitStableMs: 0,
+      submitReadyMs: 20,
+      sendVerifyMs: 20,
+      loadTextPage: async () => ({ status: 200, body: livePage }),
+    })
+    expect(sent[0]).toContain("/paper/1/text")
+    expect(sent[0]).not.toContain("UNIQUEYIELD")
+    expect(sent[1]).toContain("UNIQUEYIELD")
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.notice).toContain("text page unreachable, model used other sources")
+  })
+
+  it("pastes the paper when the public text page is not available", async () => {
+    document.body.innerHTML = `<main><textarea id="box" aria-label="Message Grok"></textarea><button id="send" type="submit" aria-label="Send">Send</button><div id="reply" class="assistant-message"></div></main>`
+    const provider = webChatProvider("grok")
+    if (!provider) throw new Error("missing grok")
+    const sent: string[] = []
+    document.getElementById("send")?.addEventListener("click", () => {
+      const text = (document.getElementById("box") as HTMLTextAreaElement).value
+      sent.push(text)
+      ;(document.getElementById("box") as HTMLTextAreaElement).value = ""
+      document.getElementById("reply")!.textContent = text.includes("Do not review yet.") ? `RECEIVED ${sent.length}` : '{"overallScore":86}'
+    })
+    const packet = buildWebChatPacket({
+      requestId: "link-down",
       providerId: "grok",
       criteria: officialCriteria,
       record,
@@ -462,10 +501,10 @@ describe("live chat composers", () => {
       submitStableMs: 0,
       submitReadyMs: 20,
       sendVerifyMs: 20,
+      loadTextPage: async () => ({ status: 404, body: "Not Found" }),
     })
-    expect(sent[0]).toContain("/paper/1/text")
-    expect(sent[0]).not.toContain("UNIQUEYIELD")
-    expect(sent[1]).toContain("UNIQUEYIELD")
+    expect(sent[0]).not.toContain("public text page")
+    expect(sent.some((text) => text.includes("UNIQUEYIELD"))).toBe(true)
     expect(result.ok).toBe(true)
   })
 

@@ -115,6 +115,32 @@ export function couldNotReadPaper(reply: string): boolean {
   return ACCESS_FAILURE.test(reply)
 }
 
+export const TEXT_PAGE_NOTE = "text page unreachable, model used other sources"
+
+/** A fetched page is usable only when the host returns 200 and the paper text is in the body. */
+export function textPageHasPaper(status: number, body: string): boolean {
+  if (status !== 200) return false
+  if (/<div id=["']root["']>\s*<\/div>/.test(body) && !/Zenodo record:/.test(body)) return false
+  const text = body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()
+  if (text.length < 400) return false
+  return /Zenodo record:|Version DOI:/.test(text)
+}
+
+function missingContextText(reply: string): string {
+  const match = reply.match(/"missingContext"\s*:\s*"((?:\\.|[^"\\])*)"/i)
+  if (!match?.[1]) return ""
+  return match[1].replace(/\\"/g, '"').replace(/\\n/g, " ")
+}
+
+/** A finished score that says the text page failed, including a note buried in air_feedback. */
+export function textPageUntrusted(reply: string): boolean {
+  const context = missingContextText(reply)
+  const failed = /404|could not open|couldn't open|cannot open|can't open|unable to (?:open|access|reach)|page not found|not reachable|failed to (?:open|load|fetch)|returned 404/i
+  const aboutPage = /paper\/[^/\s"']+\/text|open-ai-peer-review|text page|github\.io/i
+  if (context && failed.test(context) && (aboutPage.test(context) || /url|link|page/i.test(context))) return true
+  return aboutPage.test(reply) && failed.test(reply)
+}
+
 export function manualPasteModel(typed: string): string {
   const clean = typed.trim()
   return clean || "unknown"
