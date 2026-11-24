@@ -63,7 +63,7 @@ function zenodoRecordsUrl(id: string | undefined): string | null {
  * A local upload with no Zenodo id returns an empty string.
  */
 export function sourceRecordBlock(record: ZenodoRecord): string {
-  const versionUrl = zenodoRecordsUrl(record.id) || (record.htmlUrl?.startsWith("https://zenodo.org/records/") ? record.htmlUrl : "")
+  const versionUrl = zenodoRecordsUrl(record.id) || ((record.htmlUrl ?? "").startsWith("https://zenodo.org/records/") ? record.htmlUrl : "")
   const doiUrl = publicDoiUrl(record.doi)
   const conceptUrl = zenodoRecordsUrl(record.conceptId)
   const conceptDoiUrl = publicDoiUrl(record.conceptDoi)

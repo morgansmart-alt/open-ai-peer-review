@@ -11,7 +11,10 @@ import type { AttachmentMeta, AuthorRole, IssueThread, NodeSubmission, StoredRev
 import { isCommunityAiRecord } from "../domain/moltbook.ts"
 import { carryForwardWorkList, isHumanReview, mergeLineage, publicationPlainText, scoreLineage, settleCheckResult, stableVersionId } from "../domain/versions.ts"
 import { useAir } from "../context/AirContext.tsx"
+import { kindLabel } from "../components/commentLabel.ts"
+import { CommentList } from "../components/CommentList.tsx"
 import { ReportView } from "../components/ReportView.tsx"
+import { ScoreCard } from "../components/ScoreCard.tsx"
 import { ReviewWorkspace } from "../components/ReviewWorkspace.tsx"
 import { MoltbookPanel } from "../components/MoltbookPanel.tsx"
 import { VersionBar } from "../components/VersionBar.tsx"
@@ -97,7 +100,22 @@ export function PaperPage() {
     }
   }, [lookupId, sample])
 
+  useEffect(() => {
+    if (!record) return
+    const previous = document.title
+    document.title = `${record.title} | AIR`
+    return () => {
+      document.title = previous
+    }
+  }, [record])
+
   const reviews = record ? air.db.reviews.filter((review) => review.recordId === record.id || review.doi === record.doi) : []
+  const cardReviews = record
+    ? [
+        ...reviews,
+        ...(air.db.webChat ?? []).filter((item) => (item.recordId === record.id || item.doi === record.doi) && !reviews.some((review) => review.id === item.id)),
+      ]
+    : []
   const aiReviews = reviews.filter((review) => !isHumanReview(review) && !isCommunityAiRecord(review))
   const humanReviews = reviews.filter((review) => isHumanReview(review) && !isCommunityAiRecord(review))
   const ranking = buildRanking(air.db)
@@ -237,8 +255,12 @@ export function PaperPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
-      {!record && !error && <p className="text-sm text-ink-soft">Loading the record…</p>}
-      {error && <Banner tone="error">{error}</Banner>}
+      {!record && !error && (
+        <p role="status" className="text-sm text-ink-soft">
+          Loading the record…
+        </p>
+      )}
+      {error && <Banner tone="error">This record could not be opened. {error} Check the link, or try again in a moment.</Banner>}
       {record && (
         <>
           {record.htmlUrl ? (
@@ -256,6 +278,28 @@ export function PaperPage() {
             {record.creators.map((creator) => creator.name).join(", ") || "Creator unlisted"} · {record.license || "license unlisted"} ·{" "}
             {formatRecordStamp(record)}
           </p>
+          <ScoreCard
+            doi={record.doi}
+            zenodoUrl={record.htmlUrl || undefined}
+            criteria={air.criteria}
+            reviews={cardReviews}
+            names={Object.fromEntries(air.profiles.map((profile) => [profile.id, profile.name]))}
+            panelMedian={row?.panelMedian ?? null}
+            humanMedian={row?.humanMedian ?? null}
+            lineage={lineage}
+            comments={openedHere.flatMap((issue) =>
+              issue.rounds
+                .filter((round) => round.kind === "comment" || round.kind === "rebuttal" || round.kind === "counter")
+                .map((round) => ({
+                  id: round.id,
+                  kindLabel: kindLabel(round.kind),
+                  author: round.authorLabel,
+                  role: roleLabel(round.authorRole),
+                  body: round.body,
+                  when: formatWhen(round.createdAt),
+                })),
+            )}
+          />
           <p data-testid="tier-ladder" className="mt-3 text-sm">
             Tier: {ladderTier(aiReviews, air.db.nodes.filter((node) => aiReviews.some((review) => review.id === node.reviewId))) === "corroborated"
               ? "Independently corroborated (2+ models agree)"
@@ -693,26 +737,22 @@ function IssueCard({
       </summary>
       <div className="mt-3 space-y-2 text-sm">
         {issue.quotedPassage && <blockquote className="border-l-2 border-line pl-3">{issue.quotedPassage}</blockquote>}
-        <ol className="space-y-2">
-          {issue.rounds.map((round) => (
-            <li key={round.id} className="rounded-xl bg-paper px-3 py-2">
-              <span className="text-xs text-ink-soft">
-                {round.kind} · {round.authorLabel} · {roleLabel(round.authorRole)}
-                {round.result ? ` · ${round.result}` : ""}
-                {round.recordVersionChecked ? ` · checked ${formatVersionLabel(round.recordVersionChecked)}` : ""}
-              </span>
-              <p>{round.body}</p>
-              {publicContextCount(round.privateContextCount) && (
-                <p className="text-xs text-ink-soft">{publicContextCount(round.privateContextCount)}. Not published.</p>
-              )}
-              {round.citations.map((citation) => (
-                <blockquote key={citation.quote} className="mt-1 border-l-2 border-teal/30 pl-2 text-ink-soft">
-                  {citation.quote}
-                </blockquote>
-              ))}
-            </li>
-          ))}
-        </ol>
+        <CommentList
+          comments={issue.rounds.map((round) => ({
+            id: round.id,
+            kindLabel: kindLabel(round.kind),
+            author: round.authorLabel,
+            role: roleLabel(round.authorRole),
+            body: round.body,
+            when: formatWhen(round.createdAt),
+            result: [round.result?.replaceAll("_", " "), round.recordVersionChecked ? `checked ${formatVersionLabel(round.recordVersionChecked)}` : ""]
+              .filter(Boolean)
+              .join(" · "),
+            quotes: round.citations.map((citation) => citation.quote),
+            privateNote: publicContextCount(round.privateContextCount) ? `${publicContextCount(round.privateContextCount)}. Not published.` : undefined,
+          }))}
+          empty="No rounds on this issue yet."
+        />
         {message && <p className="text-ink-soft">{message}</p>}
         <div className="no-print flex flex-wrap gap-2">
           <button type="button" className={btnQuiet} disabled={busy || !sameVersionCheck} onClick={() => onRecheck(record.id)}>

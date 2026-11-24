@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { Link } from "react-router-dom"
 import { parseCriteria } from "../domain/criteria.ts"
 import { applyCriterionProfile, CRITERION_PROFILES, PROFILE_RANKING_NOTE } from "../domain/profiles.ts"
 import { officialCriteria } from "../domain/officialCriteria.ts"
@@ -13,7 +14,11 @@ export function CriteriaPage() {
     <div className="mx-auto max-w-3xl px-4 py-8">
       <h1 className="font-serif text-4xl">{officialCriteria.name}</h1>
       <p className="mt-2 text-ink-soft">
-        Version {officialCriteria.version} is the default for a new reading. AIR v0.1 remains in the repo at criteria/air-v0.1.json, and readings made with it stay valid and labelled. A session can load a different file. Custom criteria are stored with the reading and left off the ranked board.
+        Version {officialCriteria.version} is the default for a new reading. AIR v0.1 remains in the repo at criteria/air-v0.1.json, and readings made with it stay valid and labelled. A session can load a different file. Custom criteria are stored with the reading and left off the ranked board.{" "}
+        <Link className="underline" to="/guide">
+          The same criteria, in plain words
+        </Link>
+        .
       </p>
       {air.customCriteria && (
         <div className="mt-4">

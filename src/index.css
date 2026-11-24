@@ -10,7 +10,7 @@
   --color-line: #d9d0c1;
   --color-teal: #0f5f5b;
   --color-teal-deep: #0c3f3c;
-  --color-gold: #8a5a16;
+  --color-gold: #6b420c;
   --color-good: #1d6b45;
   --color-bad: #8d3030;
 }
@@ -46,10 +46,18 @@ body {
     var(--color-paper);
   color: var(--color-ink);
   font-family: var(--font-sans);
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3 {
+  scroll-margin-top: 5rem;
+  text-wrap: balance;
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-teal);
+  outline: 2px solid var(--color-gold);
   outline-offset: 3px;
 }
 
@@ -76,7 +84,48 @@ body {
 
 .sticky-col {
   position: sticky;
-  background: #f7f3eb;
+  background: var(--color-paper);
+}
+
+.surface {
+  border: 1px solid var(--color-line);
+  border-radius: 1rem;
+  background: color-mix(in srgb, white 62%, var(--color-paper));
+}
+
+.score-track {
+  height: 0.45rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-paper-deep);
+}
+
+.score-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--color-teal);
+}
+
+html[data-theme="dark"] .surface {
+  background: var(--color-paper-deep);
+}
+
+html[data-theme="dark"] .bg-white\/40,
+html[data-theme="dark"] .bg-white\/50,
+html[data-theme="dark"] .bg-white\/55,
+html[data-theme="dark"] .bg-white\/60,
+html[data-theme="dark"] .bg-white\/70,
+html[data-theme="dark"] .bg-white\/80 {
+  background-color: var(--color-paper-deep);
+}
+
+html[data-theme="dark"] .hover\:bg-white\/70:hover {
+  background-color: rgb(255 255 255 / 6%);
+}
+
+html[data-theme="dark"] ::selection {
+  background: #1d4f4b;
+  color: var(--color-ink);
 }
 
 .file-fieldset {

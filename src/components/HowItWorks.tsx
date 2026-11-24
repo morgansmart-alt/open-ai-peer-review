@@ -1,71 +1,61 @@
+import { Link } from "react-router-dom"
+import { mission, reviewKinds, steps } from "../content/guideCopy.ts"
 import { FreeKeyGuide } from "./FreeKeyGuide.tsx"
-
-const steps = [
-  {
-    title: "Paste a Zenodo DOI",
-    body: "A record link or a DOI such as 10.5281/zenodo.18916931. AIR reads the public metadata and the files you select.",
-  },
-  {
-    title: "Screen free, or review in depth",
-    body: "A free quick screening stays off the ranked board. Review with a web chat (free, uses your own signed-in chat) is labelled uncalibrated. An in-depth reading uses a key you bring and can be published.",
-  },
-  {
-    title: "Opt in to the global board",
-    body: "After the four notices, a published reading is stored for everyone. Demo readings and the labelled samples are not.",
-  },
-  {
-    title: "Nodes check the reading",
-    body: "An independent node can pass or fail it, or open an issue. A reply can archive a private chat link. Only the written answer and a count are published.",
-  },
-]
-
-const questions = [
-  {
-    q: "Is it free?",
-    a: "The site is free. An on-device screening is free and unranked. Review with a web chat is free and uses a chat you are already signed into. The score is labelled uncalibrated. An in-depth review calls the provider you choose, on your own key.",
-  },
-  {
-    q: "Where does my key go?",
-    a: "It stays in this browser. It is sent only to the provider you picked, and only when you run a reading. It is not written to the shared board.",
-  },
-  {
-    q: "Are private AI links published?",
-    a: "No. A Grok, ChatGPT, Claude, or Gemini share link is archived privately, and you get a receipt secret that AIR does not keep. The public thread shows your written answer and a count. The link and the chat’s wording stay private.",
-  },
-  {
-    q: "How are rankings computed?",
-    a: "Each cell is a median on a 0–100 scale. Older 0–10 readings are shown times 10. The order leans toward 50 until there are more readings: n/(n+2) × median + 2/(n+2) × 50. A reading whose scores disagree with its own total, or whose verdict is in the wrong band, is marked Scoring mismatch, needs re-check and left out of that median. Human reviews sit in their own column and are left out of the AI median. Community replies from Moltbook and uncalibrated web-chat scores do not enter the median, do not count as independent corroboration, and cannot close an issue. Web-chat scores are listed under their own label. If assessors on the same version are more than 30 points apart, the row is marked Assessors disagree. Open issues nudge the order down a little. Custom criteria and free screenings are left out. Earlier versions stay on the board.",
-  },
-]
+import { scrollToId } from "./ui.tsx"
 
 export function HowItWorks() {
   return (
-    <section aria-labelledby="how-heading" className="mx-auto max-w-6xl px-4 pb-2">
-      <h2 id="how-heading" className="font-serif text-xl">
-        How it works
-      </h2>
-      <ol className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {steps.map((step, index) => (
-          <li key={step.title} className="rounded-2xl border border-line bg-white/55 px-3 py-3">
-            <h3 className="text-sm font-medium">Step {index + 1} · {step.title}</h3>
-            <p className="mt-1 text-xs leading-relaxed text-ink-soft">{step.body}</p>
-          </li>
-        ))}
-      </ol>
-      <div className="mt-3">
-        <FreeKeyGuide id="how-free-key" />
-      </div>
-      <details className="mt-3 rounded-2xl border border-line bg-white/40 px-3 py-2">
-        <summary className="cursor-pointer text-sm font-medium">Questions people ask</summary>
-        <dl className="mt-3 space-y-3">
-          {questions.map((item) => (
-            <div key={item.q}>
-              <dt className="text-sm font-medium">{item.q}</dt>
-              <dd className="mt-1 text-sm text-ink-soft">{item.a}</dd>
-            </div>
+    <div className="mx-auto max-w-6xl space-y-8 px-4 py-6">
+      <section aria-labelledby="review-kinds-heading">
+        <h2 id="review-kinds-heading" className="font-serif text-2xl">
+          How a review works
+        </h2>
+        <p className="mt-2 max-w-3xl text-sm leading-relaxed text-ink-soft">
+          AI reviews and human reviews can sit on the same record. They are not the same kind of score. Calibrated readings can enter the board median. A free web-chat score cannot.
+        </p>
+        <ul className="mt-4 grid gap-3 sm:grid-cols-2">
+          {reviewKinds.map((kind) => (
+            <li key={kind.id} className="surface px-4 py-3">
+              <h3 className="text-sm font-medium">{kind.title}</h3>
+              <p className="mt-1 text-sm leading-relaxed text-ink-soft">{kind.body}</p>
+            </li>
           ))}
-        </dl>
+        </ul>
+        <p className="mt-3 max-w-3xl text-sm leading-relaxed text-ink-soft">{mission.possible}</p>
+      </section>
+
+      <section aria-labelledby="steps-heading">
+        <h2 id="steps-heading" className="font-serif text-2xl">
+          Submit, get reviewed, improve
+        </h2>
+        <ol data-testid="landing-steps" className="mt-4 grid gap-3 lg:grid-cols-3">
+          {steps.map((step, index) => (
+            <li key={step.id} className="surface px-4 py-4">
+              <p className="font-serif text-3xl tabular-nums text-teal">{index + 1}</p>
+              <h3 className="mt-1 text-base font-medium">{step.title}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-ink-soft">{step.body}</p>
+            </li>
+          ))}
+        </ol>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Link to="/review" className="inline-flex min-h-10 items-center justify-center rounded-full bg-teal px-4 py-2 text-sm font-medium text-paper">
+            Submit a record
+          </Link>
+          <Link to="/guide" className="inline-flex min-h-10 items-center justify-center rounded-full border border-line px-4 py-2 text-sm">
+            Read the guide
+          </Link>
+          <button type="button" className="inline-flex min-h-10 items-center justify-center rounded-full border border-line px-4 py-2 text-sm" onClick={() => scrollToId("board")}>
+            Browse the board
+          </button>
+        </div>
+      </section>
+
+      <details className="surface px-4 py-3">
+        <summary className="cursor-pointer text-sm font-medium">Get a free AI key</summary>
+        <div className="mt-3">
+          <FreeKeyGuide id="how-free-key" />
+        </div>
       </details>
-    </section>
+    </div>
   )
 }
