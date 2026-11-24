@@ -273,17 +273,74 @@ export function zenodoHttpMessage(status: number, access?: ZenodoAccess | null, 
   return kind === "file" ? `The file download failed (${status}).` : `Zenodo returned ${status} for that record.`
 }
 
+/** Browser fetch forbids User-Agent. Deno defines window, so that alone is not a browser. */
+export function zenodoRunsInBrowser(): boolean {
+  const runtime = globalThis as { Deno?: unknown; window?: unknown }
+  if (typeof runtime.Deno !== "undefined") return false
+  return typeof runtime.window !== "undefined"
+}
+
 /**
  * Accept is a CORS-safelisted header. User-Agent is forbidden in browser fetch,
  * so it is sent only where the runtime allows it and cannot trigger a preflight.
  */
-export function zenodoClientHeaders(kind: "json" | "bytes"): Record<string, string> {
+export function zenodoClientHeaders(kind: "json" | "bytes" | "html"): Record<string, string> {
   const headers: Record<string, string> = {}
   if (kind === "json") headers.Accept = "application/json"
-  if (typeof window === "undefined") {
+  if (kind === "html") headers.Accept = "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8"
+  if (!zenodoRunsInBrowser()) {
     headers["User-Agent"] = "open-ai-peer-review (https://github.com/morgansmart-alt/open-ai-peer-review)"
+    if (!headers.Accept) headers.Accept = "*/*"
   }
   return headers
+}
+
+/** API record, JSON export, then the public record page. Zenodo blocks some hosts on only one of these. */
+export function zenodoRecordSources(recordId: string): { url: string; kind: "json" | "html" }[] {
+  const id = encodeURIComponent(recordId.trim())
+  return [
+    { url: `https://zenodo.org/api/records/${id}`, kind: "json" },
+    { url: `https://zenodo.org/records/${id}/export/json`, kind: "json" },
+    { url: `https://zenodo.org/records/${id}`, kind: "html" },
+  ]
+}
+
+function metaContent(html: string, name: string): string {
+  const match = html.match(new RegExp(`<meta[^>]+name=["']${name}["'][^>]+content=["']([^"']*)["']`, "i"))
+    ?? html.match(new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]+name=["']${name}["']`, "i"))
+  return match?.[1]?.replace(/&amp;/g, "&").replace(/&quot;/g, '"').trim() ?? ""
+}
+
+/** Citation metadata from a Zenodo record page, when the JSON API refuses the host. */
+export function recordFromZenodoPage(html: string, recordId: string): ZenodoRecord | null {
+  const blocks = [...html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)]
+  for (const block of blocks) {
+    try {
+      const data = JSON.parse(block[1] ?? "") as unknown
+      const record = asRecord(data)
+      if (record && (text(record.id) || asRecord(record.metadata))) return normalizeZenodoRecord(record)
+    } catch {
+      // The next script, or the citation tags, may still be readable.
+    }
+  }
+  const title = metaContent(html, "citation_title")
+  if (!title) return null
+  const authors = [...html.matchAll(/<meta[^>]+name=["']citation_author["'][^>]+content=["']([^"']*)["']/gi)].map((match) => match[1] ?? "").filter(Boolean)
+  const doi = metaContent(html, "citation_doi") || `10.5281/zenodo.${recordId}`
+  const pdf = metaContent(html, "citation_pdf_url")
+  return normalizeZenodoRecord({
+    id: recordId,
+    doi,
+    metadata: {
+      title,
+      description: metaContent(html, "citation_abstract") || metaContent(html, "description"),
+      publication_date: metaContent(html, "citation_publication_date"),
+      access_right: "open",
+      creators: authors.map((name) => ({ name })),
+    },
+    files: pdf ? [{ key: pdf.split("/").pop() || "paper.pdf", size: 0, links: { self: pdf } }] : [],
+    links: { self_html: `https://zenodo.org/records/${recordId}` },
+  })
 }
 
 function pause(ms: number): Promise<void> {
@@ -291,7 +348,7 @@ function pause(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-export async function fetchZenodoResponse(url: string, kind: "json" | "bytes", access?: ZenodoAccess | null): Promise<Response> {
+export async function fetchZenodoResponse(url: string, kind: "json" | "bytes" | "html", access?: ZenodoAccess | null): Promise<Response> {
   const delays = zenodoTransport.delaysMs
   const attempts = delays.length + 1
   let lastNetworkError = false
@@ -331,8 +388,26 @@ async function readJson(url: string, access?: ZenodoAccess | null): Promise<unkn
 }
 
 export async function fetchZenodoRecord(recordId: string): Promise<ZenodoRecord> {
-  const data = await readJson(`https://zenodo.org/api/records/${encodeURIComponent(recordId)}`)
-  return normalizeZenodoRecord(data)
+  let lastError: ZenodoError | null = null
+  for (const source of zenodoRecordSources(recordId)) {
+    try {
+      if (source.kind === "html") {
+        const response = await fetchZenodoResponse(source.url, "html")
+        if (!response.ok) {
+          lastError = new ZenodoError(zenodoHttpMessage(response.status), response.status)
+          continue
+        }
+        const record = recordFromZenodoPage(await response.text(), recordId)
+        if (record) return record
+        lastError = new ZenodoError("Zenodo returned a record page AIR could not read.", response.status || 502)
+        continue
+      }
+      return normalizeZenodoRecord(await readJson(source.url))
+    } catch (error) {
+      lastError = error instanceof ZenodoError ? error : new ZenodoError("The browser could not reach Zenodo. Check the connection and try again.", 0)
+    }
+  }
+  throw lastError ?? new ZenodoError("Zenodo returned 502 for that record.", 502)
 }
 
 export interface ZenodoVersion {

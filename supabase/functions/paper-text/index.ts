@@ -2,7 +2,7 @@
 // This file is not deployed by the pull request.
 // Later: supabase functions deploy paper-text --no-verify-jwt
 
-import { extensionOf, fetchZenodoRecord } from "../../../src/services/zenodo.ts"
+import { extensionOf, fetchZenodoRecord, fetchZenodoResponse } from "../../../src/services/zenodo.ts"
 import { formatPaperText } from "../../../src/services/webChat/paperText.ts"
 
 const TEXT_EXTENSIONS = new Set(["txt", "md", "markdown", "csv", "tsv", "html", "htm", "json", "xml", "tex", "rst"])
@@ -37,7 +37,7 @@ async function publicTextFiles(record: Awaited<ReturnType<typeof fetchZenodoReco
   for (const file of record.files) {
     if (!TEXT_EXTENSIONS.has(extensionOf(file.key)) || !file.downloadUrl.startsWith("https://")) continue
     try {
-      const response = await fetch(file.downloadUrl)
+      const response = await fetchZenodoResponse(file.downloadUrl, "bytes")
       if (!response.ok) continue
       const text = (await response.text()).slice(0, FILE_CAP)
       if (text.trim()) documents.push({ filename: file.key, text })
