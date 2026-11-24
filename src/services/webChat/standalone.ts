@@ -8,6 +8,7 @@ import { buildWebChatPacket } from "./packet.ts"
 import { paperTextRecordId } from "./paperText.ts"
 import { hasAirFeedback } from "../airFeedback.ts"
 import { WEB_CHAT_LABEL, type WebChatPacket } from "./protocol.ts"
+import { defenceRoundsLabel } from "./runSummary.ts"
 
 export const RESULT_STORAGE_KEY = "air-web-chat-results"
 export const ONBOARD_STORAGE_KEY = "air-web-chat-seen"
@@ -213,6 +214,8 @@ export function resultCard(review: StoredReview): {
   label: string
   defendedOverall: number | null
   defendedLabel: string
+  roundsLabel: string
+  sheetNote: string
   scores: { criterionId: string; score: number }[]
   feedback: { label: string; text: string }[]
   model: string
@@ -239,6 +242,8 @@ export function resultCard(review: StoredReview): {
     label: WEB_CHAT_LABEL,
     defendedOverall: review.defended?.overallScore ?? null,
     defendedLabel: review.defended?.label ?? "",
+    roundsLabel: defenceRoundsLabel(review.defenceTranscript),
+    sheetNote: review.defenceNote ?? "",
     model: review.modelId,
     scores: review.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score })),
     feedback: feedback ? labels.map((item) => ({ label: item.label, text: feedback[item.key]?.trim() || "none" })) : [],

@@ -2,7 +2,7 @@ import { webChatProvider } from "./adapters/index.ts"
 import { officialCriteria } from "../src/domain/officialCriteria.ts"
 import { readingCriteria } from "../src/domain/profiles.ts"
 import { acceptWebChatResult } from "../src/services/webChat/accept.ts"
-import { critiquesFromReport, defenceFailureNotice, DEFENCE_PAUSE_MS, runDefenceLoop } from "../src/services/webChat/defence.ts"
+import { chooseDefendedText, critiquesFromReport, defenceFailureNotice, DEFENCE_PAUSE_MS, runDefenceLoop } from "../src/services/webChat/defence.ts"
 import { sendFollowUp, runTurn, type TurnHooks } from "../src/services/webChat/runTurn.ts"
 import { detectChatModel } from "../src/services/webChat/chatModel.ts"
 import { settleChatJson } from "../src/services/jsonText.ts"
@@ -125,12 +125,29 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
         onProgress: (text) => hooks.onProgress?.(text, { step: text.replace(/\.$/, ""), status: "sending" }),
         send: (prompt, label, expect) => sendFollowUp(document, provider, prompt, hooks, label ?? "author defence", expect ?? "text"),
       })
+      let defendedText = defence.defendedText
+      if (defendedText) {
+        try {
+          const settledDefence = await settleChatJson(
+            defendedText,
+            (prompt) => sendFollowUp(document, provider, prompt, hooks, "corrected score after defence", "json"),
+            (text) => hooks.onProgress?.(text, { step: "Score after author defence", status: "sending" }),
+            (text) => {
+              const checked = acceptWebChatResult(text, criteria)
+              return checked.ok ? { ok: true } : { ok: false, errors: checked.errors }
+            },
+          )
+          defendedText = chooseDefendedText(defendedText, settledDefence.text, criteria)
+        } catch {
+          // The reply already arrived. The panel reads the overall from it.
+        }
+      }
       report({
         type: "air-web-chat-done",
         requestId: message.requestId,
         ok: true,
         text: settled.text,
-        defendedText: defence.defendedText,
+        defendedText,
         transcript: defence.transcript,
         stopped: defence.stopped,
         chatModel: observedModel(),

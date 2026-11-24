@@ -1,6 +1,7 @@
-import type { ReviewReport } from "../../domain/types.ts"
+import type { CriteriaSet, ReviewReport } from "../../domain/types.ts"
 import { acceptWebChatResult } from "./accept.ts"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
+import { lastScoreJson } from "../jsonText.ts"
 import type { DefendedScore } from "./submission.ts"
 
 export const DEFENCE_DEFAULT_ROUNDS = 2
@@ -127,19 +128,68 @@ export async function runDefenceLoop(options: {
   return { transcript, defendedText, stopped: false }
 }
 
-export function defendedFromReply(raw: string): { ok: true; defended: DefendedScore } | { ok: false; error: string } {
-  const accepted = acceptWebChatResult(raw, officialCriteria)
-  if (!accepted.ok) return { ok: false, error: accepted.errors[0] || "The defended score was not usable JSON." }
-  const describedOk = accepted.report.scoringCheck?.mismatch !== true
-  if (!describedOk) return { ok: false, error: "The defended score clashes with its own weighted total." }
-  return {
-    ok: true,
-    defended: {
-      label: DEFENDED_LABEL,
-      overallScore: accepted.report.overallScore,
-      recommendation: accepted.report.recommendation,
-      summary: accepted.report.summary,
-      scores: accepted.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score })),
-    },
+/** The number a reply states when it does not return a full score sheet. */
+export function statedDefenceOverall(raw: string): number | null {
+  const scored = lastScoreJson(raw)
+  const fromJson = scored && typeof scored.value === "object" && scored.value ? Number((scored.value as { overallScore?: unknown }).overallScore) : NaN
+  if (Number.isInteger(fromJson) && fromJson >= 0 && fromJson <= 100) return fromJson
+  const match = raw.match(/overall(?:\s+score)?\s+(?:remains|stays|stayed|is|was|of|:)\s*(?:at\s+)?(\d{1,3})\b/i)
+  if (!match) return null
+  const score = Number(match[1])
+  if (!Number.isInteger(score) || score < 0 || score > 100) return null
+  return score
+}
+
+function partialDefended(raw: string, overall: number): DefendedScore {
+  const scored = lastScoreJson(raw)
+  const row = scored && typeof scored.value === "object" && scored.value ? (scored.value as Record<string, unknown>) : {}
+  const summaryRaw = typeof row.summary === "string" ? row.summary.trim() : ""
+  const summary = summaryRaw.length >= 40
+    ? summaryRaw.slice(0, 4000)
+    : "The chat stated an overall score after author defence. The reply did not include a full score sheet."
+  const recommendation = typeof row.recommendation === "string" ? row.recommendation.trim().slice(0, 80) : ""
+  const scores = Array.isArray(row.scores)
+    ? row.scores.flatMap((item) => {
+        if (!item || typeof item !== "object") return []
+        const record = item as { criterionId?: unknown; score?: unknown }
+        const criterionId = typeof record.criterionId === "string" ? record.criterionId.trim() : ""
+        const score = Number(record.score)
+        return criterionId && Number.isInteger(score) ? [{ criterionId, score }] : []
+      })
+    : []
+  return { label: DEFENDED_LABEL, overallScore: overall, recommendation, summary, scores }
+}
+
+export function defendedFromReply(
+  raw: string,
+  criteria: CriteriaSet = officialCriteria,
+): { ok: true; defended: DefendedScore; partial?: boolean } | { ok: false; error: string } {
+  const accepted = acceptWebChatResult(raw, criteria)
+  const clashes = accepted.ok && accepted.report.scoringCheck?.mismatch === true
+  if (accepted.ok && !clashes) {
+    return {
+      ok: true,
+      defended: {
+        label: DEFENDED_LABEL,
+        overallScore: accepted.report.overallScore,
+        recommendation: accepted.report.recommendation,
+        summary: accepted.report.summary,
+        scores: accepted.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score })),
+      },
+    }
   }
+  const stated = statedDefenceOverall(raw)
+  if (stated == null) {
+    const error = accepted.ok ? "The defended score clashes with its own weighted total." : accepted.errors[0] || "The defended score was not usable JSON."
+    return { ok: false, error }
+  }
+  return { ok: true, partial: true, defended: partialDefended(raw, stated) }
+}
+
+/** Prefer a sheet that validates. Otherwise keep whichever reply still names an overall. */
+export function chooseDefendedText(original: string, settled: string, criteria: CriteriaSet): string {
+  if (acceptWebChatResult(settled, criteria).ok) return settled
+  if (acceptWebChatResult(original, criteria).ok) return original
+  if (statedDefenceOverall(settled) != null) return settled
+  return original
 }
