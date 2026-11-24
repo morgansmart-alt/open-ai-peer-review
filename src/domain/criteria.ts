@@ -4,6 +4,11 @@ export function round2(n: number): number {
   return Math.round(n * 100) / 100
 }
 
+/** Show a stored score at two decimal places. Does not change the stored value. */
+export function formatScore(value: number): string {
+  return value.toFixed(2)
+}
+
 export function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n))
 }

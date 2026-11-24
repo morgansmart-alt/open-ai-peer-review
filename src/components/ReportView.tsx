@@ -1,7 +1,7 @@
 import type { ReactNode } from "react"
 import { GoalsHeatmap, PhysicsGauge, QuadrantChart, RadarChart, RangeBars } from "./charts.tsx"
 import { publicContextCount } from "../domain/conversationLinks.ts"
-import { categoryLabel, globalGoalsBadge, impactFeasibilityQuadrant, isBonusCriterion } from "../domain/criteria.ts"
+import { categoryLabel, formatScore, globalGoalsBadge, impactFeasibilityQuadrant, isBonusCriterion } from "../domain/criteria.ts"
 import { showsProjectValue, storedProfileLabel } from "../domain/profiles.ts"
 import { coveragePhrase, OCR_OR_TEXT_SUGGESTION } from "../services/textTools.ts"
 import { scoringMismatch, storedScale, toBoard } from "../domain/scoring.ts"
@@ -100,7 +100,7 @@ export function ReportView({
         {isUncalibratedWebChat(meta.stored) && <p className="mt-1 text-xs text-gold">{WEB_CHAT_LABEL}</p>}
         <h3 className="mt-1 font-serif text-2xl">{categoryLabel(criteria, verdictId)}</h3>
         <p className="mt-2 text-sm text-ink-soft">
-          Overall {overallShown.toFixed(0)} / 100 · Idea {shown(report.ideaScore).toFixed(0)} / 100
+          Overall {formatScore(overallShown)} / 100 · Idea {formatScore(shown(report.ideaScore))} / 100
           {criteria.version.startsWith("0.1") ? " · AIR v0.1" : ""}
         </p>
         {report.reading && (
@@ -188,7 +188,7 @@ export function ReportView({
                 <div className="flex items-baseline justify-between gap-3">
                   <h4 className="font-medium">{criterion?.name ?? score.criterionId}</h4>
                   <span className="tabular-nums">
-                    {shown(score.score).toFixed(0)}/100
+                    {formatScore(shown(score.score))}/100
                     {score.confidence ? ` · ${score.confidence}` : ""}
                     {score.evidence === "proven" ? " · Proven" : score.evidence === "possible" ? " · Possible" : ""}
                   </span>

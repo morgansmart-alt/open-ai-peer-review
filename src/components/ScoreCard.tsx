@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom"
 import type { LineagePoint } from "../domain/versions.ts"
 import type { CriteriaSet, StoredReview } from "../domain/types.ts"
+import { formatScore } from "../domain/criteria.ts"
 import { ExternalLink } from "./ui.tsx"
 import type { ReadableComment } from "./CommentList.tsx"
 import { CommentList } from "./CommentList.tsx"
@@ -37,7 +38,7 @@ export function ScoreCard({
   const lines = readingLines(reviews, criteria, names)
   const verdict = sharedVerdict(lines)
   const doiUrl = publicDoiUrl(doi)
-  const shownMedian = panelMedian === null ? "—" : panelMedian.toFixed(1)
+  const shownMedian = panelMedian === null ? "—" : formatScore(panelMedian)
   const demoOnly = lines.some((line) => line.badge === "Demo") && !lines.some((line) => line.badge === "Calibrated AI")
 
   return (
@@ -67,7 +68,7 @@ export function ScoreCard({
         </div>
         <div>
           <dt className="text-xs text-ink-soft">Human review</dt>
-          <dd className="mt-1 font-medium tabular-nums">{humanMedian === null ? "None on this version" : `${humanMedian.toFixed(1)} / 100`}</dd>
+          <dd className="mt-1 font-medium tabular-nums">{humanMedian === null ? "None on this version" : `${formatScore(humanMedian)} / 100`}</dd>
         </div>
         <div>
           <dt className="text-xs text-ink-soft">Readings</dt>
@@ -99,17 +100,17 @@ export function ScoreCard({
             <li key={bar.id}>
               <div className="flex items-baseline justify-between gap-3 text-sm">
                 <span className="font-medium">
-                  {bar.bonus ? `Global goals: ${bar.median === null ? "—" : bar.median.toFixed(0)} (bonus, not counted in overall)` : bar.name}
+                  {bar.bonus ? `Global goals: ${bar.median === null ? "—" : formatScore(bar.median)} (bonus, not counted in overall)` : bar.name}
                 </span>
-                <span className="tabular-nums text-ink-soft">{bar.median === null ? "—" : bar.median.toFixed(0)}</span>
+                <span className="tabular-nums text-ink-soft">{bar.median === null ? "—" : formatScore(bar.median)}</span>
               </div>
-              <div className="score-track mt-1" role="img" aria-label={`${bar.name} median ${bar.median === null ? "unavailable" : bar.median.toFixed(0)} out of 100`}>
+              <div className="score-track mt-1" role="img" aria-label={`${bar.name} median ${bar.median === null ? "unavailable" : formatScore(bar.median)} out of 100`}>
                 <div className="score-fill" style={{ width: `${Math.max(0, Math.min(100, bar.median ?? 0))}%` }} />
               </div>
               <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-ink-soft">
                 {bar.marks.map((mark) => (
                   <li key={mark.reviewId}>
-                    {mark.name} {mark.score.toFixed(0)}
+                    {mark.name} {formatScore(mark.score)}
                     {mark.evidence === "possible" ? " · possible" : mark.evidence === "proven" ? " · proven" : ""}
                   </li>
                 ))}
@@ -139,7 +140,7 @@ export function ScoreCard({
             <li key={line.id} className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
               <span className={`rounded-full px-2 py-0.5 text-[11px] ${badgeClass(line.badge)}`}>{line.badge}</span>
               <span className="font-medium">{line.name}</span>
-              <span className="tabular-nums">{line.score.toFixed(0)} / 100</span>
+              <span className="tabular-nums">{formatScore(line.score)} / 100</span>
               <span>{line.verdict}</span>
               {line.verdictNote ? <span className="text-ink-soft">{line.verdictNote}</span> : null}
               {line.mismatch ? <span className="text-bad">Scoring mismatch, needs re-check</span> : null}
@@ -163,7 +164,7 @@ export function ScoreCard({
                 {point.publicationDate || "undated"} · {point.doi}
               </Link>
               <span className="ml-2 text-ink-soft">
-                {point.place === "latest" ? "Latest" : "Earlier"} · panel {point.panelMedian === null ? "—" : point.panelMedian.toFixed(0)} / 100
+                {point.place === "latest" ? "Latest" : "Earlier"} · panel {point.panelMedian === null ? "—" : formatScore(point.panelMedian)} / 100
               </span>
             </li>
           ))}

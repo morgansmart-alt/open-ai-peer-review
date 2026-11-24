@@ -3142,7 +3142,7 @@ ${output}
       card.id = "result";
       el(card, "p", model.result.label, "label");
       el(card, "h2", model.result.title);
-      el(card, "p", `Blind score ${Math.round(model.result.overall)} out of 100 \xB7 ${model.result.recommendation}`, "score");
+      el(card, "p", `Blind score ${model.result.overall.toFixed(2)} out of 100 \xB7 ${model.result.recommendation}`, "score");
       if (model.result.roundsLabel) {
         const rounds2 = el(card, "p", model.result.roundsLabel, "score");
         rounds2.id = "defence-round-count";
@@ -3152,7 +3152,7 @@ ${output}
         line.id = "chat-model";
       }
       if (model.result.defendedOverall != null) {
-        const after = el(card, "p", `${model.result.defendedLabel || "after author defence"} ${Math.round(model.result.defendedOverall)} out of 100`, "score");
+        const after = el(card, "p", `${model.result.defendedLabel || "after author defence"} ${model.result.defendedOverall.toFixed(2)} out of 100`, "score");
         after.id = "after-defence";
       }
       if (model.result.sheetNote) {
@@ -3586,6 +3586,13 @@ ${JSON.stringify(report)}`),
   function clip3(value, max) {
     return typeof value === "string" ? value.trim().slice(0, max) : "";
   }
+  function boardOverall(value) {
+    const score = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
+    if (!Number.isFinite(score)) return null;
+    const rounded = Math.round(score * 100) / 100;
+    if (rounded < 0 || rounded > 100) return null;
+    return rounded;
+  }
   function submissionFromReview(review, site) {
     const criteria = criteriaForReview(review);
     const checkScores = review.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score }));
@@ -3669,8 +3676,8 @@ ${JSON.stringify(report)}`),
     if (/https?:\/\/(?:share\.google|chatgpt\.com\/share|claude\.ai\/share|grok\.com\/share)/i.test(summary)) {
       return { ok: false, error: "A private chat link was still in the summary." };
     }
-    const overallScore = Number(input.overallScore);
-    if (!Number.isInteger(overallScore)) return { ok: false, error: "The overall score must be an integer." };
+    const overallScore = boardOverall(input.overallScore);
+    if (overallScore === null) return { ok: false, error: "The overall score must be a number from 0 to 100." };
     const recommendation = clip3(input.recommendation, 80);
     const described = describeScoring({ scores: ready, statedOverall: overallScore, recommendation, criteria });
     if (described.scoringCheck.mismatch) {
@@ -3724,8 +3731,8 @@ ${JSON.stringify(report)}`),
     if (/https?:\/\/(?:share\.google|chatgpt\.com\/share|claude\.ai\/share|grok\.com\/share)/i.test(summary)) {
       return { ok: false, error: "A private chat link was still in the defended summary." };
     }
-    const overallScore = Number(input.overallScore);
-    if (!Number.isInteger(overallScore)) return { ok: false, error: "The defended score must be an integer." };
+    const overallScore = boardOverall(input.overallScore);
+    if (overallScore === null) return { ok: false, error: "The defended score must be a number from 0 to 100." };
     const recommendation = clip3(input.recommendation, 80);
     const described = describeScoring({ scores, statedOverall: overallScore, recommendation, criteria });
     if (described.scoringCheck.mismatch) return { ok: false, error: "The defended score clashes with its own weighted total, so it was not sent." };

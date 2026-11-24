@@ -1,11 +1,20 @@
+import { readFileSync } from "node:fs"
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
-import { collectPaperIds, renderStaticPaperText } from "../src/services/webChat/paperTextFiles.ts"
+import { collectPaperIds, documentsForOpenRecord, isOpenFileAccess, mergePaperIds, renderStaticPaperText } from "../src/services/webChat/paperTextFiles.ts"
 
 const TEXT_EXTENSIONS = new Set(["txt", "md", "markdown", "csv", "tsv", "html", "htm", "json", "xml", "tex", "rst"])
 const FILE_CAP = 1_500_000
+const PDF_BYTE_CAP = 20_000_000
+const PDF_PAGE_CAP = 80
 const USER_AGENT = "open-ai-peer-review (https://github.com/morgansmart-alt/open-ai-peer-review)"
+
+function curatedIds(): string[] {
+  const file = new URL("../paper-text-ids.json", import.meta.url)
+  const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown
+  return Array.isArray(parsed) ? parsed.map((id) => String(id)) : []
+}
 
 function zenodoSources(id: string): string[] {
   return [
@@ -63,43 +72,80 @@ function recordFromApi(data: Record<string, unknown>) {
   }
 }
 
+async function pdfText(bytes: Uint8Array, cap: number): Promise<string> {
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs")
+  const document = await pdfjs.getDocument({ data: bytes, disableWorker: true }).promise
+  const parts: string[] = []
+  let used = 0
+  const pages = Math.min(document.numPages, PDF_PAGE_CAP)
+  for (let pageNumber = 1; pageNumber <= pages && used < cap; pageNumber += 1) {
+    const page = await document.getPage(pageNumber)
+    const content = await page.getTextContent()
+    const line = content.items
+      .map((item: { str?: string }) => item.str ?? "")
+      .join(" ")
+      .replace(/[ \t]{2,}/g, " ")
+      .trim()
+    if (!line) continue
+    const slice = line.slice(0, cap - used)
+    used += slice.length
+    parts.push(slice)
+  }
+  return parts.join("\n\n")
+}
+
+async function fileText(file: { key: string; url: string }, room: number): Promise<string> {
+  if (!file.url.startsWith("https://") || room <= 0) return ""
+  const extension = file.key.split(".").pop()?.toLowerCase() ?? ""
+  const pdf = extension === "pdf"
+  if (!pdf && !TEXT_EXTENSIONS.has(extension)) return ""
+  try {
+    const response = await fetch(file.url, { headers: { "User-Agent": USER_AGENT, Accept: pdf ? "application/pdf,*/*;q=0.8" : "text/plain,*/*;q=0.8" } })
+    if (!response.ok) return ""
+    const declared = Number(response.headers.get("content-length") ?? "0")
+    if (pdf && declared > PDF_BYTE_CAP) return ""
+    if (!pdf) return (await response.text()).slice(0, room)
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    if (bytes.byteLength > PDF_BYTE_CAP) return ""
+    return await pdfText(bytes, room)
+  } catch {
+    return ""
+  }
+}
+
 async function openText(record: NonNullable<ReturnType<typeof recordFromApi>>) {
-  const access = record.accessFiles.toLowerCase()
-  if (access && access !== "open" && access !== "public") return []
-  const documents: { filename: string; text: string }[] = []
+  if (!isOpenFileAccess(record.accessFiles)) return []
+  const gathered: { key: string; text: string }[] = []
   let used = 0
   for (const file of record.files) {
-    const extension = file.key.split(".").pop()?.toLowerCase() ?? ""
-    if (!TEXT_EXTENSIONS.has(extension) || !file.url.startsWith("https://") || used >= FILE_CAP) continue
-    try {
-      const response = await fetch(file.url, { headers: { "User-Agent": USER_AGENT, Accept: "text/plain,*/*;q=0.8" } })
-      if (!response.ok) continue
-      const text = (await response.text()).slice(0, FILE_CAP - used)
-      used += text.length
-      if (text.trim()) documents.push({ filename: file.key, text })
-    } catch {
-      // A file the host refused is omitted. The abstract still ships.
-    }
+    if (used >= FILE_CAP) break
+    const text = await fileText(file, FILE_CAP - used)
+    if (!text.trim()) continue
+    gathered.push({ key: file.key, text })
+    used += text.trim().length
   }
-  return documents
+  return documentsForOpenRecord(record.accessFiles, gathered, FILE_CAP)
 }
 
 async function loadBoardIds(): Promise<string[]> {
   const url = process.env.VITE_SUPABASE_URL?.replace(/\/$/, "")
   const key = process.env.VITE_SUPABASE_ANON_KEY
   if (!url || !key) {
-    console.log("No public board credentials. No paper text files written.")
-    return []
+    console.log("No public board credentials. Writing the curated allow list only.")
+    return mergePaperIds([], curatedIds())
   }
   const headers = { apikey: key, authorization: `Bearer ${key}` }
   const reviews = await fetch(`${url}/rest/v1/air_reviews?select=payload&limit=1000`, { headers })
   const chats = await fetch(`${url}/rest/v1/air_web_chat?select=doi,paper_url,payload&limit=1000`, { headers })
   const reviewRows = reviews.ok ? ((await reviews.json()) as { payload?: unknown }[]) : []
   const chatRows = chats.ok ? ((await chats.json()) as { payload?: unknown; doi?: string; paper_url?: string }[]) : []
-  return collectPaperIds([
-    ...reviewRows.map((row) => row.payload),
-    ...chatRows.flatMap((row) => [row, row.payload]),
-  ])
+  return mergePaperIds(
+    collectPaperIds([
+      ...reviewRows.map((row) => row.payload),
+      ...chatRows.flatMap((row) => [row, row.payload]),
+    ]),
+    curatedIds(),
+  )
 }
 
 async function writeOne(id: string, outDir: string): Promise<boolean> {
