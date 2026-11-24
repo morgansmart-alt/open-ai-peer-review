@@ -150,14 +150,28 @@
     limits: "Grok on X is at x.com/i/grok. AIR tries a file up to about 400,000 characters, then pastes 32,000 characters at a time. X rate-limits long threads. That limit was not measured here.",
     selectors: {
       composer: [
+        'textarea[aria-label="Ask anything"]',
+        'textarea[placeholder="Ask anything"]',
+        '[contenteditable="true"][aria-label="Ask anything"]',
+        '[contenteditable="true"][placeholder="Ask anything"]',
+        '[role="textbox"][aria-label*="Ask"]',
+        '[role="textbox"][placeholder*="Ask"]',
         'textarea[aria-label="Ask Grok"]',
         'textarea[aria-label*="Ask Grok"]',
+        'textarea[aria-label*="Ask"]',
+        'textarea[placeholder*="Ask"]',
         'div[data-testid="grokComposer"] textarea',
         'div[contenteditable="true"][role="textbox"]'
       ],
-      submit: ['button[aria-label="Send"]', 'button[data-testid="grok-send"]', 'button[aria-label*="Send"]'],
-      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]'],
-      assistant: ['[data-testid="assistant-message"]', '[data-testid="grok-message"]'],
+      submit: [
+        'button[aria-label="Send"]',
+        'button[aria-label*="Send"]',
+        'button[aria-label*="Submit"]',
+        'button[aria-label*="Grok"]',
+        'button[data-testid="grok-send"]'
+      ],
+      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]', 'button[aria-label*="Stop generating"]'],
+      assistant: ['[data-testid="assistant-message"]', '[data-testid="grok-message"]', '[class*="assistant-message"]', '[data-message-author="assistant"]'],
       fileInput: ['input[type="file"]'],
       login: ['a[href*="/login"]', 'a[href*="/i/flow/login"]', 'a[data-testid="login"]']
     }
@@ -180,14 +194,26 @@
     limits: "AIR attaches a paper up to about 1.2 million characters, or pastes 48,000 characters at a time. Grok's free web chat rate-limits long threads. The exact cap is set by xAI and was not measured here.",
     selectors: {
       composer: [
+        'textarea[aria-label="Message Grok"]',
+        'textarea[aria-label*="Message Grok"]',
+        '[contenteditable="true"][aria-label="Message Grok"]',
+        '[contenteditable="true"][aria-label*="Message Grok"]',
+        '[role="textbox"][aria-label="Message Grok"]',
+        '[role="textbox"][aria-label*="Message Grok"]',
         'textarea[aria-label="Ask Grok anything"]',
         'textarea[aria-label*="Ask Grok"]',
+        'textarea[placeholder*="What do you want to know"]',
+        'textarea[aria-label*="What do you want to know"]',
+        'textarea[placeholder*="Ask anything"]',
+        'textarea[aria-label*="Ask anything"]',
         'textarea[placeholder*="Ask"]',
+        '[contenteditable="true"][placeholder*="Ask"]',
+        '[contenteditable="true"][aria-label*="Ask"]',
         'div[contenteditable="true"][role="textbox"]'
       ],
-      submit: ['button[aria-label="Submit"]', 'button[aria-label*="Send"]', 'button[type="submit"]'],
-      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]'],
-      assistant: ['[data-testid="assistant-message"]', '[data-message-author="assistant"]'],
+      submit: ['button[aria-label="Submit"]', 'button[aria-label*="Send"]', 'button[aria-label*="Submit"]', 'button[type="submit"]'],
+      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]', 'button[aria-label*="Stop generating"]'],
+      assistant: ['[data-testid="assistant-message"]', '[data-message-author="assistant"]', '[class*="assistant-message"]'],
       fileInput: ['input[type="file"]'],
       login: ['a[href*="accounts.x.com"]', 'a[href*="/login"]', 'button[data-testid="login"]']
     }
@@ -1165,6 +1191,42 @@ ${parsed.errors.join("\n")}`);
     };
   }
 
+  // src/services/airFeedback.ts
+  var ALIASES = {
+    criteria: "criteria",
+    criterion: "criteria",
+    profile: "profile",
+    missingContext: "missingContext",
+    missing_context: "missingContext",
+    missing: "missingContext",
+    files: "missingContext",
+    prompt: "prompt",
+    rubric: "rubric",
+    scoringProcess: "scoringProcess",
+    scoring_process: "scoringProcess",
+    scoring: "scoringProcess"
+  };
+  function clip(value) {
+    if (typeof value !== "string") return "";
+    return value.trim().replace(/https?:\/\/(?:www\.)?(?:share\.google\/aimode|chatgpt\.com\/share|chat\.openai\.com\/share|claude\.ai\/share|grok\.com\/share)\/\S+/gi, "[private link]").slice(0, 1e3);
+  }
+  function parseAirFeedback(input) {
+    if (input == null || input === "") return void 0;
+    if (typeof input === "string") {
+      const note = clip(input);
+      return note ? { scoringProcess: note } : void 0;
+    }
+    if (typeof input !== "object" || Array.isArray(input)) return void 0;
+    const feedback = {};
+    for (const [key, value] of Object.entries(input)) {
+      const field = ALIASES[key];
+      const text = clip(value);
+      if (!field || !text) continue;
+      feedback[field] = text;
+    }
+    return Object.keys(feedback).length > 0 ? feedback : void 0;
+  }
+
   // src/services/validateReport.ts
   function isRecord2(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1182,7 +1244,7 @@ ${parsed.errors.join("\n")}`);
       throw new Error("No JSON object found in the model output.");
     }
   }
-  function clip(value, max) {
+  function clip2(value, max) {
     return typeof value === "string" ? value.trim().slice(0, max) : "";
   }
   function citationsFrom(value, errors, path) {
@@ -1193,23 +1255,23 @@ ${parsed.errors.join("\n")}`);
     return value.flatMap((item) => {
       if (typeof item === "string") return [{ quote: item.slice(0, 500), location: "Record" }];
       if (!isRecord2(item)) return [];
-      const quote = clip(item.quote ?? item.passage ?? item.text, 500);
+      const quote = clip2(item.quote ?? item.passage ?? item.text, 500);
       if (!quote) return [];
-      return [{ quote, location: clip(item.location ?? item.where ?? "Record", 160) || "Record" }];
+      return [{ quote, location: clip2(item.location ?? item.where ?? "Record", 160) || "Record" }];
     });
   }
   function stringArray(value, maxItems, maxLen) {
     if (!Array.isArray(value)) return [];
-    return value.map((item) => clip(item, maxLen)).filter(Boolean).slice(0, maxItems);
+    return value.map((item) => clip2(item, maxLen)).filter(Boolean).slice(0, maxItems);
   }
   function validateReport(input, criteria) {
     const errors = [];
     if (!isRecord2(input)) return { ok: false, errors: ["The model output was not a JSON object."] };
-    const summary = clip(input.summary, 4e3);
+    const summary = clip2(input.summary, 4e3);
     if (summary.length < 40) errors.push("summary must be at least 40 characters.");
     const scoresRaw = Array.isArray(input.scores) ? input.scores : [];
     const scores = criteria.criteria.map((criterion) => {
-      const found = scoresRaw.find((item) => isRecord2(item) && clip(item.criterionId ?? item.id, 80) === criterion.id);
+      const found = scoresRaw.find((item) => isRecord2(item) && clip2(item.criterionId ?? item.id, 80) === criterion.id);
       if (!isRecord2(found)) {
         errors.push(`Missing score for ${criterion.id}.`);
         return null;
@@ -1218,17 +1280,17 @@ ${parsed.errors.join("\n")}`);
       if (!Number.isInteger(score) || score < criteria.scale.min || score > criteria.scale.max) {
         errors.push(`${criterion.id} score must be an integer from ${criteria.scale.min} to ${criteria.scale.max}.`);
       }
-      const rationale = clip(found.rationale ?? found.reason, 2e3);
+      const rationale = clip2(found.rationale ?? found.reason, 2e3);
       if (rationale.length < 20) errors.push(`${criterion.id} rationale is too short.`);
       const citations = citationsFrom(found.citations ?? found.quotes, errors, criterion.id);
       if (citations.length === 0) errors.push(`${criterion.id} needs at least one citation.`);
-      const confidenceRaw = clip(found.confidence, 16).toLowerCase();
+      const confidenceRaw = clip2(found.confidence, 16).toLowerCase();
       const confidence = confidenceRaw === "low" || confidenceRaw === "med" || confidenceRaw === "medium" || confidenceRaw === "high" ? confidenceRaw : "";
       if (criteria.reportSchema === "0.2" && !confidence) errors.push(`${criterion.id} needs a confidence of low, medium, or high.`);
       const normalizedConfidence = confidence === "high" ? "high" : confidence === "medium" || confidence === "med" ? "medium" : confidence === "low" ? "low" : void 0;
       return { criterionId: criterion.id, score, rationale, citations, confidence: normalizedConfidence };
     });
-    const recommendationRaw = clip(input.recommendation, 120).toLowerCase();
+    const recommendationRaw = clip2(input.recommendation, 120).toLowerCase();
     const recommendation = criteria.recommendationCategories.find(
       (item) => item.id.toLowerCase() === recommendationRaw || item.label.toLowerCase() === recommendationRaw
     )?.id ?? "";
@@ -1247,16 +1309,16 @@ ${parsed.errors.join("\n")}`);
         return [{ criterionId: criteria.criteria[0]?.id ?? "clarity", claim: item.slice(0, 500), quotedPassage: "", reason: item.slice(0, 800) }];
       }
       if (!isRecord2(item)) return [];
-      const criterionId = clip(item.criterionId ?? item.criterion, 80);
+      const criterionId = clip2(item.criterionId ?? item.criterion, 80);
       if (criterionId && !known.has(criterionId)) errors.push(`Unknown criterion on a major issue: ${criterionId}.`);
-      const claim = clip(item.claim ?? item.summary ?? item.issue, 500);
+      const claim = clip2(item.claim ?? item.summary ?? item.issue, 500);
       if (!claim) return [];
       return [
         {
           criterionId: known.has(criterionId) ? criterionId : criteria.criteria[0]?.id ?? "clarity",
           claim,
-          quotedPassage: clip(item.quotedPassage ?? item.quote ?? "", 500),
-          reason: clip(item.reason ?? item.why ?? claim, 800)
+          quotedPassage: clip2(item.quotedPassage ?? item.quote ?? "", 500),
+          reason: clip2(item.reason ?? item.why ?? claim, 800)
         }
       ];
     });
@@ -1268,6 +1330,7 @@ ${parsed.errors.join("\n")}`);
     const idea = weightedMean(ready, criteria, criteria.ideaCriterionIds);
     if (overall === null || idea === null) return { ok: false, errors: ["Could not weight the scores."] };
     const statedRaw = Number(input.overallScore);
+    const airFeedback = parseAirFeedback(input.air_feedback ?? input.airFeedback);
     const check = describeScoring({
       scores: ready,
       statedOverall: Number.isFinite(statedRaw) ? statedRaw : null,
@@ -1290,6 +1353,7 @@ ${parsed.errors.join("\n")}`);
         minorIssues,
         questionsForAuthors: questions,
         suggestedNextSteps: nextSteps,
+        ...airFeedback ? { airFeedback } : {},
         ...v2
       }
     };
@@ -1300,22 +1364,22 @@ ${parsed.errors.join("\n")}`);
   function rangeFrom(value, fallbackUnit) {
     const record = isRecord2(value) ? value : {};
     return {
-      low: clip(record.low, 80) || "not estimated",
-      central: clip(record.central, 80) || "not estimated",
-      high: clip(record.high, 80) || "not estimated",
-      unit: clip(record.unit, 40) || fallbackUnit
+      low: clip2(record.low, 80) || "not estimated",
+      central: clip2(record.central, 80) || "not estimated",
+      high: clip2(record.high, 80) || "not estimated",
+      unit: clip2(record.unit, 40) || fallbackUnit
     };
   }
   function readV2(input, errors, includeValue) {
-    const ontologyClass = clip(input.ontologyClass, 80);
+    const ontologyClass = clip2(input.ontologyClass, 80);
     if (!ontologyClasses.has(ontologyClass)) errors.push("ontologyClass must be one of the four AIR classes.");
     const physicsRaw = isRecord2(input.physics) ? input.physics : null;
-    const classification = clip(physicsRaw?.classification, 20).toUpperCase();
+    const classification = clip2(physicsRaw?.classification, 20).toUpperCase();
     if (!physicsClasses.has(classification)) errors.push("physics.classification must be CONSISTENT, EXTENDS, or CHALLENGES.");
     const physics = {
       classification: physicsClasses.has(classification) ? classification : "CONSISTENT",
       laws: stringArray(physicsRaw?.laws, 8, 120),
-      howAddressed: clip(physicsRaw?.howAddressed, 800)
+      howAddressed: clip2(physicsRaw?.howAddressed, 800)
     };
     if (physics.laws.length === 0) errors.push("physics.laws needs at least one named law or an explicit 'none used'.");
     const simulationRaw = isRecord2(input.simulation) ? input.simulation : null;
@@ -1324,7 +1388,7 @@ ${parsed.errors.join("\n")}`);
     const simulation = {
       reported: Number.isInteger(reported) ? reported : null,
       passed: Number.isInteger(passed) ? passed : null,
-      methods: clip(simulationRaw?.methods, 400),
+      methods: clip2(simulationRaw?.methods, 400),
       inputsAvailable: Boolean(simulationRaw?.inputsAvailable)
     };
     if (!simulation.methods) errors.push("simulation.methods must say what was run, or that simulation does not apply.");
@@ -1332,7 +1396,7 @@ ${parsed.errors.join("\n")}`);
     const valueEstimate = {
       confidence: "low",
       assumptions: stringArray(valueRaw?.assumptions, 8, 240),
-      marketDisruption: clip(valueRaw?.marketDisruption, 400) || "Not estimated from the record.",
+      marketDisruption: clip2(valueRaw?.marketDisruption, 400) || "Not estimated from the record.",
       addressableMarket: rangeFrom(valueRaw?.addressableMarket, "not estimated"),
       units: rangeFrom(valueRaw?.units, "units"),
       valuePerUnit: rangeFrom(valueRaw?.valuePerUnit, "per unit"),
@@ -1342,11 +1406,11 @@ ${parsed.errors.join("\n")}`);
     if (includeValue && valueEstimate.assumptions.length === 0) errors.push("valueEstimate.assumptions needs at least one assumption.");
     const goals = Array.isArray(input.goals) ? input.goals.flatMap((item) => {
       if (!isRecord2(item)) return [];
-      const level = clip(item.level, 20);
+      const level = clip2(item.level, 20);
       if (!goalLevels.has(level)) return [];
-      const goalId = clip(item.goalId, 80);
+      const goalId = clip2(item.goalId, 80);
       if (!goalId) return [];
-      return [{ goalId, level, note: clip(item.note, 300) }];
+      return [{ goalId, level, note: clip2(item.note, 300) }];
     }) : [];
     if (goals.length === 0) errors.push("goals must list a level for the documented public goals you considered.");
     return {
@@ -1627,12 +1691,63 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     }
     return null;
   }
-  function diagnose(root, provider) {
-    if (queryFirst(root, provider.selectors.composer)) return "ready";
-    if (queryFirst(root, provider.selectors.login)) return "signed-out";
-    return "selector-miss";
+  var COMPOSER_HINTS = ["message grok", "ask", "what do you want to know", "message"];
+  var SEND_WORDS = ["send", "submit", "grok", "ask"];
+  function isIgnoredRegion(el) {
+    let node = el;
+    while (node) {
+      const id = (node.id || "").toLowerCase();
+      const className = classNameOf(node).toLowerCase();
+      if (id === "air-web-chat-banner" || node.hasAttribute("data-air-ignore") || id.includes("stl-forge") || id.includes("stlforge") || className.includes("stl-forge") || className.includes("stlforge") || (node.getAttribute("data-extension") || "").toLowerCase().includes("stl")) {
+        return true;
+      }
+      node = node.parentElement;
+    }
+    return false;
   }
-  function assistantText(root, selectors) {
+  function isHiddenControl(el) {
+    if (el.hasAttribute("hidden")) return true;
+    if (el.getAttribute("aria-hidden") === "true") return true;
+    if (el.getAttribute("aria-disabled") === "true") return true;
+    const style = el.style;
+    if (style?.display === "none" || style?.visibility === "hidden") return true;
+    if ("disabled" in el && Boolean(el.disabled)) return true;
+    return false;
+  }
+  function classNameOf(el) {
+    return typeof el.className === "string" ? el.className : "";
+  }
+  function isComposerCandidate(el) {
+    if (isIgnoredRegion(el) || isHiddenControl(el)) return false;
+    const tag = el.tagName;
+    if (tag === "TEXTAREA") return true;
+    if (tag === "INPUT") {
+      const type = (el.type || "text").toLowerCase();
+      return type === "text" || type === "search";
+    }
+    if (el.getAttribute("contenteditable") === "true" || el.getAttribute("contenteditable") === "") return true;
+    if (el.getAttribute("role") === "textbox") return true;
+    return false;
+  }
+  function hintText(el) {
+    return `${el.getAttribute("aria-label") ?? ""} ${el.getAttribute("placeholder") ?? ""}`.toLowerCase();
+  }
+  function matchesHint(el) {
+    const text = hintText(el);
+    return COMPOSER_HINTS.some((hint) => text.includes(hint));
+  }
+  function chatRegion(root) {
+    const scope = root instanceof Document ? root.body ?? root : root;
+    if (scope instanceof Element || scope instanceof Document) {
+      const main = scope.querySelector("main, [role='main']");
+      if (main) return main;
+    }
+    return scope;
+  }
+  function firstUsable(nodes, accept) {
+    return nodes.find((el) => accept(el)) ?? null;
+  }
+  function findComposer(root, selectors) {
     for (const selector of selectors) {
       let nodes = [];
       try {
@@ -1640,14 +1755,178 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       } catch {
         continue;
       }
-      const last = nodes[nodes.length - 1];
-      if (!last) continue;
-      const element = last;
-      const text = typeof element.innerText === "string" && element.innerText.trim() ? element.innerText : last.textContent ?? "";
-      const trimmed = text.trim();
-      if (trimmed) return trimmed;
+      const found = firstUsable(nodes, isComposerCandidate);
+      if (found) return found;
     }
-    return "";
+    const region = chatRegion(root);
+    let pool = [];
+    try {
+      pool = queryAllDeep(region, "textarea, input, [contenteditable='true'], [contenteditable=''], [role='textbox']");
+    } catch {
+      pool = [];
+    }
+    const usable = pool.filter(isComposerCandidate);
+    return usable.find(matchesHint) ?? usable.find((el) => el.tagName === "TEXTAREA") ?? usable.find((el) => el.getAttribute("contenteditable") === "true" || el.getAttribute("contenteditable") === "") ?? usable.find((el) => el.getAttribute("role") === "textbox") ?? null;
+  }
+  function buttonLabel(el) {
+    return `${el.getAttribute("aria-label") ?? ""} ${el.getAttribute("title") ?? ""} ${(el.textContent ?? "").replace(/\s+/g, " ")}`.toLowerCase();
+  }
+  function isSendControl(el) {
+    if (isIgnoredRegion(el) || isHiddenControl(el)) return false;
+    const tag = el.tagName;
+    if (tag !== "BUTTON" && el.getAttribute("role") !== "button" && el.type !== "submit") return false;
+    const label = buttonLabel(el);
+    if (/add files|voice mode|select a model|model auto/.test(label)) return false;
+    return true;
+  }
+  function nearest(origin, options) {
+    if (options.length === 0) return null;
+    const doc = origin.ownerDocument;
+    if (!doc) return options[0] ?? null;
+    const order = [...doc.querySelectorAll("body *")];
+    const index = new Map(order.map((el, position) => [el, position]));
+    const originIndex = index.get(origin) ?? 0;
+    let best = options[0] ?? null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const option of options) {
+      const distance = Math.abs((index.get(option) ?? 0) - originIndex);
+      if (distance < bestDistance) {
+        best = option;
+        bestDistance = distance;
+      }
+    }
+    return best;
+  }
+  function uniqueElements(nodes) {
+    return [...new Set(nodes)];
+  }
+  function findSubmit(root, selectors, composer) {
+    const matches = [];
+    for (const selector of selectors) {
+      try {
+        matches.push(...queryAllDeep(root, selector).filter(isSendControl));
+      } catch {
+      }
+    }
+    const listed = uniqueElements(matches);
+    if (listed.length) return composer ? nearest(composer, listed) : listed[listed.length - 1] ?? null;
+    const region = chatRegion(root);
+    let buttons = [];
+    try {
+      buttons = queryAllDeep(region, "button, [role='button'], input[type='submit']").filter(isSendControl);
+    } catch {
+      buttons = [];
+    }
+    const hinted = [];
+    for (const word of SEND_WORDS) hinted.push(...buttons.filter((button) => buttonLabel(button).includes(word)));
+    const hintedUnique = uniqueElements(hinted);
+    if (hintedUnique.length) return composer ? nearest(composer, hintedUnique) : hintedUnique[hintedUnique.length - 1] ?? null;
+    const submits = buttons.filter((button) => button.getAttribute("type") === "submit" || button.type === "submit");
+    if (composer) return nearest(composer, submits);
+    return submits[submits.length - 1] ?? null;
+  }
+  function describeButtons(root, limit = 6) {
+    let nodes = [];
+    try {
+      nodes = queryAllDeep(root, "button, [role='button'], input[type='submit']");
+    } catch {
+      nodes = [];
+    }
+    if (nodes.length === 0) return "Buttons: none.";
+    const text = nodes.slice(0, limit).map((el) => {
+      const tag = el.tagName.toLowerCase();
+      const type = el.getAttribute("type") ?? "";
+      const label = el.getAttribute("aria-label") ?? "";
+      const state = isHiddenControl(el) ? "disabled" : "enabled";
+      return [tag, type && `type=${type}`, label && `aria-label=${label}`, state].filter(Boolean).join(" ");
+    }).join("; ");
+    return `Buttons: ${text}.`;
+  }
+  function describeCandidates(root, limit = 6) {
+    let nodes = [];
+    try {
+      nodes = queryAllDeep(root, "textarea, input, [contenteditable='true'], [contenteditable=''], [role='textbox']");
+    } catch {
+      nodes = [];
+    }
+    const candidates = nodes.filter((el) => {
+      if (el.tagName === "INPUT") {
+        const type = (el.type || "").toLowerCase();
+        if (type === "file" || type === "hidden" || type === "password" || type === "checkbox" || type === "radio") return false;
+      }
+      return el.tagName === "TEXTAREA" || el.tagName === "INPUT" || el.getAttribute("contenteditable") != null || el.getAttribute("role") === "textbox";
+    });
+    if (candidates.length === 0) return "none";
+    return candidates.slice(0, limit).map((el) => {
+      const tag = el.tagName.toLowerCase();
+      const role = el.getAttribute("role") ?? "";
+      const label = el.getAttribute("aria-label") ?? "";
+      const placeholder = el.getAttribute("placeholder") ?? "";
+      return [tag, role && `role=${role}`, label && `aria-label=${label}`, placeholder && `placeholder=${placeholder}`].filter(Boolean).join(" ");
+    }).join("; ");
+  }
+  function elementText(el) {
+    const element = el;
+    const text = typeof element.innerText === "string" && element.innerText.trim() ? element.innerText : el.textContent ?? "";
+    return text.trim();
+  }
+  function looksLikeAssistant(el) {
+    const blob = `${el.getAttribute("data-testid") ?? ""} ${el.getAttribute("data-message-author") ?? ""} ${el.getAttribute("data-message-author-role") ?? ""} ${classNameOf(el)}`.toLowerCase();
+    return /assistant|grok-message|model-response|response-message/.test(blob);
+  }
+  function assistantText(root, selectors, composer) {
+    const seen = /* @__PURE__ */ new Set();
+    const consider = (nodes) => {
+      const usable = nodes.filter((el) => {
+        if (seen.has(el) || isIgnoredRegion(el)) return false;
+        seen.add(el);
+        if (!composer) return true;
+        if (el === composer || composer.contains(el) || el.contains(composer)) return false;
+        return true;
+      });
+      const last = usable[usable.length - 1];
+      return last ? elementText(last) : "";
+    };
+    for (const selector of selectors) {
+      let nodes = [];
+      try {
+        nodes = queryAllDeep(root, selector);
+      } catch {
+        continue;
+      }
+      const text2 = consider(nodes);
+      if (text2) return text2;
+    }
+    let pool = [];
+    try {
+      pool = queryAllDeep(root, "[data-testid], [data-message-author], [data-message-author-role], [class*='assistant'], [class*='response']");
+    } catch {
+      pool = [];
+    }
+    const text = consider(pool.filter(looksLikeAssistant));
+    return text;
+  }
+  function stopControlActive(root, selectors) {
+    const extra = ["button", "[role='button']"];
+    const found = [];
+    for (const selector of [...selectors, ...extra]) {
+      try {
+        found.push(...queryAllDeep(root, selector));
+      } catch {
+      }
+    }
+    return found.some((el) => {
+      if (isIgnoredRegion(el) || !isActiveStop(el)) return false;
+      const fromAdapter = selectors.some((selector) => {
+        try {
+          return el.matches(selector);
+        } catch {
+          return false;
+        }
+      });
+      if (fromAdapter) return true;
+      return /stop/.test(buttonLabel(el));
+    });
   }
   function isActiveStop(el) {
     if (el.hasAttribute("hidden")) return false;
@@ -1659,6 +1938,30 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     const base = filename.replace(/[^\w.\- ]+/g, "_").slice(0, 80) || "paper";
     return /\.(txt|md|csv|json)$/i.test(base) ? base : `${base}.txt`;
   }
+  function dispatchInput(el, text) {
+    try {
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }));
+    } catch {
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  }
+  function containsStart(el, text) {
+    if (!text) return true;
+    const probe = text.slice(0, Math.min(16, text.length));
+    const value = "value" in el ? String(el.value ?? "") : "";
+    return value.includes(probe) || (el.textContent ?? "").includes(probe);
+  }
+  function pasteText(el, text) {
+    try {
+      const transfer = new DataTransfer();
+      transfer.setData("text/plain", text);
+      const event = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer });
+      el.dispatchEvent(event);
+    } catch {
+      return false;
+    }
+    return containsStart(el, text);
+  }
   function writeComposer(el, text) {
     const tag = el.tagName;
     if (tag === "TEXTAREA" || tag === "INPUT") {
@@ -1666,7 +1969,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(control), "value")?.set;
       if (typeof setter === "function") setter.call(control, text);
       else control.value = text;
-      control.dispatchEvent(new Event("input", { bubbles: true }));
+      dispatchInput(control, text);
       control.dispatchEvent(new Event("change", { bubbles: true }));
       return;
     }
@@ -1684,17 +1987,26 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     } catch {
       inserted = false;
     }
-    const current = editable.textContent ?? "";
-    if (!inserted || text.length > 0 && !current.includes(text.slice(0, Math.min(16, text.length)))) {
+    if (!inserted || !containsStart(editable, text)) inserted = pasteText(editable, text);
+    if (!inserted || !containsStart(editable, text)) {
       editable.textContent = text;
-      try {
-        editable.dispatchEvent(new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }));
-      } catch {
-        editable.dispatchEvent(new Event("input", { bubbles: true }));
-      }
+      dispatchInput(editable, text);
     }
   }
   var clickLock = /* @__PURE__ */ new WeakMap();
+  function pressEnterOnce(el) {
+    if (clickLock.has(el)) return false;
+    clickLock.set(el, 1);
+    queueMicrotask(() => {
+      setTimeout(() => clickLock.delete(el), 0);
+    });
+    el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+    return true;
+  }
+  function submitOnce(composer, submit) {
+    if (submit) return clickElement(submit) ? "click" : "blocked";
+    return pressEnterOnce(composer) ? "enter" : "blocked";
+  }
   function clickElement(el) {
     if (clickLock.has(el)) return false;
     clickLock.set(el, 1);
@@ -1702,6 +2014,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       setTimeout(() => clickLock.delete(el), 0);
     });
     const node = el;
+    if (typeof node.focus === "function") node.focus();
     if (typeof node.click === "function") node.click();
     else el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     return true;
@@ -1714,29 +2027,57 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     '[aria-label*="Attached"]',
     '[aria-label*="Remove file"]'
   ];
+  function attachmentNames(files) {
+    const names = /* @__PURE__ */ new Set();
+    for (const file of files) {
+      const raw = file.filename.trim().toLowerCase();
+      const named = textFilename(file.filename).toLowerCase();
+      if (raw.length > 2) names.add(raw);
+      if (named.length > 2) names.add(named);
+      const stem = named.replace(/\.txt$/i, "");
+      if (stem.length > 2) names.add(stem);
+    }
+    return [...names];
+  }
+  function attachmentState(el) {
+    return `${el.getAttribute("data-attachment-state") ?? ""} ${el.getAttribute("data-state") ?? ""}`.toLowerCase();
+  }
+  function isPendingAttachment(el) {
+    return /\b(pending|uploading|processing)\b/.test(attachmentState(el));
+  }
   function attachmentReady(root, files, selectors = ATTACHMENT_SELECTORS) {
-    const names = files.map((file) => textFilename(file.filename).toLowerCase()).filter((name) => name.length > 0);
+    const names = attachmentNames(files);
     const seen = /* @__PURE__ */ new Set();
     const list = selectors.length > 0 ? selectors : ATTACHMENT_SELECTORS;
-    for (const selector of [...list, "[data-attachment-state]"]) {
+    const consider = (node) => {
+      if (seen.has(node) || isIgnoredRegion(node)) return false;
+      if (node.tagName === "INPUT" || node.tagName === "TEXTAREA" || node.tagName === "SCRIPT" || node.tagName === "STYLE") return false;
+      if (node.getAttribute("contenteditable") === "true" || node.getAttribute("role") === "textbox") return false;
+      seen.add(node);
+      if (isPendingAttachment(node)) return false;
+      const state = attachmentState(node);
+      if (/\b(ready|complete|uploaded|attached)\b/.test(state)) return true;
+      const label = (node.getAttribute("aria-label") ?? "").toLowerCase();
+      const text = (node.textContent ?? "").trim().toLowerCase();
+      const short = text.length > 0 && text.length < 180;
+      return names.some((name) => label.includes(name) || short && text.includes(name));
+    };
+    for (const selector of [...list, "[data-attachment-state]", "[class*='file']", "[class*='chip']", "[aria-label*='Remove']"]) {
       let nodes = [];
       try {
         nodes = queryAllDeep(root, selector);
       } catch {
         continue;
       }
-      for (const node of nodes) {
-        if (seen.has(node) || node.tagName === "INPUT" || node.tagName === "TEXTAREA" || node.tagName === "SCRIPT" || node.tagName === "STYLE") continue;
-        seen.add(node);
-        const state = `${node.getAttribute("data-attachment-state") ?? ""} ${node.getAttribute("data-state") ?? ""}`.toLowerCase();
-        const text = (node.textContent ?? "").toLowerCase();
-        const pending = /\b(pending|uploading|processing)\b/.test(state);
-        const ready = /\b(ready|complete|uploaded|attached)\b/.test(state);
-        if (ready) return true;
-        if (!pending && names.some((name) => text.includes(name))) return true;
-      }
+      if (nodes.some(consider)) return true;
     }
-    return false;
+    let all = [];
+    try {
+      all = queryAllDeep(root, "div, span, li, button, p");
+    } catch {
+      all = [];
+    }
+    return all.some(consider);
   }
   function attachTextFiles(input, files) {
     if (input.tagName !== "INPUT") return false;
@@ -1766,27 +2107,48 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
   function signedOut(provider) {
     return `${provider.label} is showing a sign-in page. Sign in on this tab, then click Run again in AIR. AIR does not see your password.`;
   }
-  function selectorMiss(provider) {
-    return `AIR could not find the message box on ${provider.label}. The page may still be loading, or the site changed its layout. Reload the tab and run again. The selectors for this site are in extension/adapters/${provider.id}.ts.`;
+  function selectorMiss(provider, diagnostic) {
+    const detail = diagnostic && diagnostic !== "none" ? ` Candidates: ${diagnostic}.` : " Candidates: none.";
+    return `AIR could not find the message box on ${provider.label}. The page may still be loading, or the site changed its layout. Reload the tab and run again.${detail} The selectors for this site are in extension/adapters/${provider.id}.ts.`;
   }
-  async function waitForReply(doc, provider, before, hooks) {
+  async function waitForComposer(doc, provider, hooks) {
+    const timeoutMs = hooks.composerTimeoutMs ?? 2e4;
+    const pollMs = hooks.pollMs ?? 200;
+    const start = Date.now();
+    let found = findComposer(doc, provider.selectors.composer);
+    while (!found && Date.now() - start <= timeoutMs) {
+      if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.");
+      await hooks.sleep(pollMs);
+      found = findComposer(doc, provider.selectors.composer);
+    }
+    return found;
+  }
+  function stepDiagnostic(doc) {
+    return `${describeButtons(doc)} ${describeCandidates(doc)}`;
+  }
+  async function waitForReply(doc, provider, before, hooks, composer) {
     const pollMs = hooks.pollMs ?? 400;
     const stableMs = hooks.stableMs ?? 2e3;
     const timeoutMs = hooks.stepTimeoutMs ?? 4 * 60 * 1e3;
+    const startLimit = hooks.replyStartTimeoutMs ?? 2e4;
     const start = Date.now();
     let last = before;
     let stableFor = 0;
+    let started = false;
     while (Date.now() - start < timeoutMs) {
       if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.");
-      const text = assistantText(doc, provider.selectors.assistant);
-      const stopping = provider.selectors.stop.some((selector) => {
-        try {
-          const found = queryFirst(doc, [selector]);
-          return Boolean(found && isActiveStop(found));
-        } catch {
-          return false;
+      const text = assistantText(doc, provider.selectors.assistant, composer);
+      const stopping = stopControlActive(doc, provider.selectors.stop);
+      if (text && text !== before) started = true;
+      if (!started && !stopping && Date.now() - start >= startLimit) {
+        const send = findSubmit(doc, provider.selectors.submit, composer);
+        if (send) {
+          throw new TurnError(
+            "send-timeout",
+            `Send step on ${provider.label} did not start a reply. The Send button was still enabled. ${stepDiagnostic(doc)}`
+          );
         }
-      });
+      }
       if (text && text !== before && text === last && !stopping && stableFor >= stableMs) return text;
       if (text !== last) {
         last = text;
@@ -1796,39 +2158,48 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       }
       await hooks.sleep(pollMs);
     }
-    throw new TurnError("timeout", `${provider.label} did not finish a reply in time. The tab stays open so you can read what is there.`);
+    throw new TurnError("timeout", `Reply step on ${provider.label} did not finish in time. ${stepDiagnostic(doc)}`);
   }
   async function waitForAttachment(doc, provider, files, hooks) {
     const timeoutMs = hooks.attachmentTimeoutMs ?? 2e4;
+    const chipWindow = hooks.attachmentChipMs ?? 3e3;
     const pollMs = hooks.pollMs ?? 200;
     const selectors = provider.selectors.attachment?.length ? provider.selectors.attachment : ATTACHMENT_SELECTORS;
     const start = Date.now();
     while (Date.now() - start <= timeoutMs) {
       if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.");
       if (attachmentReady(doc, files, selectors)) return;
+      if (Date.now() - start >= chipWindow) {
+        const composer = findComposer(doc, provider.selectors.composer);
+        const send = composer ? findSubmit(doc, provider.selectors.submit, composer) : null;
+        if (send) return;
+      }
       await hooks.sleep(pollMs);
     }
     throw new TurnError(
       "upload-timeout",
-      `${provider.label} did not finish accepting the file. The attachment never showed as ready. Wait until the file chip appears, then run again.`
+      `Attachment step on ${provider.label} timed out. The file chip never showed as ready, and Send was not enabled. ${stepDiagnostic(doc)}`
     );
   }
   async function sendStep(doc, provider, step, hooks) {
     if (step.kind === "upload") {
+      hooks.onProgress?.(`Attachment step on ${provider.label}. Waiting for the file chip, or for Send to become enabled.`);
       const input = queryFirst(doc, provider.selectors.fileInput);
       const attached = input ? attachTextFiles(input, step.files) : false;
       if (!attached) throw new TurnError("upload-miss", "file upload was not accepted");
       await waitForAttachment(doc, provider, step.files, hooks);
     }
-    const composer = queryFirst(doc, provider.selectors.composer);
-    if (!composer) throw new TurnError("selector-miss", selectorMiss(provider));
-    const before = assistantText(doc, provider.selectors.assistant);
+    const composer = findComposer(doc, provider.selectors.composer);
+    if (!composer) throw new TurnError("selector-miss", selectorMiss(provider, describeCandidates(doc)));
+    const before = assistantText(doc, provider.selectors.assistant, composer);
     writeComposer(composer, step.text);
-    const submit = queryFirst(doc, provider.selectors.submit);
-    if (!submit) throw new TurnError("selector-miss", `AIR could not find the send button on ${provider.label}. The site's page may have changed.`);
-    const clicked = clickElement(submit);
-    if (!clicked) throw new TurnError("double-click", `Send on ${provider.label} was already clicked for this message. AIR did not click again, so a Stop button is not pressed.`);
-    return waitForReply(doc, provider, before, hooks);
+    const submit = findSubmit(doc, provider.selectors.submit, composer);
+    hooks.onProgress?.(`Send step on ${provider.label}. Clicking Send once.`);
+    const sent = submitOnce(composer, submit);
+    if (sent === "blocked") {
+      throw new TurnError("double-click", `Send on ${provider.label} was already clicked for this message. AIR did not click again, so a Stop button is not pressed.`);
+    }
+    return waitForReply(doc, provider, before, hooks, composer);
   }
   async function sendFollowUp(doc, provider, text, hooks) {
     const step = { kind: "paste", text, files: [], index: 1, total: 1, final: true };
@@ -1836,9 +2207,11 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
   }
   async function runTurn(doc, provider, packet, hooks) {
     try {
-      const state = diagnose(doc, provider);
-      if (state === "signed-out") return { ok: false, code: "signed-out", message: signedOut(provider) };
-      if (state === "selector-miss") return { ok: false, code: "selector-miss", message: selectorMiss(provider) };
+      const composer = await waitForComposer(doc, provider, hooks);
+      if (!composer) {
+        if (queryFirst(doc, provider.selectors.login)) return { ok: false, code: "signed-out", message: signedOut(provider) };
+        return { ok: false, code: "selector-miss", message: selectorMiss(provider, describeCandidates(doc)) };
+      }
       let providerForPlan = provider;
       let planned = planDelivery(packet, providerForPlan);
       if (planned.warning) hooks.onProgress?.(planned.warning);

@@ -1,5 +1,6 @@
 import { categoryLabel, clamp, weightedMean } from "../domain/criteria.ts"
 import { describeScoring } from "../domain/scoring.ts"
+import { parseAirFeedback } from "./airFeedback.ts"
 import type {
   Citation,
   Confidence,
@@ -132,6 +133,7 @@ export function validateReport(input: unknown, criteria: CriteriaSet): { ok: tru
   const idea = weightedMean(ready, criteria, criteria.ideaCriterionIds)
   if (overall === null || idea === null) return { ok: false, errors: ["Could not weight the scores."] }
   const statedRaw = Number(input.overallScore)
+  const airFeedback = parseAirFeedback(input.air_feedback ?? input.airFeedback)
   const check = describeScoring({
     scores: ready,
     statedOverall: Number.isFinite(statedRaw) ? statedRaw : null,
@@ -154,6 +156,7 @@ export function validateReport(input: unknown, criteria: CriteriaSet): { ok: tru
       minorIssues,
       questionsForAuthors: questions,
       suggestedNextSteps: nextSteps,
+      ...(airFeedback ? { airFeedback } : {}),
       ...v2,
     },
   }

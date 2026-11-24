@@ -1,9 +1,13 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import { describe, expect, it } from "vitest"
+import { webChatProvider } from "../../../extension/adapters/index.ts"
 import { CRITERION_PROFILES, readingCriteria } from "../../domain/profiles.ts"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
-import { attachmentReady, clickElement } from "./dom.ts"
+import { assistantText, attachmentReady, clickElement, describeCandidates, diagnose, findComposer, findSubmit, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
 import { buildWebChatPacket } from "./packet.ts"
+import { runTurn } from "./runTurn.ts"
 import { acceptWebChatResult } from "./accept.ts"
 import { extensionEnvelope, relayFromProvider, relayTargets, type RelayJob } from "./relay.ts"
 import type { ZenodoRecord } from "../zenodo.ts"
@@ -139,5 +143,147 @@ describe("site and extension messaging", () => {
     expect(relayFromProvider(null, 9, { type: "air-web-chat-done", requestId: "web-1", ok: true, text: "x" }).kind).toBe("ignore")
     const panelOnly = relayFromProvider({ ...job, airTabId: 0 }, 9, { type: "air-web-chat-progress", requestId: "web-1", message: "panel" })
     if (panelOnly.kind === "progress") expect(relayTargets(panelOnly).airTabId).toBeNull()
+  })
+})
+
+function loadFixture(name: string) {
+  document.documentElement.innerHTML = readFileSync(join(process.cwd(), "extension/fixtures", `${name}.html`), "utf8")
+}
+
+describe("live chat composers", () => {
+  it("finds Grok on X by Ask anything and ignores STL Forge, the banner, and a hidden twin", () => {
+    loadFixture("grok-x-live")
+    const provider = webChatProvider("grok-x")
+    if (!provider) throw new Error("missing grok-x")
+    const composer = findComposer(document, provider.selectors.composer)
+    expect(composer?.id).toBe("composer")
+    expect(diagnose(document, provider)).toBe("ready")
+    writeComposer(composer as Element, "Score this paper")
+    const send = document.getElementById("send") as HTMLButtonElement
+    send.hidden = false
+    expect(findSubmit(document, provider.selectors.submit, composer)?.id).toBe("send")
+    expect(assistantText(document, provider.selectors.assistant, composer)).toBe("")
+    document.getElementById("assistant")!.textContent = "The reply is ready."
+    expect(assistantText(document, provider.selectors.assistant, composer)).toContain("reply is ready")
+    expect(stopControlActive(document, [])).toBe(false)
+    ;(document.getElementById("stop") as HTMLButtonElement).hidden = false
+    expect(stopControlActive(document, provider.selectors.stop)).toBe(true)
+  })
+
+  it("finds Message Grok, ignores STL Forge's Send, and treats a filename chip as attached", () => {
+    loadFixture("grok-live")
+    const provider = webChatProvider("grok")
+    if (!provider) throw new Error("missing grok")
+    const composer = findComposer(document, provider.selectors.composer)
+    expect(composer?.id).toBe("composer")
+    expect((composer as HTMLTextAreaElement).getAttribute("placeholder")).toBeNull()
+    expect(findSubmit(document, provider.selectors.submit, composer)?.id).toBe("send")
+    const files = [{ filename: "paper.pdf", text: "extracted" }]
+    expect(attachmentReady(document, files)).toBe(false)
+    document.getElementById("chip")!.textContent = "paper.pdf.txt"
+    expect(attachmentReady(document, files)).toBe(true)
+    writeComposer(composer as Element, "Review the attached paper")
+    expect((composer as HTMLTextAreaElement).value).toContain("Review the attached paper")
+  })
+
+  it("clicks the enabled Grok Send once when the chip never appears", async () => {
+    loadFixture("grok-live")
+    const provider = webChatProvider("grok")
+    if (!provider) throw new Error("missing grok")
+    const send = document.getElementById("send") as HTMLButtonElement
+    let clicks = 0
+    send.addEventListener("click", () => {
+      clicks += 1
+      document.getElementById("assistant")!.textContent = "summary: the record is readable."
+    })
+    const packet = buildWebChatPacket({
+      requestId: "grok-live",
+      providerId: "grok",
+      criteria: officialCriteria,
+      record,
+      documents: [{ filename: "paper.pdf", text: "Measured yield in one season." }],
+    })
+    const result = await runTurn(document, provider, packet, {
+      aborted: () => false,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      pollMs: 5,
+      stableMs: 0,
+      attachmentChipMs: 15,
+      attachmentTimeoutMs: 200,
+      replyStartTimeoutMs: 200,
+      stepTimeoutMs: 400,
+    })
+    expect(clicks).toBe(1)
+    expect(result.ok).toBe(true)
+  })
+
+  it("reports the Send step when the enabled button does not start a reply", async () => {
+    loadFixture("grok-live")
+    const provider = webChatProvider("grok")
+    if (!provider) throw new Error("missing grok")
+    document.getElementById("chip")!.textContent = "paper.pdf.txt"
+    const packet = buildWebChatPacket({
+      requestId: "grok-stuck",
+      providerId: "grok",
+      criteria: officialCriteria,
+      record,
+      documents: [{ filename: "paper.pdf", text: "Measured yield in one season." }],
+    })
+    const result = await runTurn(document, provider, packet, {
+      aborted: () => false,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      pollMs: 5,
+      stableMs: 0,
+      attachmentChipMs: 10,
+      attachmentTimeoutMs: 50,
+      replyStartTimeoutMs: 30,
+      stepTimeoutMs: 80,
+    })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.message).toContain("Send step on Grok")
+    expect(result.message).toContain("still enabled")
+    expect(result.message).toContain("aria-label=Send")
+    expect(result.message).toContain("aria-label=Message Grok")
+  })
+
+  it("names candidate inputs when no message box appears", async () => {
+    document.body.innerHTML = `<main><textarea hidden aria-label="Ask anything" placeholder="Ask anything" role="textbox"></textarea></main>`
+    const provider = webChatProvider("grok-x")
+    if (!provider) throw new Error("missing grok-x")
+    const packet = buildWebChatPacket({
+      requestId: "missing-box",
+      providerId: "grok-x",
+      criteria: officialCriteria,
+      criterionProfile: "theory",
+      record,
+      documents: [{ filename: "note.txt", text: "A short note." }],
+    })
+    const result = await runTurn(document, { ...provider, fileUpload: false }, packet, {
+      aborted: () => false,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      pollMs: 5,
+      composerTimeoutMs: 0,
+    })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.message).toContain("aria-label=Ask anything")
+    expect(result.message).toContain("placeholder=Ask anything")
+    expect(result.message).toContain("role=textbox")
+    expect(describeCandidates(document)).toContain("textarea")
+  })
+
+  it("presses Enter once when Send has not been drawn", () => {
+    document.body.innerHTML = `<main><div id="box" contenteditable="true" aria-label="Ask anything"></div></main>`
+    const box = document.getElementById("box") as HTMLElement
+    let keys = 0
+    box.addEventListener("keydown", (event) => {
+      if ((event as KeyboardEvent).key === "Enter") keys += 1
+    })
+    writeComposer(box, "Hello paper")
+    expect(box.textContent).toContain("Hello paper")
+    expect(submitOnce(box, null)).toBe("enter")
+    expect(submitOnce(box, null)).toBe("blocked")
+    expect(keys).toBe(1)
   })
 })

@@ -24,6 +24,7 @@ export function reviewSystemPrompt(criteria: CriteriaSet): string {
     "Be specific and kind. Every criticism needs a way to resolve it.",
     "Quote only passages that appear in the text you were given. Do not invent page numbers, results, or citations.",
     `Score every criterion with an integer from ${criteria.scale.min} to ${criteria.scale.max}.`,
+    "You may add an optional air_feedback object about AIR itself: unclear criteria, a misfitting profile, missing files or context, a prompt problem, a rubric suggestion, or a correction to your own scoring process. Omit it when you have none. It must not change any score.",
     criteria.scale.max >= 100
       ? "The board is out of 100. AIR weights the criterion scores itself. If you include overallScore, keep it within 10 points of that weighted total. recommendation must match the band: accept or encourage from 80 (accept means sound as it stands; encourage means the idea is ready to build on), revise from 60, major-revision from 40, otherwise not-ready."
       : "",
@@ -43,6 +44,38 @@ export function reviewSystemPrompt(criteria: CriteriaSet): string {
     "Principles:",
     ...criteria.principles.map((principle) => `- ${principle}`),
   ].join("\n")
+}
+
+function publicDoiUrl(doi: string | undefined): string | null {
+  const cleaned = (doi ?? "").trim().replace(/^https?:\/\/doi\.org\//i, "").replace(/^doi:/i, "")
+  if (!/^10\.\S+/.test(cleaned)) return null
+  return `https://doi.org/${cleaned}`
+}
+
+function zenodoRecordsUrl(id: string | undefined): string | null {
+  const cleaned = (id ?? "").trim()
+  if (!/^\d+$/.test(cleaned)) return null
+  return `https://zenodo.org/records/${cleaned}`
+}
+
+/**
+ * Public source links for the reviewer. Private AI chat links are never included here.
+ * A local upload with no Zenodo id returns an empty string.
+ */
+export function sourceRecordBlock(record: ZenodoRecord): string {
+  const versionUrl = zenodoRecordsUrl(record.id) || (record.htmlUrl.startsWith("https://zenodo.org/records/") ? record.htmlUrl : "")
+  const doiUrl = publicDoiUrl(record.doi)
+  const conceptUrl = zenodoRecordsUrl(record.conceptId)
+  const conceptDoiUrl = publicDoiUrl(record.conceptDoi)
+  const lines = [
+    "Source record. These are the public record links. Cite them and use them to cross-check versions. They are not private chat links.",
+  ]
+  if (versionUrl) lines.push(`This version: ${versionUrl}`)
+  if (doiUrl) lines.push(`DOI: ${doiUrl}`)
+  if (conceptUrl) lines.push(`Concept record (all versions): ${conceptUrl}`)
+  if (conceptDoiUrl && conceptDoiUrl !== doiUrl) lines.push(`Concept DOI: ${conceptDoiUrl}`)
+  if (lines.length === 1) return ""
+  return lines.join("\n")
 }
 
 export function reviewUserPrompt(record: ZenodoRecord, criteria: CriteriaSet, packet: string, conversations: ConversationLink[] = []): string {
@@ -82,6 +115,14 @@ export function reviewUserPrompt(record: ZenodoRecord, criteria: CriteriaSet, pa
     minorIssues: ["string"],
     questionsForAuthors: ["string"],
     suggestedNextSteps: ["string"],
+    air_feedback: {
+      criteria: "optional. A criterion or its wording was unclear or did not fit this paper.",
+      profile: "optional. The paper-type profile misfit the work.",
+      missingContext: "optional. A file or piece of context needed to score was missing.",
+      prompt: "optional. The instructions were ambiguous.",
+      rubric: "optional. A concrete rubric change.",
+      scoringProcess: "optional. A correction to how you scored. Do not change the scores to match this note.",
+    },
   }
   const guide = criteria.criteria
     .map((criterion) => {
@@ -100,6 +141,8 @@ export function reviewUserPrompt(record: ZenodoRecord, criteria: CriteriaSet, pa
     `Date: ${record.publicationDate}`,
     `License: ${record.license || "unspecified"}`,
     `Keywords: ${record.keywords.join(", ") || "none"}`,
+    "",
+    sourceRecordBlock(record),
     "",
     "Criteria:",
     guide,

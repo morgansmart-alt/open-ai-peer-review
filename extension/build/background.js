@@ -150,14 +150,28 @@
     limits: "Grok on X is at x.com/i/grok. AIR tries a file up to about 400,000 characters, then pastes 32,000 characters at a time. X rate-limits long threads. That limit was not measured here.",
     selectors: {
       composer: [
+        'textarea[aria-label="Ask anything"]',
+        'textarea[placeholder="Ask anything"]',
+        '[contenteditable="true"][aria-label="Ask anything"]',
+        '[contenteditable="true"][placeholder="Ask anything"]',
+        '[role="textbox"][aria-label*="Ask"]',
+        '[role="textbox"][placeholder*="Ask"]',
         'textarea[aria-label="Ask Grok"]',
         'textarea[aria-label*="Ask Grok"]',
+        'textarea[aria-label*="Ask"]',
+        'textarea[placeholder*="Ask"]',
         'div[data-testid="grokComposer"] textarea',
         'div[contenteditable="true"][role="textbox"]'
       ],
-      submit: ['button[aria-label="Send"]', 'button[data-testid="grok-send"]', 'button[aria-label*="Send"]'],
-      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]'],
-      assistant: ['[data-testid="assistant-message"]', '[data-testid="grok-message"]'],
+      submit: [
+        'button[aria-label="Send"]',
+        'button[aria-label*="Send"]',
+        'button[aria-label*="Submit"]',
+        'button[aria-label*="Grok"]',
+        'button[data-testid="grok-send"]'
+      ],
+      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]', 'button[aria-label*="Stop generating"]'],
+      assistant: ['[data-testid="assistant-message"]', '[data-testid="grok-message"]', '[class*="assistant-message"]', '[data-message-author="assistant"]'],
       fileInput: ['input[type="file"]'],
       login: ['a[href*="/login"]', 'a[href*="/i/flow/login"]', 'a[data-testid="login"]']
     }
@@ -180,14 +194,26 @@
     limits: "AIR attaches a paper up to about 1.2 million characters, or pastes 48,000 characters at a time. Grok's free web chat rate-limits long threads. The exact cap is set by xAI and was not measured here.",
     selectors: {
       composer: [
+        'textarea[aria-label="Message Grok"]',
+        'textarea[aria-label*="Message Grok"]',
+        '[contenteditable="true"][aria-label="Message Grok"]',
+        '[contenteditable="true"][aria-label*="Message Grok"]',
+        '[role="textbox"][aria-label="Message Grok"]',
+        '[role="textbox"][aria-label*="Message Grok"]',
         'textarea[aria-label="Ask Grok anything"]',
         'textarea[aria-label*="Ask Grok"]',
+        'textarea[placeholder*="What do you want to know"]',
+        'textarea[aria-label*="What do you want to know"]',
+        'textarea[placeholder*="Ask anything"]',
+        'textarea[aria-label*="Ask anything"]',
         'textarea[placeholder*="Ask"]',
+        '[contenteditable="true"][placeholder*="Ask"]',
+        '[contenteditable="true"][aria-label*="Ask"]',
         'div[contenteditable="true"][role="textbox"]'
       ],
-      submit: ['button[aria-label="Submit"]', 'button[aria-label*="Send"]', 'button[type="submit"]'],
-      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]'],
-      assistant: ['[data-testid="assistant-message"]', '[data-message-author="assistant"]'],
+      submit: ['button[aria-label="Submit"]', 'button[aria-label*="Send"]', 'button[aria-label*="Submit"]', 'button[type="submit"]'],
+      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]', 'button[aria-label*="Stop generating"]'],
+      assistant: ['[data-testid="assistant-message"]', '[data-message-author="assistant"]', '[class*="assistant-message"]'],
       fileInput: ['input[type="file"]'],
       login: ['a[href*="accounts.x.com"]', 'a[href*="/login"]', 'button[data-testid="login"]']
     }

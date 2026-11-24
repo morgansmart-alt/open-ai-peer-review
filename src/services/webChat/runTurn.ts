@@ -1,6 +1,19 @@
 import type { ProviderAdapter } from "../../../extension/adapters/index.ts"
 import { planDelivery, type DeliveryStep } from "./deliver.ts"
-import { assistantText, attachTextFiles, attachmentReady, ATTACHMENT_SELECTORS, clickElement, diagnose, isActiveStop, queryFirst, writeComposer } from "./dom.ts"
+import {
+  assistantText,
+  attachTextFiles,
+  attachmentReady,
+  ATTACHMENT_SELECTORS,
+  describeButtons,
+  describeCandidates,
+  findComposer,
+  findSubmit,
+  queryFirst,
+  stopControlActive,
+  submitOnce,
+  writeComposer,
+} from "./dom.ts"
 import type { WebChatPacket } from "./protocol.ts"
 
 export interface TurnHooks {
@@ -10,8 +23,14 @@ export interface TurnHooks {
   pollMs?: number
   stableMs?: number
   stepTimeoutMs?: number
-  /** How long to wait for the chat to show the file as attached. */
+  /** How long to wait for a file chip before giving up. */
   attachmentTimeoutMs?: number
+  /** After this long, an enabled Send button counts as the file being ready. */
+  attachmentChipMs?: number
+  /** How long to wait for the message box to appear. */
+  composerTimeoutMs?: number
+  /** How long Send may stay enabled before the click is reported as a miss. */
+  replyStartTimeoutMs?: number
 }
 
 export type TurnResult = { ok: true; text: string; steps: number } | { ok: false; code: string; message: string }
@@ -29,28 +48,51 @@ function signedOut(provider: ProviderAdapter): string {
   return `${provider.label} is showing a sign-in page. Sign in on this tab, then click Run again in AIR. AIR does not see your password.`
 }
 
-function selectorMiss(provider: ProviderAdapter): string {
-  return `AIR could not find the message box on ${provider.label}. The page may still be loading, or the site changed its layout. Reload the tab and run again. The selectors for this site are in extension/adapters/${provider.id}.ts.`
+function selectorMiss(provider: ProviderAdapter, diagnostic: string): string {
+  const detail = diagnostic && diagnostic !== "none" ? ` Candidates: ${diagnostic}.` : " Candidates: none."
+  return `AIR could not find the message box on ${provider.label}. The page may still be loading, or the site changed its layout. Reload the tab and run again.${detail} The selectors for this site are in extension/adapters/${provider.id}.ts.`
 }
 
-async function waitForReply(doc: Document, provider: ProviderAdapter, before: string, hooks: TurnHooks): Promise<string> {
+async function waitForComposer(doc: Document, provider: ProviderAdapter, hooks: TurnHooks): Promise<Element | null> {
+  const timeoutMs = hooks.composerTimeoutMs ?? 20_000
+  const pollMs = hooks.pollMs ?? 200
+  const start = Date.now()
+  let found = findComposer(doc, provider.selectors.composer)
+  while (!found && Date.now() - start <= timeoutMs) {
+    if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.")
+    await hooks.sleep(pollMs)
+    found = findComposer(doc, provider.selectors.composer)
+  }
+  return found
+}
+
+function stepDiagnostic(doc: Document): string {
+  return `${describeButtons(doc)} ${describeCandidates(doc)}`
+}
+
+async function waitForReply(doc: Document, provider: ProviderAdapter, before: string, hooks: TurnHooks, composer: Element): Promise<string> {
   const pollMs = hooks.pollMs ?? 400
   const stableMs = hooks.stableMs ?? 2000
   const timeoutMs = hooks.stepTimeoutMs ?? 4 * 60 * 1000
+  const startLimit = hooks.replyStartTimeoutMs ?? 20_000
   const start = Date.now()
   let last = before
   let stableFor = 0
+  let started = false
   while (Date.now() - start < timeoutMs) {
     if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.")
-    const text = assistantText(doc, provider.selectors.assistant)
-    const stopping = provider.selectors.stop.some((selector) => {
-      try {
-        const found = queryFirst(doc, [selector])
-        return Boolean(found && isActiveStop(found))
-      } catch {
-        return false
+    const text = assistantText(doc, provider.selectors.assistant, composer)
+    const stopping = stopControlActive(doc, provider.selectors.stop)
+    if (text && text !== before) started = true
+    if (!started && !stopping && Date.now() - start >= startLimit) {
+      const send = findSubmit(doc, provider.selectors.submit, composer)
+      if (send) {
+        throw new TurnError(
+          "send-timeout",
+          `Send step on ${provider.label} did not start a reply. The Send button was still enabled. ${stepDiagnostic(doc)}`,
+        )
       }
-    })
+    }
     if (text && text !== before && text === last && !stopping && stableFor >= stableMs) return text
     if (text !== last) {
       last = text
@@ -60,41 +102,50 @@ async function waitForReply(doc: Document, provider: ProviderAdapter, before: st
     }
     await hooks.sleep(pollMs)
   }
-  throw new TurnError("timeout", `${provider.label} did not finish a reply in time. The tab stays open so you can read what is there.`)
+  throw new TurnError("timeout", `Reply step on ${provider.label} did not finish in time. ${stepDiagnostic(doc)}`)
 }
 
 async function waitForAttachment(doc: Document, provider: ProviderAdapter, files: DeliveryStep["files"], hooks: TurnHooks): Promise<void> {
   const timeoutMs = hooks.attachmentTimeoutMs ?? 20_000
+  const chipWindow = hooks.attachmentChipMs ?? 3_000
   const pollMs = hooks.pollMs ?? 200
   const selectors = provider.selectors.attachment?.length ? provider.selectors.attachment : ATTACHMENT_SELECTORS
   const start = Date.now()
   while (Date.now() - start <= timeoutMs) {
     if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.")
     if (attachmentReady(doc, files, selectors)) return
+    if (Date.now() - start >= chipWindow) {
+      const composer = findComposer(doc, provider.selectors.composer)
+      const send = composer ? findSubmit(doc, provider.selectors.submit, composer) : null
+      if (send) return
+    }
     await hooks.sleep(pollMs)
   }
   throw new TurnError(
     "upload-timeout",
-    `${provider.label} did not finish accepting the file. The attachment never showed as ready. Wait until the file chip appears, then run again.`,
+    `Attachment step on ${provider.label} timed out. The file chip never showed as ready, and Send was not enabled. ${stepDiagnostic(doc)}`,
   )
 }
 
 async function sendStep(doc: Document, provider: ProviderAdapter, step: DeliveryStep, hooks: TurnHooks): Promise<string> {
   if (step.kind === "upload") {
+    hooks.onProgress?.(`Attachment step on ${provider.label}. Waiting for the file chip, or for Send to become enabled.`)
     const input = queryFirst(doc, provider.selectors.fileInput)
     const attached = input ? attachTextFiles(input, step.files) : false
     if (!attached) throw new TurnError("upload-miss", "file upload was not accepted")
     await waitForAttachment(doc, provider, step.files, hooks)
   }
-  const composer = queryFirst(doc, provider.selectors.composer)
-  if (!composer) throw new TurnError("selector-miss", selectorMiss(provider))
-  const before = assistantText(doc, provider.selectors.assistant)
+  const composer = findComposer(doc, provider.selectors.composer)
+  if (!composer) throw new TurnError("selector-miss", selectorMiss(provider, describeCandidates(doc)))
+  const before = assistantText(doc, provider.selectors.assistant, composer)
   writeComposer(composer, step.text)
-  const submit = queryFirst(doc, provider.selectors.submit)
-  if (!submit) throw new TurnError("selector-miss", `AIR could not find the send button on ${provider.label}. The site's page may have changed.`)
-  const clicked = clickElement(submit)
-  if (!clicked) throw new TurnError("double-click", `Send on ${provider.label} was already clicked for this message. AIR did not click again, so a Stop button is not pressed.`)
-  return waitForReply(doc, provider, before, hooks)
+  const submit = findSubmit(doc, provider.selectors.submit, composer)
+  hooks.onProgress?.(`Send step on ${provider.label}. Clicking Send once.`)
+  const sent = submitOnce(composer, submit)
+  if (sent === "blocked") {
+    throw new TurnError("double-click", `Send on ${provider.label} was already clicked for this message. AIR did not click again, so a Stop button is not pressed.`)
+  }
+  return waitForReply(doc, provider, before, hooks, composer)
 }
 
 /** One more message in the chat that is already open. Waits until streaming stops. */
@@ -105,9 +156,11 @@ export async function sendFollowUp(doc: Document, provider: ProviderAdapter, tex
 
 export async function runTurn(doc: Document, provider: ProviderAdapter, packet: WebChatPacket, hooks: TurnHooks): Promise<TurnResult> {
   try {
-    const state = diagnose(doc, provider)
-    if (state === "signed-out") return { ok: false, code: "signed-out", message: signedOut(provider) }
-    if (state === "selector-miss") return { ok: false, code: "selector-miss", message: selectorMiss(provider) }
+    const composer = await waitForComposer(doc, provider, hooks)
+    if (!composer) {
+      if (queryFirst(doc, provider.selectors.login)) return { ok: false, code: "signed-out", message: signedOut(provider) }
+      return { ok: false, code: "selector-miss", message: selectorMiss(provider, describeCandidates(doc)) }
+    }
     let providerForPlan = provider
     let planned = planDelivery(packet, providerForPlan)
     if (planned.warning) hooks.onProgress?.(planned.warning)

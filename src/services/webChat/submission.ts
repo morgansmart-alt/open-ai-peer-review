@@ -1,6 +1,7 @@
 import { officialCriteria } from "../../domain/officialCriteria.ts"
 import { criteriaForReview, describeScoring } from "../../domain/scoring.ts"
-import type { CriteriaSet, StoredReview } from "../../domain/types.ts"
+import type { AirFeedback, CriteriaSet, StoredReview } from "../../domain/types.ts"
+import { parseAirFeedback } from "../airFeedback.ts"
 import { stripChatShareLinks } from "./standalone.ts"
 import { WEB_CHAT_SOURCE, UNCALIBRATED_WEB_CHAT_TIER } from "./protocol.ts"
 
@@ -10,7 +11,7 @@ export const AIR_SITE_URL = "https://morgansmart-alt.github.io/open-ai-peer-revi
 /** Scores are posted straight to the Supabase function. GitHub Pages does not receive them. */
 export const WEB_CHAT_SUBMIT_URL = "https://lotswxboafsenmszijpf.supabase.co/functions/v1/submit-web-chat"
 
-const TOP_KEYS = new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended"])
+const TOP_KEYS = new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback"])
 const DEFENDED_KEYS = new Set(["label", "overallScore", "recommendation", "summary", "scores"])
 const PAPER_KEYS = new Set(["title", "doi", "url"])
 
@@ -38,6 +39,8 @@ export interface WebChatSubmission {
   recommendation: string
   createdAt: string
   defended?: DefendedScore
+  /** Optional notes about AIR. Not used in the score. */
+  airFeedback?: AirFeedback
 }
 
 export interface SubmissionRow {
@@ -107,6 +110,7 @@ export function submissionFromReview(review: StoredReview, site: string): { ok: 
     recommendation: review.report.recommendation,
     createdAt: review.createdAt,
     ...(review.defended ? { defended: review.defended } : {}),
+    ...(review.report.airFeedback ? { airFeedback: review.report.airFeedback } : {}),
   }
   const checked = validateWebChatSubmission(submission, criteria)
   if (checked.ok) return { ok: true, submission: checked.submission }
@@ -175,6 +179,7 @@ export function validateWebChatSubmission(
   if (!Number.isFinite(Date.parse(createdAt))) return { ok: false, error: "The score needs a timestamp." }
   const defended = readDefended(input.defended, criteria)
   if (!defended.ok) return defended
+  const airFeedback = parseAirFeedback(input.airFeedback)
   return {
     ok: true,
     submission: {
@@ -191,6 +196,7 @@ export function validateWebChatSubmission(
       recommendation,
       createdAt,
       ...(defended.score ? { defended: defended.score } : {}),
+      ...(airFeedback ? { airFeedback } : {}),
     },
   }
 }
@@ -296,6 +302,7 @@ export function submissionToStored(payload: WebChatSubmission & { id?: string })
       minorIssues: [],
       questionsForAuthors: [],
       suggestedNextSteps: [],
+      ...(payload.airFeedback ? { airFeedback: payload.airFeedback } : {}),
     },
     outputHash: "",
     createdAt: payload.createdAt,

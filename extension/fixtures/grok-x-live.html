@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+  <body>
+    <div id="stl-forge">
+      <textarea id="forge" aria-label="Ask Grok" placeholder="Ask Grok"></textarea>
+    </div>
+    <div id="air-web-chat-banner">
+      <textarea aria-label="Ask anything" placeholder="Ask anything"></textarea>
+      <button type="button">Hide</button>
+    </div>
+    <main>
+      <textarea id="hidden-ask" aria-label="Ask anything" placeholder="Ask anything" role="textbox" hidden></textarea>
+      <textarea
+        id="composer"
+        class="text-body text-primary whitespace-pre-wrap"
+        aria-label="Ask anything"
+        placeholder="Ask anything"
+      ></textarea>
+      <button type="button">Add files, skills, and connectors</button>
+      <button type="button">Select a model Auto</button>
+      <button type="button">Voice mode</button>
+      <button type="button" id="send" aria-label="Grok something" hidden>Send</button>
+      <button type="button" id="stop" aria-label="Stop generating" hidden>Stop</button>
+      <div class="assistant-message" id="assistant"></div>
+      <input id="file" type="file" />
+    </main>
+  </body>
+</html>

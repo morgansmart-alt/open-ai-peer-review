@@ -150,14 +150,28 @@
     limits: "Grok on X is at x.com/i/grok. AIR tries a file up to about 400,000 characters, then pastes 32,000 characters at a time. X rate-limits long threads. That limit was not measured here.",
     selectors: {
       composer: [
+        'textarea[aria-label="Ask anything"]',
+        'textarea[placeholder="Ask anything"]',
+        '[contenteditable="true"][aria-label="Ask anything"]',
+        '[contenteditable="true"][placeholder="Ask anything"]',
+        '[role="textbox"][aria-label*="Ask"]',
+        '[role="textbox"][placeholder*="Ask"]',
         'textarea[aria-label="Ask Grok"]',
         'textarea[aria-label*="Ask Grok"]',
+        'textarea[aria-label*="Ask"]',
+        'textarea[placeholder*="Ask"]',
         'div[data-testid="grokComposer"] textarea',
         'div[contenteditable="true"][role="textbox"]'
       ],
-      submit: ['button[aria-label="Send"]', 'button[data-testid="grok-send"]', 'button[aria-label*="Send"]'],
-      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]'],
-      assistant: ['[data-testid="assistant-message"]', '[data-testid="grok-message"]'],
+      submit: [
+        'button[aria-label="Send"]',
+        'button[aria-label*="Send"]',
+        'button[aria-label*="Submit"]',
+        'button[aria-label*="Grok"]',
+        'button[data-testid="grok-send"]'
+      ],
+      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]', 'button[aria-label*="Stop generating"]'],
+      assistant: ['[data-testid="assistant-message"]', '[data-testid="grok-message"]', '[class*="assistant-message"]', '[data-message-author="assistant"]'],
       fileInput: ['input[type="file"]'],
       login: ['a[href*="/login"]', 'a[href*="/i/flow/login"]', 'a[data-testid="login"]']
     }
@@ -180,14 +194,26 @@
     limits: "AIR attaches a paper up to about 1.2 million characters, or pastes 48,000 characters at a time. Grok's free web chat rate-limits long threads. The exact cap is set by xAI and was not measured here.",
     selectors: {
       composer: [
+        'textarea[aria-label="Message Grok"]',
+        'textarea[aria-label*="Message Grok"]',
+        '[contenteditable="true"][aria-label="Message Grok"]',
+        '[contenteditable="true"][aria-label*="Message Grok"]',
+        '[role="textbox"][aria-label="Message Grok"]',
+        '[role="textbox"][aria-label*="Message Grok"]',
         'textarea[aria-label="Ask Grok anything"]',
         'textarea[aria-label*="Ask Grok"]',
+        'textarea[placeholder*="What do you want to know"]',
+        'textarea[aria-label*="What do you want to know"]',
+        'textarea[placeholder*="Ask anything"]',
+        'textarea[aria-label*="Ask anything"]',
         'textarea[placeholder*="Ask"]',
+        '[contenteditable="true"][placeholder*="Ask"]',
+        '[contenteditable="true"][aria-label*="Ask"]',
         'div[contenteditable="true"][role="textbox"]'
       ],
-      submit: ['button[aria-label="Submit"]', 'button[aria-label*="Send"]', 'button[type="submit"]'],
-      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]'],
-      assistant: ['[data-testid="assistant-message"]', '[data-message-author="assistant"]'],
+      submit: ['button[aria-label="Submit"]', 'button[aria-label*="Send"]', 'button[aria-label*="Submit"]', 'button[type="submit"]'],
+      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]', 'button[aria-label*="Stop generating"]'],
+      assistant: ['[data-testid="assistant-message"]', '[data-message-author="assistant"]', '[class*="assistant-message"]'],
       fileInput: ['input[type="file"]'],
       login: ['a[href*="accounts.x.com"]', 'a[href*="/login"]', 'button[data-testid="login"]']
     }
@@ -1195,6 +1221,42 @@ ${parsed2.errors.join("\n")}`);
     return { mismatch: reasons.length > 0, reason: reason || null, internal };
   }
 
+  // src/services/airFeedback.ts
+  var ALIASES = {
+    criteria: "criteria",
+    criterion: "criteria",
+    profile: "profile",
+    missingContext: "missingContext",
+    missing_context: "missingContext",
+    missing: "missingContext",
+    files: "missingContext",
+    prompt: "prompt",
+    rubric: "rubric",
+    scoringProcess: "scoringProcess",
+    scoring_process: "scoringProcess",
+    scoring: "scoringProcess"
+  };
+  function clip(value) {
+    if (typeof value !== "string") return "";
+    return value.trim().replace(/https?:\/\/(?:www\.)?(?:share\.google\/aimode|chatgpt\.com\/share|chat\.openai\.com\/share|claude\.ai\/share|grok\.com\/share)\/\S+/gi, "[private link]").slice(0, 1e3);
+  }
+  function parseAirFeedback(input) {
+    if (input == null || input === "") return void 0;
+    if (typeof input === "string") {
+      const note = clip(input);
+      return note ? { scoringProcess: note } : void 0;
+    }
+    if (typeof input !== "object" || Array.isArray(input)) return void 0;
+    const feedback = {};
+    for (const [key, value] of Object.entries(input)) {
+      const field = ALIASES[key];
+      const text2 = clip(value);
+      if (!field || !text2) continue;
+      feedback[field] = text2;
+    }
+    return Object.keys(feedback).length > 0 ? feedback : void 0;
+  }
+
   // src/services/validateReport.ts
   function isRecord2(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1212,7 +1274,7 @@ ${parsed2.errors.join("\n")}`);
       throw new Error("No JSON object found in the model output.");
     }
   }
-  function clip(value, max) {
+  function clip2(value, max) {
     return typeof value === "string" ? value.trim().slice(0, max) : "";
   }
   function citationsFrom(value, errors, path) {
@@ -1223,23 +1285,23 @@ ${parsed2.errors.join("\n")}`);
     return value.flatMap((item) => {
       if (typeof item === "string") return [{ quote: item.slice(0, 500), location: "Record" }];
       if (!isRecord2(item)) return [];
-      const quote = clip(item.quote ?? item.passage ?? item.text, 500);
+      const quote = clip2(item.quote ?? item.passage ?? item.text, 500);
       if (!quote) return [];
-      return [{ quote, location: clip(item.location ?? item.where ?? "Record", 160) || "Record" }];
+      return [{ quote, location: clip2(item.location ?? item.where ?? "Record", 160) || "Record" }];
     });
   }
   function stringArray(value, maxItems, maxLen) {
     if (!Array.isArray(value)) return [];
-    return value.map((item) => clip(item, maxLen)).filter(Boolean).slice(0, maxItems);
+    return value.map((item) => clip2(item, maxLen)).filter(Boolean).slice(0, maxItems);
   }
   function validateReport(input, criteria) {
     const errors = [];
     if (!isRecord2(input)) return { ok: false, errors: ["The model output was not a JSON object."] };
-    const summary = clip(input.summary, 4e3);
+    const summary = clip2(input.summary, 4e3);
     if (summary.length < 40) errors.push("summary must be at least 40 characters.");
     const scoresRaw = Array.isArray(input.scores) ? input.scores : [];
     const scores = criteria.criteria.map((criterion) => {
-      const found = scoresRaw.find((item) => isRecord2(item) && clip(item.criterionId ?? item.id, 80) === criterion.id);
+      const found = scoresRaw.find((item) => isRecord2(item) && clip2(item.criterionId ?? item.id, 80) === criterion.id);
       if (!isRecord2(found)) {
         errors.push(`Missing score for ${criterion.id}.`);
         return null;
@@ -1248,17 +1310,17 @@ ${parsed2.errors.join("\n")}`);
       if (!Number.isInteger(score) || score < criteria.scale.min || score > criteria.scale.max) {
         errors.push(`${criterion.id} score must be an integer from ${criteria.scale.min} to ${criteria.scale.max}.`);
       }
-      const rationale = clip(found.rationale ?? found.reason, 2e3);
+      const rationale = clip2(found.rationale ?? found.reason, 2e3);
       if (rationale.length < 20) errors.push(`${criterion.id} rationale is too short.`);
       const citations = citationsFrom(found.citations ?? found.quotes, errors, criterion.id);
       if (citations.length === 0) errors.push(`${criterion.id} needs at least one citation.`);
-      const confidenceRaw = clip(found.confidence, 16).toLowerCase();
+      const confidenceRaw = clip2(found.confidence, 16).toLowerCase();
       const confidence = confidenceRaw === "low" || confidenceRaw === "med" || confidenceRaw === "medium" || confidenceRaw === "high" ? confidenceRaw : "";
       if (criteria.reportSchema === "0.2" && !confidence) errors.push(`${criterion.id} needs a confidence of low, medium, or high.`);
       const normalizedConfidence = confidence === "high" ? "high" : confidence === "medium" || confidence === "med" ? "medium" : confidence === "low" ? "low" : void 0;
       return { criterionId: criterion.id, score, rationale, citations, confidence: normalizedConfidence };
     });
-    const recommendationRaw = clip(input.recommendation, 120).toLowerCase();
+    const recommendationRaw = clip2(input.recommendation, 120).toLowerCase();
     const recommendation = criteria.recommendationCategories.find(
       (item) => item.id.toLowerCase() === recommendationRaw || item.label.toLowerCase() === recommendationRaw
     )?.id ?? "";
@@ -1277,16 +1339,16 @@ ${parsed2.errors.join("\n")}`);
         return [{ criterionId: criteria.criteria[0]?.id ?? "clarity", claim: item.slice(0, 500), quotedPassage: "", reason: item.slice(0, 800) }];
       }
       if (!isRecord2(item)) return [];
-      const criterionId = clip(item.criterionId ?? item.criterion, 80);
+      const criterionId = clip2(item.criterionId ?? item.criterion, 80);
       if (criterionId && !known.has(criterionId)) errors.push(`Unknown criterion on a major issue: ${criterionId}.`);
-      const claim = clip(item.claim ?? item.summary ?? item.issue, 500);
+      const claim = clip2(item.claim ?? item.summary ?? item.issue, 500);
       if (!claim) return [];
       return [
         {
           criterionId: known.has(criterionId) ? criterionId : criteria.criteria[0]?.id ?? "clarity",
           claim,
-          quotedPassage: clip(item.quotedPassage ?? item.quote ?? "", 500),
-          reason: clip(item.reason ?? item.why ?? claim, 800)
+          quotedPassage: clip2(item.quotedPassage ?? item.quote ?? "", 500),
+          reason: clip2(item.reason ?? item.why ?? claim, 800)
         }
       ];
     });
@@ -1298,6 +1360,7 @@ ${parsed2.errors.join("\n")}`);
     const idea = weightedMean(ready, criteria, criteria.ideaCriterionIds);
     if (overall === null || idea === null) return { ok: false, errors: ["Could not weight the scores."] };
     const statedRaw = Number(input.overallScore);
+    const airFeedback = parseAirFeedback(input.air_feedback ?? input.airFeedback);
     const check = describeScoring({
       scores: ready,
       statedOverall: Number.isFinite(statedRaw) ? statedRaw : null,
@@ -1320,6 +1383,7 @@ ${parsed2.errors.join("\n")}`);
         minorIssues,
         questionsForAuthors: questions,
         suggestedNextSteps: nextSteps,
+        ...airFeedback ? { airFeedback } : {},
         ...v2
       }
     };
@@ -1330,22 +1394,22 @@ ${parsed2.errors.join("\n")}`);
   function rangeFrom(value, fallbackUnit) {
     const record = isRecord2(value) ? value : {};
     return {
-      low: clip(record.low, 80) || "not estimated",
-      central: clip(record.central, 80) || "not estimated",
-      high: clip(record.high, 80) || "not estimated",
-      unit: clip(record.unit, 40) || fallbackUnit
+      low: clip2(record.low, 80) || "not estimated",
+      central: clip2(record.central, 80) || "not estimated",
+      high: clip2(record.high, 80) || "not estimated",
+      unit: clip2(record.unit, 40) || fallbackUnit
     };
   }
   function readV2(input, errors, includeValue) {
-    const ontologyClass = clip(input.ontologyClass, 80);
+    const ontologyClass = clip2(input.ontologyClass, 80);
     if (!ontologyClasses.has(ontologyClass)) errors.push("ontologyClass must be one of the four AIR classes.");
     const physicsRaw = isRecord2(input.physics) ? input.physics : null;
-    const classification = clip(physicsRaw?.classification, 20).toUpperCase();
+    const classification = clip2(physicsRaw?.classification, 20).toUpperCase();
     if (!physicsClasses.has(classification)) errors.push("physics.classification must be CONSISTENT, EXTENDS, or CHALLENGES.");
     const physics = {
       classification: physicsClasses.has(classification) ? classification : "CONSISTENT",
       laws: stringArray(physicsRaw?.laws, 8, 120),
-      howAddressed: clip(physicsRaw?.howAddressed, 800)
+      howAddressed: clip2(physicsRaw?.howAddressed, 800)
     };
     if (physics.laws.length === 0) errors.push("physics.laws needs at least one named law or an explicit 'none used'.");
     const simulationRaw = isRecord2(input.simulation) ? input.simulation : null;
@@ -1354,7 +1418,7 @@ ${parsed2.errors.join("\n")}`);
     const simulation = {
       reported: Number.isInteger(reported) ? reported : null,
       passed: Number.isInteger(passed) ? passed : null,
-      methods: clip(simulationRaw?.methods, 400),
+      methods: clip2(simulationRaw?.methods, 400),
       inputsAvailable: Boolean(simulationRaw?.inputsAvailable)
     };
     if (!simulation.methods) errors.push("simulation.methods must say what was run, or that simulation does not apply.");
@@ -1362,7 +1426,7 @@ ${parsed2.errors.join("\n")}`);
     const valueEstimate = {
       confidence: "low",
       assumptions: stringArray(valueRaw?.assumptions, 8, 240),
-      marketDisruption: clip(valueRaw?.marketDisruption, 400) || "Not estimated from the record.",
+      marketDisruption: clip2(valueRaw?.marketDisruption, 400) || "Not estimated from the record.",
       addressableMarket: rangeFrom(valueRaw?.addressableMarket, "not estimated"),
       units: rangeFrom(valueRaw?.units, "units"),
       valuePerUnit: rangeFrom(valueRaw?.valuePerUnit, "per unit"),
@@ -1372,11 +1436,11 @@ ${parsed2.errors.join("\n")}`);
     if (includeValue && valueEstimate.assumptions.length === 0) errors.push("valueEstimate.assumptions needs at least one assumption.");
     const goals = Array.isArray(input.goals) ? input.goals.flatMap((item) => {
       if (!isRecord2(item)) return [];
-      const level = clip(item.level, 20);
+      const level = clip2(item.level, 20);
       if (!goalLevels.has(level)) return [];
-      const goalId = clip(item.goalId, 80);
+      const goalId = clip2(item.goalId, 80);
       if (!goalId) return [];
-      return [{ goalId, level, note: clip(item.note, 300) }];
+      return [{ goalId, level, note: clip2(item.note, 300) }];
     }) : [];
     if (goals.length === 0) errors.push("goals must list a level for the documented public goals you considered.");
     return {
@@ -1776,6 +1840,7 @@ ${parsed2.errors.join("\n")}`);
       "Be specific and kind. Every criticism needs a way to resolve it.",
       "Quote only passages that appear in the text you were given. Do not invent page numbers, results, or citations.",
       `Score every criterion with an integer from ${criteria.scale.min} to ${criteria.scale.max}.`,
+      "You may add an optional air_feedback object about AIR itself: unclear criteria, a misfitting profile, missing files or context, a prompt problem, a rubric suggestion, or a correction to your own scoring process. Omit it when you have none. It must not change any score.",
       criteria.scale.max >= 100 ? "The board is out of 100. AIR weights the criterion scores itself. If you include overallScore, keep it within 10 points of that weighted total. recommendation must match the band: accept or encourage from 80 (accept means sound as it stands; encourage means the idea is ready to build on), revise from 60, major-revision from 40, otherwise not-ready." : "",
       criteria.criteria.some((criterion) => criterion.id === "estimated-value") ? "" : "This profile does not score estimated project value. Omit valueEstimate. Use accept when the work is sound as it stands.",
       "Image pixels are not read. When the text says Figures not read, say so on availability. Do not treat an unseen figure as missing data unless the claim needs the image itself.",
@@ -1789,6 +1854,31 @@ ${parsed2.errors.join("\n")}`);
       "Principles:",
       ...criteria.principles.map((principle) => `- ${principle}`)
     ].join("\n");
+  }
+  function publicDoiUrl(doi) {
+    const cleaned = (doi ?? "").trim().replace(/^https?:\/\/doi\.org\//i, "").replace(/^doi:/i, "");
+    if (!/^10\.\S+/.test(cleaned)) return null;
+    return `https://doi.org/${cleaned}`;
+  }
+  function zenodoRecordsUrl(id) {
+    const cleaned = (id ?? "").trim();
+    if (!/^\d+$/.test(cleaned)) return null;
+    return `https://zenodo.org/records/${cleaned}`;
+  }
+  function sourceRecordBlock(record) {
+    const versionUrl = zenodoRecordsUrl(record.id) || (record.htmlUrl.startsWith("https://zenodo.org/records/") ? record.htmlUrl : "");
+    const doiUrl = publicDoiUrl(record.doi);
+    const conceptUrl = zenodoRecordsUrl(record.conceptId);
+    const conceptDoiUrl = publicDoiUrl(record.conceptDoi);
+    const lines = [
+      "Source record. These are the public record links. Cite them and use them to cross-check versions. They are not private chat links."
+    ];
+    if (versionUrl) lines.push(`This version: ${versionUrl}`);
+    if (doiUrl) lines.push(`DOI: ${doiUrl}`);
+    if (conceptUrl) lines.push(`Concept record (all versions): ${conceptUrl}`);
+    if (conceptDoiUrl && conceptDoiUrl !== doiUrl) lines.push(`Concept DOI: ${conceptDoiUrl}`);
+    if (lines.length === 1) return "";
+    return lines.join("\n");
   }
   function reviewUserPrompt(record, criteria, packet, conversations = []) {
     const schema = {
@@ -1822,7 +1912,15 @@ ${parsed2.errors.join("\n")}`);
       majorIssues: [{ criterionId: "id", claim: "what is wrong", quotedPassage: "verbatim or empty", reason: "why it matters and how to fix it" }],
       minorIssues: ["string"],
       questionsForAuthors: ["string"],
-      suggestedNextSteps: ["string"]
+      suggestedNextSteps: ["string"],
+      air_feedback: {
+        criteria: "optional. A criterion or its wording was unclear or did not fit this paper.",
+        profile: "optional. The paper-type profile misfit the work.",
+        missingContext: "optional. A file or piece of context needed to score was missing.",
+        prompt: "optional. The instructions were ambiguous.",
+        rubric: "optional. A concrete rubric change.",
+        scoringProcess: "optional. A correction to how you scored. Do not change the scores to match this note."
+      }
     };
     const guide = criteria.criteria.map((criterion) => {
       const bands = criterion.bands?.map((band) => `${band.min}-${band.max}: ${band.label}`).join(" ") ?? "";
@@ -1836,6 +1934,8 @@ ${parsed2.errors.join("\n")}`);
       `Date: ${record.publicationDate}`,
       `License: ${record.license || "unspecified"}`,
       `Keywords: ${record.keywords.join(", ") || "none"}`,
+      "",
+      sourceRecordBlock(record),
       "",
       "Criteria:",
       guide,
@@ -2341,13 +2441,13 @@ ${JSON.stringify(report)}`),
   // src/services/webChat/submission.ts
   var SUBMIT_WINDOW_MS = 10 * 60 * 1e3;
   var WEB_CHAT_SUBMIT_URL = "https://lotswxboafsenmszijpf.supabase.co/functions/v1/submit-web-chat";
-  var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended"]);
+  var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback"]);
   var DEFENDED_KEYS = /* @__PURE__ */ new Set(["label", "overallScore", "recommendation", "summary", "scores"]);
   var PAPER_KEYS = /* @__PURE__ */ new Set(["title", "doi", "url"]);
   function isRecord4(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
   }
-  function clip2(value, max) {
+  function clip3(value, max) {
     return typeof value === "string" ? value.trim().slice(0, max) : "";
   }
   function submissionFromReview(review, site) {
@@ -2378,7 +2478,8 @@ ${JSON.stringify(report)}`),
       overallScore: review.report.overallScore,
       recommendation: review.report.recommendation,
       createdAt: review.createdAt,
-      ...review.defended ? { defended: review.defended } : {}
+      ...review.defended ? { defended: review.defended } : {},
+      ...review.report.airFeedback ? { airFeedback: review.report.airFeedback } : {}
     };
     const checked = validateWebChatSubmission(submission, criteria);
     if (checked.ok) return { ok: true, submission: checked.submission };
@@ -2402,22 +2503,22 @@ ${JSON.stringify(report)}`),
     for (const key of Object.keys(input.paper)) {
       if (!PAPER_KEYS.has(key)) return { ok: false, error: "The paper field included extra text." };
     }
-    const title = clip2(input.paper.title, 300);
-    const doi = clip2(input.paper.doi, 300);
-    const url = clip2(input.paper.url, 500);
+    const title = clip3(input.paper.title, 300);
+    const doi = clip3(input.paper.doi, 300);
+    const url = clip3(input.paper.url, 500);
     if (!title) return { ok: false, error: "The paper needs a title." };
     if (!doi && !url) return { ok: false, error: "The paper needs a DOI or a link." };
-    const site = clip2(input.site, 80);
-    const model = clip2(input.model, 160);
+    const site = clip3(input.site, 80);
+    const model = clip3(input.model, 160);
     if (!site || !model) return { ok: false, error: "The chat site and model name are missing." };
-    const criteriaVersion = clip2(input.criteriaVersion, 40);
+    const criteriaVersion = clip3(input.criteriaVersion, 40);
     if (!criteriaVersion.startsWith("0.2")) return { ok: false, error: "The board accepts AIR v0.2 scores." };
-    const criterionProfile = clip2(input.criterionProfile, 40);
+    const criterionProfile = clip3(input.criterionProfile, 40);
     if (!Array.isArray(input.scores)) return { ok: false, error: "The criterion scores are missing." };
     const scores = input.scores.map((item) => {
       if (!isRecord4(item)) return null;
       if (Object.keys(item).some((key) => key !== "criterionId" && key !== "score")) return null;
-      const criterionId = clip2(item.criterionId, 80);
+      const criterionId = clip3(item.criterionId, 80);
       const score = Number(item.score);
       return { criterionId, score };
     });
@@ -2427,22 +2528,23 @@ ${JSON.stringify(report)}`),
     if (ready.length !== wanted.size || ready.some((item) => !wanted.has(item.criterionId) || !Number.isInteger(item.score))) {
       return { ok: false, error: "Every criterion in this profile needs an integer score." };
     }
-    const summary = stripChatShareLinks(clip2(input.summary, 4e3));
+    const summary = stripChatShareLinks(clip3(input.summary, 4e3));
     if (summary.length < 40) return { ok: false, error: "The summary is too short." };
     if (/https?:\/\/(?:share\.google|chatgpt\.com\/share|claude\.ai\/share|grok\.com\/share)/i.test(summary)) {
       return { ok: false, error: "A private chat link was still in the summary." };
     }
     const overallScore = Number(input.overallScore);
     if (!Number.isInteger(overallScore)) return { ok: false, error: "The overall score must be an integer." };
-    const recommendation = clip2(input.recommendation, 80);
+    const recommendation = clip3(input.recommendation, 80);
     const described = describeScoring({ scores: ready, statedOverall: overallScore, recommendation, criteria });
     if (described.scoringCheck.mismatch) {
       return { ok: false, error: "Scoring mismatch, needs re-check. This score was not sent." };
     }
-    const createdAt = clip2(input.createdAt, 40);
+    const createdAt = clip3(input.createdAt, 40);
     if (!Number.isFinite(Date.parse(createdAt))) return { ok: false, error: "The score needs a timestamp." };
     const defended = readDefended(input.defended, criteria);
     if (!defended.ok) return defended;
+    const airFeedback = parseAirFeedback(input.airFeedback);
     return {
       ok: true,
       submission: {
@@ -2458,7 +2560,8 @@ ${JSON.stringify(report)}`),
         overallScore,
         recommendation,
         createdAt,
-        ...defended.score ? { defended: defended.score } : {}
+        ...defended.score ? { defended: defended.score } : {},
+        ...airFeedback ? { airFeedback } : {}
       }
     };
   }
@@ -2472,7 +2575,7 @@ ${JSON.stringify(report)}`),
     if (!Array.isArray(input.scores)) return { ok: false, error: "The defended score is missing its criterion scores." };
     const scores = input.scores.flatMap((item) => {
       if (!isRecord4(item) || Object.keys(item).some((key) => key !== "criterionId" && key !== "score")) return [];
-      const criterionId = clip2(item.criterionId, 80);
+      const criterionId = clip3(item.criterionId, 80);
       const score = Number(item.score);
       return Number.isInteger(score) && criterionId ? [{ criterionId, score }] : [];
     });
@@ -2480,14 +2583,14 @@ ${JSON.stringify(report)}`),
     if (scores.length !== wanted.size || scores.some((item) => !wanted.has(item.criterionId))) {
       return { ok: false, error: "The defended score needs every criterion in this profile." };
     }
-    const summary = stripChatShareLinks(clip2(input.summary, 4e3));
+    const summary = stripChatShareLinks(clip3(input.summary, 4e3));
     if (summary.length < 40) return { ok: false, error: "The defended summary is too short." };
     if (/https?:\/\/(?:share\.google|chatgpt\.com\/share|claude\.ai\/share|grok\.com\/share)/i.test(summary)) {
       return { ok: false, error: "A private chat link was still in the defended summary." };
     }
     const overallScore = Number(input.overallScore);
     if (!Number.isInteger(overallScore)) return { ok: false, error: "The defended score must be an integer." };
-    const recommendation = clip2(input.recommendation, 80);
+    const recommendation = clip3(input.recommendation, 80);
     const described = describeScoring({ scores, statedOverall: overallScore, recommendation, criteria });
     if (described.scoringCheck.mismatch) return { ok: false, error: "The defended score clashes with its own weighted total, so it was not sent." };
     return { ok: true, score: { label: "after author defence", overallScore, recommendation, summary, scores } };
