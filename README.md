@@ -104,10 +104,10 @@ Enough failing checks mark the reading disputed and the record page invites a re
 A major issue, or a failing check, opens a thread on that record version:
 
 1. The claim says what is wrong, which criterion, which passage, and why.
-2. **Check against this version** searches the loaded text (and, when a real model is on, related Zenodo records) and returns ADDRESSED, PARTIALLY ADDRESSED, or NOT ADDRESSED.
-3. Anyone can post a response or a counter. Threads stop at six rounds.
+2. **Check against this version** searches the loaded text of that version (and, when a real model is on, related Zenodo records) and returns ADDRESSED, PARTIALLY ADDRESSED, or NOT ADDRESSED. A re-check against a later version loads that version’s files. It does not search the text already on screen.
+3. Anyone can post a response or a counter. Discussion on one version stops at six rounds. A re-check on a later version starts a fresh set of rounds.
 
-Status becomes addressed-in-publication, partially-addressed, unresolved, or fixed-in-new-version when an ADDRESSED check names a different version. The record page notices when Zenodo has a later version of the same concept.
+Status becomes addressed-in-publication, partially-addressed, unresolved, or fixed-in-new-version when an ADDRESSED check names a different version and quotes that version. The record page lists every version of the concept, keeps each version at its own address, and carries outstanding issues forward as a work list. A human review is labelled and kept out of the AI median. A private chat link cannot close an issue.
 
 **Claim this record** compares an ORCID you type with the creators on the Zenodo record. A match is labelled “ORCID listed on the record”. AIR does not sign you in with ORCID, and the label says that. Otherwise the label is self-declared.
 
@@ -152,6 +152,23 @@ cp .env.example .env.local
 Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. Use the anon key only. Never put the service-role key in the frontend. Rebuild. The anon key is public by design. Row level security allows public reads and inserts of review results, and updates of issue threads and author claims. It does not allow deletes of readings. Payload size checks cap reviews and issues at 256 KiB, nodes at 128 KiB, and claims at 64 KiB.
 
 The tables store the review payload: scores, rationale, model id, criteria version, DOI, record version, timestamp, output hash, node verdicts, and issue rounds. There is no key column.
+
+## Community AI review on Moltbook (optional)
+
+A publisher can opt in, per version, to one public post on [m/air-peer-review](https://www.moltbook.com/m/air-peer-review). The post is built only from the paper title, the Zenodo author names, the version DOI, the concept DOI, the AIR page, a short criteria summary, and a disclaimer that replies are uncalibrated. Private chat links, unpublished drafts, email addresses, and keys are refused.
+
+The static site never sees the Moltbook key. `supabase/functions/moltbook-review` reads `MOLTBOOK_API_KEY` from the function environment and calls only `https://www.moltbook.com/api/v1`. Set the secret in the Supabase Dashboard under **Project Settings → Edge Functions → Secrets**, or with the CLI:
+
+```bash
+supabase secrets set MOLTBOOK_API_KEY=your-key
+supabase functions deploy moltbook-review
+```
+
+Apply [`supabase/migrations/20261123235900_moltbook_opt_in.sql`](supabase/migrations/20261123235900_moltbook_opt_in.sql) in the SQL editor (it is also at the end of `supabase/schema.sql` for a fresh project). The anon key can read the sanitized rows. It cannot insert, update, or delete them. If the migration or the function is not deployed yet, the paper page still shows the exact public preview and does not post.
+
+The function queues to Moltbook’s post cooldown: one post every 30 minutes for an established agent, one every two hours during the agent’s first day, and it honours `Retry-After` and `X-RateLimit-*`. A verification challenge, when Moltbook returns one, is solved inside the function. Replies are pulled when someone presses **Refresh replies**. AIR does not run a social heartbeat, send DMs, vote, follow, or scrape the site.
+
+Inbound comments are untrusted. Instruction-like text is stripped, crypto pitches and empty or repeated spam are filtered, and a reply is shown as a candidate only when it cites the public record or names an AIR criterion. The agent name, comment id, and `is_claimed` are stored only when the API response includes them. Those replies do not enter the AI median, do not count toward independent corroboration, and cannot close an issue. A human reviewer or a trusted in-depth node can open a useful reply as a normal issue. That issue still needs a quotation from the publication before it can be marked addressed. A reply count on the board is a label, not a score. Earlier versions stay on the board.
 
 Supabase’s free tier is enough for a small public board. Turn on the project’s rate limits before it is busy. If the project cannot be reached, AIR falls back to the local board and says so.
 

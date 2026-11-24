@@ -1,4 +1,5 @@
 import { clamp, round2 } from "./criteria.ts"
+import { isCommunityAiRecord } from "./moltbook.ts"
 import type { NodeSubmission, StoredReview } from "./types.ts"
 
 export interface FidelitySummary {
@@ -130,13 +131,18 @@ export function fidelityFor(nodes: NodeSubmission[], reputations: Map<string, nu
 export type LadderTier = "free-screening" | "in-depth" | "corroborated"
 
 export function ladderTier(reviews: StoredReview[], nodes: NodeSubmission[]): LadderTier {
-  const distinct = new Set(nodes.filter((node) => node.trusted === true && node.verdict === "pass").map((node) => node.modelId))
+  const communityIds = new Set(reviews.filter((review) => isCommunityAiRecord(review)).map((review) => review.id))
+  const distinct = new Set(
+    nodes
+      .filter((node) => node.trusted === true && node.verdict === "pass" && !communityIds.has(node.reviewId))
+      .map((node) => node.modelId),
+  )
   if (distinct.size >= 2) return "corroborated"
-  if (reviews.some((review) => review.tier !== "free-screening")) return "in-depth"
+  if (reviews.some((review) => !isCommunityAiRecord(review) && review.tier !== "free-screening")) return "in-depth"
   return "free-screening"
 }
 
 export function nodesForReviews(all: NodeSubmission[], reviews: StoredReview[]): NodeSubmission[] {
-  const ids = new Set(reviews.filter((review) => !review.customCriteria).map((review) => review.id))
+  const ids = new Set(reviews.filter((review) => !review.customCriteria && !isCommunityAiRecord(review)).map((review) => review.id))
   return eligibleNodes(all.filter((node) => ids.has(node.reviewId)))
 }

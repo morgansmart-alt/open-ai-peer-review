@@ -1,12 +1,14 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Link } from "react-router-dom"
 import { assessorById } from "../domain/assessors.ts"
 import { categoryLabel } from "../domain/criteria.ts"
 import { boardValue, scoringMismatch } from "../domain/scoring.ts"
 import { statusLabel } from "../domain/issues.ts"
 import { buildRanking, listRankingMethods, sortRows, type RankRow } from "../domain/ranking.ts"
+import { scoreLineage, type LineagePoint } from "../domain/versions.ts"
 import { officialCriteria } from "../domain/officialCriteria.ts"
 import { useAir } from "../context/AirContext.tsx"
+import { loadCommunityReplyCounts } from "../services/moltbook.ts"
 import { AssessorMark, Sparkline } from "./charts.tsx"
 import { cx, fieldClass, ScoreValue } from "./ui.tsx"
 
@@ -17,16 +19,35 @@ export function Leaderboard() {
   const [query, setQuery] = useState("")
   const [hideSamples, setHideSamples] = useState(false)
   const [openKey, setOpenKey] = useState<string | null>(null)
+  const [communityCounts, setCommunityCounts] = useState<Record<string, number> | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void loadCommunityReplyCounts().then((counts) => {
+      if (!cancelled) setCommunityCounts(counts)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [air.db])
   const method = methods.find((item) => item.id === methodId) ?? methods[0]
+  const rankedAll = useMemo(() => buildRanking(air.db), [air.db])
+  const lineageByConcept = useMemo(() => {
+    const map = new Map<string, LineagePoint[]>()
+    for (const conceptId of new Set(rankedAll.map((row) => row.conceptRecordId).filter(Boolean))) {
+      const points = scoreLineage(rankedAll, conceptId)
+      if (points.length >= 2) map.set(conceptId, points)
+    }
+    return map
+  }, [rankedAll])
   const rows = useMemo(() => {
     if (!method) return []
-    const ranked = sortRows(buildRanking(air.db), method).filter((row) => {
+    const ranked = sortRows(rankedAll, method).filter((row) => {
       if (hideSamples && row.demo) return false
       const haystack = [row.title, row.doi, row.creators.join(" "), row.keywords.join(" ")].join(" ").toLowerCase()
       return haystack.includes(query.trim().toLowerCase())
     })
     return ranked
-  }, [air.db, hideSamples, method, query])
+  }, [hideSamples, method, query, rankedAll])
   const keywords = useMemo(() => {
     const counts = new Map<string, number>()
     for (const row of buildRanking(air.db)) {
@@ -111,16 +132,28 @@ export function Leaderboard() {
                       </button>
                     </th>
                   ))}
+                <th scope="col" className="px-2 py-3" title="Human reviews. Not included in the AI median.">
+                  Human
+                </th>
                 <th scope="col" className="px-3 py-3">Trust</th>
               </tr>
             </thead>
             {rows.map((row, index) => (
-              <RowBody key={row.key} row={row} rank={index + 1} open={openKey === row.key} onToggle={() => setOpenKey(openKey === row.key ? null : row.key)} methodId={method.id} />
+              <RowBody
+                key={row.key}
+                row={row}
+                rank={index + 1}
+                open={openKey === row.key}
+                onToggle={() => setOpenKey(openKey === row.key ? null : row.key)}
+                methodId={method.id}
+                lineage={lineageByConcept.get(row.conceptRecordId)}
+                communityReplies={communityCounts?.[row.key] ?? 0}
+              />
             ))}
           </table>
         </div>
       )}
-      <p className="mt-3 text-xs text-ink-soft">These are AI assessments against AIR criteria, not formal peer review. Example rows are sample data.</p>
+      <p className="mt-3 text-xs text-ink-soft">These are AI assessments against AIR criteria, not formal peer review. Community replies from Moltbook are not included in these scores. Example rows are sample data.</p>
       <FreeScreening />
     </section>
   )
@@ -138,10 +171,27 @@ function scoreColumns(row: RankRow, profiles: { id: string }[]) {
   ]
 }
 
-function RowBody({ row, rank, open, onToggle, methodId }: { row: RankRow; rank: number; open: boolean; onToggle: () => void; methodId: string }) {
+function RowBody({
+  row,
+  rank,
+  open,
+  onToggle,
+  methodId,
+  lineage,
+  communityReplies,
+}: {
+  row: RankRow
+  rank: number
+  open: boolean
+  onToggle: () => void
+  methodId: string
+  lineage: LineagePoint[] | undefined
+  communityReplies: number
+}) {
   const air = useAir()
   const columns = scoreColumns(row, air.profiles)
   const issueNote = row.unresolvedIssues + row.openIssues
+  const latest = lineage?.[lineage.length - 1]
   return (
     <tbody>
       <tr className={cx(methodId && "hover:bg-white/70", row.demo && "text-ink")}>
@@ -161,11 +211,23 @@ function RowBody({ row, rank, open, onToggle, methodId }: { row: RankRow; rank: 
           <p className="mt-1 flex flex-wrap gap-1">
             {row.sample && <Chip>Sample</Chip>}
             {!row.sample && row.demo && <Chip>Demo</Chip>}
+            {row.reviewCount === 0 && row.humanCount > 0 && <Chip>Human review only</Chip>}
+            {lineage && lineage.length >= 2 && latest && row.recordId !== latest.recordId && <Chip>Earlier version</Chip>}
+            {lineage && lineage.length >= 2 && latest && row.recordId === latest.recordId && <Chip>Latest version</Chip>}
+            {lineage && lineage.length >= 2 && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-ink-soft">
+                <Sparkline values={lineage.flatMap((point) => (point.panelMedian === null ? [] : [point.panelMedian]))} />
+                {lineage.length} versions · open {row.openIssues + row.unresolvedIssues} · partial {row.partialIssues} · fixed {row.addressedIssues}
+              </span>
+            )}
             {issueNote > 0 && <Chip>{`${issueNote} open`}</Chip>}
             {row.fidelity.disputed && <Chip>Disputed</Chip>}
             {row.mismatchCount > 0 && <Chip>Scoring mismatch, needs re-check</Chip>}
             {row.mismatchCount > 0 && <Chip>{`${row.mismatchCount} left out of the median`}</Chip>}
             {row.assessorsDisagree && <Chip>Assessors disagree</Chip>}
+            {communityReplies > 0 && (
+              <Chip title="Uncalibrated Moltbook replies. Not part of the rank score.">{`${communityReplies} community ${communityReplies === 1 ? "reply" : "replies"}`}</Chip>
+            )}
           </p>
           <button type="button" className="no-print mt-2 text-xs text-teal underline-offset-2 hover:underline" aria-expanded={open} onClick={onToggle}>
             {open ? "Hide details" : "Scores, checks, and issues"}
@@ -177,6 +239,11 @@ function RowBody({ row, rank, open, onToggle, methodId }: { row: RankRow; rank: 
             {column.value !== null && <div className="text-[11px] text-ink-soft">{column.count}</div>}
           </td>
         ))}
+        <td className="px-2 py-3 text-sm" title="Human reviews. Not included in the AI median.">
+          <ScoreValue value={row.humanMedian} title={row.humanCount ? `${row.humanCount} human review${row.humanCount === 1 ? "" : "s"}` : "No human review"} />
+          {row.humanMedian !== null && <div className="text-[11px] text-ink-soft">{row.humanCount}</div>}
+          {row.humanMismatchCount > 0 && <div className="text-[11px] text-ink-soft">Mismatch</div>}
+        </td>
         <td className="px-3 py-3 text-xs">
           <span title={row.fidelity.label} className={cx("rounded-full px-2 py-1", row.fidelity.disputed ? "bg-gold/15 text-gold" : row.fidelity.nodes ? "bg-teal/10 text-teal-deep" : "bg-paper-deep text-ink-soft")}>
             {row.fidelity.nodes === 0 ? "Unchecked" : row.fidelity.disputed ? "Disputed" : `${row.fidelity.nodes} · ${Math.round((row.fidelity.passRate ?? 0) * 100)}%`}
@@ -185,7 +252,7 @@ function RowBody({ row, rank, open, onToggle, methodId }: { row: RankRow; rank: 
       </tr>
       {open && (
         <tr>
-          <td colSpan={columns.length + 3} className="bg-white/70 px-4 py-4">
+          <td colSpan={columns.length + 4} className="bg-white/70 px-4 py-4">
             <Expanded row={row} />
           </td>
         </tr>
@@ -213,8 +280,12 @@ function FreeScreening() {
   )
 }
 
-function Chip({ children }: { children: string }) {
-  return <span className="rounded-full bg-paper-deep px-2 py-0.5 text-[11px] text-ink-soft">{children}</span>
+function Chip({ children, title }: { children: string; title?: string }) {
+  return (
+    <span title={title} className="rounded-full bg-paper-deep px-2 py-0.5 text-[11px] text-ink-soft">
+      {children}
+    </span>
+  )
 }
 
 function Expanded({ row }: { row: RankRow }) {
@@ -279,6 +350,19 @@ function Expanded({ row }: { row: RankRow }) {
           ))}
         </ul>
         <div>
+          <h3 className="font-medium">Human reviews</h3>
+          <p className="text-xs text-ink-soft">Shown beside the AI median. Not mixed into it.</p>
+          {row.humanReviews.length === 0 && <p className="text-ink-soft">None yet.</p>}
+          <ul className="mt-1 space-y-1">
+            {row.humanReviews.map((review) => (
+              <li key={review.id}>
+                Human reviewer · {boardValue(review.report.overallScore, review.report, review.criteriaVersion).toFixed(0)} / 100
+                {scoringMismatch(review).mismatch ? " · Scoring mismatch, needs re-check" : ""}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div>
           <h3 className="font-medium">Independent nodes</h3>
           {air.db.nodes.filter((node) => row.reviews.some((review) => review.id === node.reviewId)).length === 0 && <p className="text-ink-soft">None yet.</p>}
           <ul className="mt-1 space-y-1">
@@ -290,6 +374,7 @@ function Expanded({ row }: { row: RankRow }) {
                     {node.nodeName}
                   </Link>{" "}
                   · {node.verdict}
+                  {node.humanEdited ? " · human-edited" : ""}
                 </li>
               ))}
           </ul>

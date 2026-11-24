@@ -1,6 +1,7 @@
-import type { AuthorClaim, IssueRound, IssueStatus, IssueThread, MajorIssue, NodeSubmission, SourceResult, StoredReview } from "./types.ts"
+import type { AuthorClaim, AuthorRole, IssueRound, IssueStatus, IssueThread, MajorIssue, NodeSubmission, SourceResult, StoredReview } from "./types.ts"
+import { canAppendRound, ROUND_LIMIT, samePublication } from "./versions.ts"
 
-export const ROUND_LIMIT = 6
+export { canAppendRound, ROUND_LIMIT }
 
 export function claimKey(doi: string, recordVersion: string, criterionId: string, claim: string): string {
   return `${doi}@@${recordVersion}@@${criterionId}@@${claim.trim().toLowerCase()}`
@@ -12,15 +13,11 @@ export function statusFromCheck(
   issueVersion: string,
   checkedVersion: string,
 ): IssueStatus {
-  if (result === "ADDRESSED" && checkedVersion && checkedVersion !== issueVersion) return "fixed-in-new-version"
+  if (result === "ADDRESSED" && checkedVersion && !samePublication(issueVersion, checkedVersion)) return "fixed-in-new-version"
   if (result === "ADDRESSED") return "addressed-in-publication"
   if (result === "PARTIALLY_ADDRESSED") return "partially-addressed"
   if (existingRounds + 1 >= 3 || existingRounds + 1 >= ROUND_LIMIT) return "unresolved"
   return "open"
-}
-
-export function canAppendRound(issue: IssueThread): boolean {
-  return issue.rounds.length < ROUND_LIMIT
 }
 
 /** Several labels can exist for one DOI. The newest insert wins. */
@@ -50,7 +47,7 @@ function threadFrom(
   issue: MajorIssue,
   base: Pick<IssueThread, "doi" | "recordVersion" | "source" | "sourceId">,
   authorLabel: string,
-  authorRole: IssueRound["authorRole"],
+  authorRole: AuthorRole,
   index: number,
   createdAt: string,
 ): IssueThread {
@@ -80,13 +77,13 @@ function threadFrom(
   }
 }
 
-export function issuesFromReview(review: StoredReview, authorLabel: string): IssueThread[] {
+export function issuesFromReview(review: StoredReview, authorLabel: string, authorRole: AuthorRole = "reviewer"): IssueThread[] {
   const issues = review.report.majorIssues.map((issue, index) =>
     threadFrom(
       issue,
       { doi: review.doi, recordVersion: review.recordVersion, source: "review-major", sourceId: review.id },
       authorLabel,
-      "reviewer",
+      authorRole,
       index,
       review.createdAt,
     ),
@@ -103,7 +100,7 @@ export function issuesFromReview(review: StoredReview, authorLabel: string): Iss
         },
         { doi: review.doi, recordVersion: review.recordVersion, source: "review-major", sourceId: review.id },
         authorLabel,
-        "reviewer",
+        authorRole,
         issues.length,
         review.createdAt,
       ),
@@ -145,6 +142,25 @@ export function mergeIssues(existing: IssueThread[], incoming: IssueThread[]): I
     next.push(issue)
   }
   return next
+}
+
+export function roleLabel(role: AuthorRole): string {
+  switch (role) {
+    case "reviewer":
+      return "AI reviewer"
+    case "ai-recheck":
+      return "AI re-check"
+    case "human-reviewer":
+      return "Human reviewer"
+    case "node":
+      return "Independent check"
+    case "author":
+      return "Author (ORCID listed on the record)"
+    case "author-self-declared":
+      return "Author (self-declared)"
+    case "reader":
+      return "Reader"
+  }
 }
 
 export function statusLabel(status: IssueStatus): string {

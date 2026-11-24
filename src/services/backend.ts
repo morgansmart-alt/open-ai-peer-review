@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js"
 import { emptyDatabase, type AirDatabase, type AuthorClaim, type IssueRound, type IssueStatus, type IssueThread, type NodeSubmission, type StoredReview } from "../domain/types.ts"
+import { fluidRoundPastLegacyCap, legacySixRoundMessage, LOCAL_FLUID_ROUND_NOTE } from "../domain/versions.ts"
 import { loadLocalDatabase, loadOverlay, loadRateStamps, saveLocalDatabase, saveOverlay, saveRateStamps } from "./storage.ts"
 import { rateLimitDecision } from "./rateLimit.ts"
 
@@ -187,6 +188,14 @@ export async function saveIssue(mode: BackendMode, issue: IssueThread): Promise<
   const payload = publicPayload(issue)
   const rpc = await sb.rpc("air_append_issue_round", { p_issue_id: issue.id, p_payload: payload })
   if (!rpc.error) return null
+  if (legacySixRoundMessage(rpc.error.message) && fluidRoundPastLegacyCap(issue)) {
+    const overlay = loadOverlay()
+    const index = overlay.issues.findIndex((item) => item.id === issue.id)
+    if (index >= 0) overlay.issues[index] = issue
+    else overlay.issues.push(issue)
+    saveOverlay(overlay)
+    return LOCAL_FLUID_ROUND_NOTE
+  }
   if (!missingAppendFunction(rpc.error)) return rpc.error.message
   const { error } = await sb.from("air_issues").update({ payload, updated_at: issue.updatedAt }).eq("id", issue.id)
   if (error) {
