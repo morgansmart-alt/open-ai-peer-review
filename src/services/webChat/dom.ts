@@ -418,7 +418,7 @@ function hasSentence(text: string): boolean {
   return /[.!?](?:\s|$)/.test(text)
 }
 
-/** The sent prompt, a prefix of it, or a suffix of it. Not a model reply. */
+/** The sent prompt, a slice of it, or a container that still holds it. Not a model reply. */
 export function isPromptEcho(text: string, prompt: string): boolean {
   const block = normaliseComposerText(text)
   const sent = normaliseComposerText(prompt)
@@ -426,8 +426,13 @@ export function isPromptEcho(text: string, prompt: string): boolean {
   if (block === sent) return true
   if (sent.startsWith(block) && block.length >= 40) return true
   if (sent.endsWith(block) && block.length >= 40) return true
-  const head = sent.slice(0, 80)
-  if (head.length >= 40 && block.startsWith(head) && block.length <= sent.length + 40) return true
+  const head = sent.slice(0, 100)
+  if (head.length >= 40 && block.startsWith(head) && block.length <= sent.length + 80) return true
+  if (sent.length >= 80) {
+    const midAt = Math.floor(sent.length / 2)
+    const mid = sent.slice(midAt, midAt + 100)
+    if (block.includes(head) || (mid.length >= 80 && block.includes(mid))) return true
+  }
   return false
 }
 
@@ -447,24 +452,46 @@ function longestLast(blocks: string[]): string {
   return tied[tied.length - 1] ?? ""
 }
 
+function shortestLast(blocks: string[]): string {
+  if (blocks.length === 0) return ""
+  const shortest = Math.min(...blocks.map((block) => block.length))
+  const tied = blocks.filter((block) => block.length === shortest)
+  return tied[tied.length - 1] ?? ""
+}
+
+/** JSON that follows the prompt. The rubric template in the prompt is not a score. */
+function scoreAfterPrompt(block: string, prompt: string): string {
+  const sent = normaliseComposerText(prompt)
+  const text = normaliseComposerText(block)
+  const head = sent.slice(0, 80)
+  const at = head.length >= 40 ? text.lastIndexOf(head) : -1
+  const tail = at >= 0 ? text.slice(at + head.length) : text
+  return reviewJsonBlock(tail)
+}
+
 /**
  * Pick the reply again from the blocks visible now.
- * The sent prompt and short UI labels are ignored. Score steps prefer parseable JSON.
- * The winner is the longest remaining block, and the later one when lengths tie.
+ * A container that still holds the sent prompt is never the reply.
+ * Score steps use the smallest block whose JSON has a numeric overallScore, then the last such JSON.
  */
 export function chooseReplyBlock(blocks: string[], beforeRegion: string, sentPrompt: string, expect: "json" | "text" = "text"): string {
   const fresh = blocks.filter((block) => {
     const trimmed = block.replace(/\s+/g, " ").trim()
-    if (!trimmed || isUiLabel(block) || isPromptEcho(block, sentPrompt)) return false
+    if (!trimmed || isUiLabel(block)) return false
     const probe = trimmed.slice(0, 80)
     return !(probe.length >= 40 && beforeRegion.includes(probe))
   })
+  const clean = fresh.filter((block) => !isPromptEcho(block, sentPrompt))
   if (expect === "json") {
-    const withJson = fresh.filter((block) => reviewJsonBlock(block))
-    if (withJson.length > 0) return longestLast(withJson)
-    return ""
+    const withJson = clean.filter((block) => reviewJsonBlock(block))
+    if (withJson.length > 0) {
+      const block = shortestLast(withJson)
+      return reviewJsonBlock(block) || block
+    }
+    const extracted = fresh.map((block) => scoreAfterPrompt(block, sentPrompt)).filter((item) => item.length > 0)
+    return extracted[extracted.length - 1] ?? ""
   }
-  return longestLast(fresh.filter((block) => block.trim().length >= 80 || reviewJsonBlock(block) || hasSentence(block)))
+  return longestLast(clean.filter((block) => block.trim().length >= 80 || reviewJsonBlock(block) || hasSentence(block)))
 }
 
 function walkReplyText(node: Node, composer: Element | null, chunks: string[]): void {
@@ -553,11 +580,11 @@ export function composerTextMatches(actual: string, intended: string): boolean {
   const right = normaliseComposerText(intended)
   if (left === right) return true
   if (left.length < 40 || right.length < 40) return false
-  const start = right.slice(0, 48)
-  const end = right.slice(-48)
-  if (!left.startsWith(start) || !left.endsWith(end)) return false
+  const start = right.slice(0, Math.min(48, right.length))
+  const end = right.slice(-Math.min(48, right.length))
   const ratio = Math.min(left.length, right.length) / Math.max(left.length, right.length)
-  return ratio >= 0.95
+  if (left.startsWith(start) && ratio >= 0.98) return true
+  return left.startsWith(start) && left.endsWith(end) && ratio >= 0.95
 }
 
 function messageMatches(actual: string, intended: string): boolean {

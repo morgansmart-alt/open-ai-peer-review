@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 import { webChatProvider } from "../../../extension/adapters/index.ts"
 import { CRITERION_PROFILES, readingCriteria } from "../../domain/profiles.ts"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
-import { ackReply, assistantText, attachmentReady, chooseReplyBlock, clickElement, composerTextMatches, confirmComposerText, describeCandidates, diagnose, fillComposer, findComposer, findSubmit, heldPrefix, placeComposerText, reviewJsonOnPage, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
+import { ackReply, assistantText, attachmentReady, chooseReplyBlock, clickElement, composerTextMatches, confirmComposerText, describeCandidates, diagnose, fillComposer, findComposer, findSubmit, heldPrefix, messageBlocks, placeComposerText, reviewJsonOnPage, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
 import { buildWebChatPacket } from "./packet.ts"
 import { runTurn, sendFollowUp } from "./runTurn.ts"
 import { acceptWebChatResult } from "./accept.ts"
@@ -876,7 +876,46 @@ describe("live chat composers", () => {
     expect(chooseReplyBlock([chip, echo], before, prompt, "json")).toBe("")
     expect(chooseReplyBlock([chip, echo, score], before, prompt, "json")).toBe(score)
     const longer = `${score} ${"The pathway is written down. ".repeat(8)}`
-    expect(chooseReplyBlock([score, chip, longer], before, prompt, "json")).toBe(longer)
+    expect(chooseReplyBlock([longer, chip, score], before, prompt, "json")).toBe(score)
+    const wrapped = `${prompt}\n${'{"overallScore":"<0-100>","questionsForAuthors":["<question>"],"summary":"template"}'}\n${score}`
+    expect(chooseReplyBlock([wrapped, chip, score], before, prompt, "json")).toBe(score)
+  })
+
+  it("reads the sibling Grok reply and ignores the prompt, the template, and Thought for Ns", () => {
+    const prompt = "Open this public text page and read the full paper. Score it. Return JSON with overallScore <0-100> and questionsForAuthors <question>. UNIQUE RUBRIC SLICE stays in the prompt."
+    document.body.innerHTML = `<main id="conversation">
+      <div id="box" contenteditable="true" role="textbox" aria-label="Ask anything"></div>
+      <div class="turn" id="user">${prompt}</div>
+      <div class="chip">Thought for 3s</div>
+      <div class="turn" id="grok">{"overallScore":91,"recommendation":"accept","questionsForAuthors":["What limits the table?"],"summary":"The constants are tabulated for this version of the record."}</div>
+    </main>`
+    const composer = document.getElementById("box")
+    const blocks = messageBlocks(document, composer)
+    const picked = chooseReplyBlock(blocks, "", prompt, "json")
+    expect(picked).toContain('"overallScore":91')
+    expect(picked).not.toContain("UNIQUE RUBRIC SLICE")
+    expect(picked).not.toContain("<0-100>")
+    expect(picked.length).toBeLessThan(prompt.length)
+  })
+
+  it("reads a grok.com assistant message and not the user turn beside it", () => {
+    const prompt = "Open this public text page. The rubric says overallScore <0-100>. UNIQUE RUBRIC SLICE."
+    document.body.innerHTML = `<main>
+      <textarea id="composer" aria-label="Message Grok"></textarea>
+      <div class="user-turn">${prompt}</div>
+      <div data-testid="assistant-message">{"overallScore":78,"recommendation":"revise","questionsForAuthors":["Which table changed?"],"summary":"The reference values are stated with their limits."}</div>
+      <div class="chip">Thought for 2s</div>
+    </main>`
+    const picked = chooseReplyBlock(messageBlocks(document, document.getElementById("composer")), "", prompt, "json")
+    expect(picked).toContain('"overallScore":78')
+    expect(picked).not.toContain("UNIQUE RUBRIC SLICE")
+  })
+
+  it("accepts a defence readback that is missing only its last few characters", () => {
+    const full = `Author defence, round 1 of 2. ${"Answer the criticism about the tabulated value. ".repeat(12)}(Mohr, Newell).`
+    const readback = full.slice(0, -4)
+    expect(readback.endsWith("(Mohr, Newe")).toBe(true)
+    expect(composerTextMatches(readback, full)).toBe(true)
   })
 
   it("sends the prefix a composer kept instead of abandoning a cut-off defence", () => {

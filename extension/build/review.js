@@ -2103,7 +2103,13 @@ ${output}
     }
   }
   function hasNumericScore(value) {
-    return typeof value === "object" && value !== null && !Array.isArray(value) && typeof value.overallScore === "number";
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+    const row = value;
+    if (typeof row.overallScore !== "number" || !Number.isFinite(row.overallScore)) return false;
+    if (typeof row.recommendation === "string" && (row.recommendation.includes("<") || row.recommendation.includes("|"))) return false;
+    const questions = row.questionsForAuthors;
+    if (Array.isArray(questions) && questions.length === 1 && (questions[0] === "string" || questions[0] === "<question>")) return false;
+    return true;
   }
   function lastScoreJson(raw) {
     const windowText = raw.length > 4e5 ? raw.slice(-2e5) : raw;
@@ -2814,12 +2820,12 @@ ${output}
         } : {},
         goals: options?.compact ? [{ goalId: "id from the documented goals", level: "none | indirect | partial | direct", note: "string" }] : globalGoals.goals.map((goal) => ({ goalId: goal.id, level: "none | indirect | partial | direct", note: "string" }))
       } : {},
-      overallScore: criteria.scale.max >= 100 ? "integer 0-100, within 10 of the weighted criterion total" : `number from ${criteria.scale.min} to ${criteria.scale.max}`,
-      recommendation: criteria.recommendationCategories.map((item) => item.id).join(" | "),
-      strengths: ["string"],
+      overallScore: criteria.scale.max >= 100 ? "<0-100>" : `<${criteria.scale.min}-${criteria.scale.max}>`,
+      recommendation: `<${criteria.recommendationCategories.map((item) => item.id).join("|")}>`,
+      strengths: ["<strength>"],
       majorIssues: [{ criterionId: "id", claim: "what is wrong", quotedPassage: "verbatim or empty", reason: "why it matters and how to fix it" }],
       minorIssues: ["string"],
-      questionsForAuthors: ["string"],
+      questionsForAuthors: ["<question>"],
       suggestedNextSteps: ["string"],
       air_feedback: {
         criteria: 'A concrete note, or "none" with a reason. Never an empty string.',

@@ -100,7 +100,7 @@ describe("validateReport", () => {
     } satisfies ZenodoRecord
     const prompt = reviewUserPrompt(record, officialCriteria, "text")
     expect(reviewSystemPrompt(officialCriteria)).toContain("out of 100")
-    expect(prompt).toContain("integer 0-100")
+    expect(prompt).toContain("<0-100>")
     expect(prompt).toContain("0-20")
     expect(prompt).toContain("https://zenodo.org/records/1")
     expect(prompt).toContain("https://doi.org/10.5281/zenodo.1")
