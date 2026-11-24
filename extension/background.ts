@@ -139,6 +139,24 @@ chrome.runtime.onMessage.addListener((message: { source?: string; type?: string;
     })
     return true
   }
+  if (message?.type === "air-web-chat-focus") {
+    void sessionGet<JobRecord>(JOB_KEY).then(async (job) => {
+      const tabId = job?.providerTabId
+      if (!tabId) {
+        sendResponse({ ok: false })
+        return
+      }
+      try {
+        const tab = await chrome.tabs.get(tabId)
+        await chrome.tabs.update(tabId, { active: true })
+        if (tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true })
+        sendResponse({ ok: true })
+      } catch {
+        sendResponse({ ok: false })
+      }
+    })
+    return true
+  }
   if (message?.type === "air-web-chat-progress" || message?.type === "air-web-chat-done") {
     void sessionGet<JobRecord>(JOB_KEY).then(async (job) => {
       if (!job || sender.tab?.id !== job.providerTabId || message.requestId !== job.requestId) return

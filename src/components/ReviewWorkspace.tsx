@@ -33,7 +33,7 @@ export function ReviewWorkspace({ record, documents }: { record: ZenodoRecord; d
         Review this version
       </h2>
       <p className="mt-1 max-w-3xl text-sm text-ink-soft">
-        Score every criterion in this profile from 0 to 100. AIR weights those scores itself. Human and AI readings use that same scale. If the overall score or the recommendation disagrees with them, the reading is flagged and left out of the median. Mark a claim possible or proven. Possible is not proven, and proven needs a quotation from this version. A human review sits beside the AI scores and is not mixed into them.
+        Score every criterion in this profile from 0 to 100. AIR weights those scores itself. Global goals is optional recognition and is not part of that overall. Human and AI readings use the same scale. If the stated overall is more than 10 points from the weighted total, the reading is flagged and left out of the median. A verdict in a different band is shown as the band's verdict. Mark a claim possible or proven. Possible is not proven, and proven needs a quotation from this version. A human review sits beside the AI scores and is not mixed into them.
       </p>
       <label className="mt-3 block max-w-md text-xs text-ink-soft" htmlFor="workspace-profile">
         Criterion profile

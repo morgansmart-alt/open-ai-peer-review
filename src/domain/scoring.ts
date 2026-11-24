@@ -58,6 +58,18 @@ export function recommendationMatchesBand(recommendation: string, board: number)
   return recommendation === "accept" && expected === "encourage"
 }
 
+/** The verdict the card shows. A band disagreement uses the band, and the model's word stays in the note. */
+export function bandRecommendation(recommendation: string, board: number): string {
+  if (!recommendation || recommendationMatchesBand(recommendation, board)) return recommendation
+  return expectedVerdict(Math.round(board))
+}
+
+export function verdictBandNote(recommendation: string, board: number): string | null {
+  if (!recommendation || recommendationMatchesBand(recommendation, board)) return null
+  const rounded = Math.round(board)
+  return `The model said ${recommendation}. The band for ${rounded} is ${expectedVerdict(rounded)}.`
+}
+
 export function describeScoring(input: {
   scores: { criterionId: string; score: number }[]
   statedOverall: number | null
@@ -72,9 +84,6 @@ export function describeScoring(input: {
   if (internal !== null && stated !== null && Math.abs(stated - internal) > MISMATCH_POINTS) {
     reasons.push(`Stated overall ${stated} differs from the weighted score ${internal} by more than ${MISMATCH_POINTS}.`)
   }
-  if (internal !== null && input.recommendation && !recommendationMatchesBand(input.recommendation, internal)) {
-    reasons.push(`Verdict ${input.recommendation} does not match the score band for ${internal} (expected ${expectedVerdict(internal)}).`)
-  }
   return {
     scale,
     statedOverall: input.statedOverall,
@@ -83,14 +92,23 @@ export function describeScoring(input: {
       statedOverall: stated,
       mismatch: reasons.length > 0,
       reason: reasons.join(" ") || null,
+      verdictNote: internal !== null ? verdictBandNote(input.recommendation, internal) : null,
     },
   }
 }
 
-export function scoringMismatch(review: StoredReview): { mismatch: boolean; reason: string | null; internal: number | null } {
+export function scoringMismatch(review: StoredReview): {
+  mismatch: boolean
+  reason: string | null
+  internal: number | null
+  verdictNote: string | null
+  shownRecommendation: string
+} {
   const criteria = criteriaForReview(review)
   const internalRaw = weightedMean(review.report.scores, criteria)
-  if (internalRaw === null) return { mismatch: false, reason: null, internal: null }
+  if (internalRaw === null) {
+    return { mismatch: false, reason: null, internal: null, verdictNote: null, shownRecommendation: review.report.recommendation }
+  }
   const scale = storedScale(review.report, review.criteriaVersion)
   const internal = toBoard(internalRaw, scale)
   const statedSource = review.report.statedOverall != null ? review.report.statedOverall : review.report.overallScore
@@ -99,10 +117,12 @@ export function scoringMismatch(review: StoredReview): { mismatch: boolean; reas
   if (Math.abs(stated - internal) > MISMATCH_POINTS) {
     reasons.push(`Stated overall ${stated} differs from the weighted score ${internal} by more than ${MISMATCH_POINTS}.`)
   }
-  const expected = expectedVerdict(internal)
-  if (review.report.recommendation && !recommendationMatchesBand(review.report.recommendation, internal)) {
-    reasons.push(`Verdict ${review.report.recommendation} does not match the score band for ${internal} (expected ${expected}).`)
-  }
   const reason = reasons.join(" ")
-  return { mismatch: reasons.length > 0, reason: reason || null, internal }
+  return {
+    mismatch: reasons.length > 0,
+    reason: reason || null,
+    internal,
+    verdictNote: verdictBandNote(review.report.recommendation, internal),
+    shownRecommendation: bandRecommendation(review.report.recommendation, internal),
+  }
 }

@@ -1,7 +1,7 @@
 import type { ReactNode } from "react"
 import { GoalsHeatmap, PhysicsGauge, QuadrantChart, RadarChart, RangeBars } from "./charts.tsx"
 import { publicContextCount } from "../domain/conversationLinks.ts"
-import { categoryLabel, impactFeasibilityQuadrant } from "../domain/criteria.ts"
+import { categoryLabel, globalGoalsBadge, impactFeasibilityQuadrant, isBonusCriterion } from "../domain/criteria.ts"
 import { showsProjectValue, storedProfileLabel } from "../domain/profiles.ts"
 import { coveragePhrase, OCR_OR_TEXT_SUGGESTION } from "../services/textTools.ts"
 import { scoringMismatch, storedScale, toBoard } from "../domain/scoring.ts"
@@ -89,6 +89,8 @@ export function ReportView({
   const scale = storedScale(report, meta.criteriaVersion)
   const shown = (score: number) => toBoard(score, scale)
   const check = scoringMismatch(exportReview)
+  const overallShown = check.internal ?? shown(report.overallScore)
+  const verdictId = check.shownRecommendation || report.recommendation
   const showValue = showsProjectValue(meta.stored?.criterionProfile) && Boolean(report.valueEstimate)
 
   return (
@@ -96,9 +98,9 @@ export function ReportView({
       <header>
         <p className="text-xs uppercase tracking-wide text-teal">{meta.assessorName}</p>
         {isUncalibratedWebChat(meta.stored) && <p className="mt-1 text-xs text-gold">{WEB_CHAT_LABEL}</p>}
-        <h3 className="mt-1 font-serif text-2xl">{categoryLabel(criteria, report.recommendation)}</h3>
+        <h3 className="mt-1 font-serif text-2xl">{categoryLabel(criteria, verdictId)}</h3>
         <p className="mt-2 text-sm text-ink-soft">
-          Overall {shown(report.overallScore).toFixed(0)} / 100 · Idea {shown(report.ideaScore).toFixed(0)} / 100
+          Overall {overallShown.toFixed(0)} / 100 · Idea {shown(report.ideaScore).toFixed(0)} / 100
           {criteria.version.startsWith("0.1") ? " · AIR v0.1" : ""}
         </p>
         {report.reading && (
@@ -115,6 +117,11 @@ export function ReportView({
         )}
         {report.reading?.coverageLabel && <p className="mt-1 text-sm text-ink-soft">{OCR_OR_TEXT_SUGGESTION}</p>}
         {report.unverifiedQuotes ? <p className="mt-1 text-xs text-ink-soft">{report.unverifiedQuotes} unverified quote{report.unverifiedQuotes === 1 ? "" : "s"}</p> : null}
+        {check.verdictNote ? (
+          <p className="mt-2 text-sm text-ink-soft" data-testid="verdict-note">
+            {check.verdictNote}
+          </p>
+        ) : null}
         {check.mismatch && (
           <p className="mt-2 text-sm text-bad">
             Scoring mismatch, needs re-check. {check.reason}
@@ -186,6 +193,11 @@ export function ReportView({
                     {score.evidence === "proven" ? " · Proven" : score.evidence === "possible" ? " · Possible" : ""}
                   </span>
                 </div>
+                {isBonusCriterion(score.criterionId) ? (
+                  <p className="mt-1 text-sm" data-testid="global-goals-bonus">
+                    {globalGoalsBadge(shown(score.score))}
+                  </p>
+                ) : null}
                 <p className="mt-1 text-sm text-ink-soft">{score.rationale}</p>
                 {score.citations.map((citation, index) => (
                   <blockquote key={index} className="mt-2 border-l-2 border-teal/40 pl-3 text-sm">

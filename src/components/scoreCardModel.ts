@@ -1,6 +1,6 @@
-import { categoryLabel } from "../domain/criteria.ts"
+import { categoryLabel, isBonusCriterion } from "../domain/criteria.ts"
 import { median } from "../domain/ranking.ts"
-import { boardValue, scoringMismatch } from "../domain/scoring.ts"
+import { boardValue, criteriaForReview, rankedBoardScore, scoringMismatch } from "../domain/scoring.ts"
 import type { CriteriaSet, EvidenceLabel, StoredReview } from "../domain/types.ts"
 import { isHumanReview } from "../domain/versions.ts"
 import { isUncalibratedWebChat } from "../services/webChat/protocol.ts"
@@ -34,6 +34,7 @@ export function publicDoiUrl(doi: string): string | null {
 export interface CriterionBar {
   id: string
   name: string
+  bonus: boolean
   median: number | null
   marks: Array<{
     reviewId: string
@@ -51,6 +52,7 @@ export interface ReadingLine {
   badge: ReviewerBadge
   score: number
   verdict: string
+  verdictNote: string | null
   mismatch: boolean
   possible: number
   proven: number
@@ -84,22 +86,29 @@ export function criterionBars(reviews: StoredReview[], criteria: CriteriaSet, na
       name: criteria.criteria.find((criterion) => criterion.id === id)?.name ?? id,
       median: median(marks.map((mark) => mark.score)),
       marks,
+      bonus: isBonusCriterion(id),
     }
   })
 }
 
 export function readingLines(reviews: StoredReview[], criteria: CriteriaSet, names: Record<string, string>): ReadingLine[] {
-  return reviews.map((review) => ({
+  void criteria
+  return reviews.map((review) => {
+    const check = scoringMismatch(review)
+    const criteria = criteriaForReview(review)
+    return {
     id: review.id,
     name: isHumanReview(review) ? "Human reviewer" : (names[review.assessorId] ?? review.assessorId),
     badge: reviewerBadge(review),
-    score: boardValue(review.report.overallScore, review.report, review.criteriaVersion),
-    verdict: categoryLabel(criteria, review.report.recommendation),
-    mismatch: scoringMismatch(review).mismatch,
+    score: check.internal ?? rankedBoardScore(review),
+    verdict: categoryLabel(criteria, check.shownRecommendation),
+    verdictNote: check.verdictNote,
+    mismatch: check.mismatch,
     possible: review.report.scores.filter((score) => score.evidence === "possible").length,
     proven: review.report.scores.filter((score) => score.evidence === "proven").length,
     mock: review.mock,
-  }))
+    }
+  })
 }
 
 export function sharedVerdict(lines: ReadingLine[]): { label: string; mixed: boolean } | null {

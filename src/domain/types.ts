@@ -159,6 +159,8 @@ export interface ReviewReport {
     statedOverall: number | null
     mismatch: boolean
     reason: string | null
+    /** The model's verdict sat in a different band. Shown beside the band verdict. Not a re-check. */
+    verdictNote?: string | null
   }
   strengths: string[]
   majorIssues: MajorIssue[]

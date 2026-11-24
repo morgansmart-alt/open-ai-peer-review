@@ -9,7 +9,8 @@ const PLAIN: Record<string, string> = {
   simulation: "If the work reports simulations, are the runs, the methods, and the inputs available to check?",
   physics: "How does the account sit against known laws? A clash is not an automatic fail. The text has to say how it is handled.",
   "estimated-value": "An estimate of money or scale, with the assumptions written down. It is not a fact and not investment advice.",
-  "global-goals": "Which documented public goals the record itself supports, and how directly.",
+  "global-goals":
+    "Optional recognition. Working towards a documented public goal is a nice-to-have. The score stays on the card and is not counted in the overall.",
   clarity: "Can a reader point to what is claimed, for whom, and under which conditions?",
   consistency: "Do the numbers, units, and derivations agree with each other?",
   "evidence-labelling": "Are observations, calculations, and speculation labelled as what they are?",
@@ -115,6 +116,14 @@ export const reviewerFaq = [
   {
     q: "Which scores are calibrated?",
     a: "An in-depth reading that uses a key you bring can enter the median. A free web-chat score is labelled uncalibrated and stays out of that median.",
+  },
+  {
+    q: "Does global goals change the overall score?",
+    a: "No. Working towards a documented public goal is a nice-to-have, not a requirement. The score stays on the card as a bonus, for example Global goals: 25 (bonus, not counted in overall). It is left out of the weighted overall, the score bands, and the board median for every paper. The board computes that overall when it shows the row. Stored readings are not rewritten.",
+  },
+  {
+    q: "What if the verdict does not match the score?",
+    a: "The card shows the band for the overall: accept or encourage from 80, revise from 60, major-revision from 40, otherwise not-ready. It notes the model's own verdict. That note is not a re-check. A stated overall more than 10 points from the weighted total is still marked Scoring mismatch, needs re-check and left out of the median.",
   },
 ] as const
 

@@ -1,10 +1,11 @@
-import { categoryLabel } from "../domain/criteria.ts"
+import { categoryLabel, globalGoalsBadge, isBonusCriterion } from "../domain/criteria.ts"
 import { storedProfileLabel } from "../domain/profiles.ts"
-import { boardValue } from "../domain/scoring.ts"
+import { boardValue, scoringMismatch } from "../domain/scoring.ts"
 import { DISCLAIMER, type CriteriaSet, type StoredReview } from "../domain/types.ts"
 import { formatVersionLabel } from "./zenodo.ts"
 
 export function reportToMarkdown(review: StoredReview, criteria: CriteriaSet, assessorName: string): string {
+  const check = scoringMismatch(review)
   const lines = [
     `# AIR reading: ${review.title}`,
     "",
@@ -24,10 +25,11 @@ export function reportToMarkdown(review: StoredReview, criteria: CriteriaSet, as
       ? `- Private AI context links sent to the model: ${review.privateContextCount}. Addresses are not included.`
       : "",
     `- Output hash: ${review.outputHash}`,
-    `- Overall: ${boardValue(review.report.overallScore, review.report, review.criteriaVersion).toFixed(0)} / 100`,
+    `- Overall: ${(check.internal ?? boardValue(review.report.overallScore, review.report, review.criteriaVersion)).toFixed(0)} / 100`,
     `- Idea score: ${boardValue(review.report.ideaScore, review.report, review.criteriaVersion).toFixed(0)} / 100`,
-    review.report.scoringCheck?.mismatch ? `- Scoring mismatch, needs re-check. ${review.report.scoringCheck.reason ?? ""}` : "",
-    `- Recommendation: ${categoryLabel(criteria, review.report.recommendation)}`,
+    check.mismatch ? `- Scoring mismatch, needs re-check. ${check.reason ?? ""}` : "",
+    check.verdictNote ? `- ${check.verdictNote}` : "",
+    `- Recommendation: ${categoryLabel(criteria, check.shownRecommendation)}`,
     "",
     "## Summary",
     "",
@@ -38,7 +40,8 @@ export function reportToMarkdown(review: StoredReview, criteria: CriteriaSet, as
   ]
   for (const score of review.report.scores) {
     const criterion = criteria.criteria.find((item) => item.id === score.criterionId)
-    lines.push(`### ${criterion?.name ?? score.criterionId} — ${score.score}/5`, "", score.rationale, "")
+    const bonus = isBonusCriterion(score.criterionId) ? ` — ${globalGoalsBadge(score.score)}` : ""
+    lines.push(`### ${criterion?.name ?? score.criterionId} — ${score.score}/5${bonus}`, "", score.rationale, "")
     for (const citation of score.citations) {
       lines.push(`> ${citation.quote}`, `> — ${citation.location}`, "")
     }

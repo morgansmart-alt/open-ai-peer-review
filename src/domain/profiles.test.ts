@@ -176,6 +176,30 @@ describe("criterion profiles", () => {
   })
 })
 
+describe("global goals bonus", () => {
+  it("leaves global-goals out of the overall for every profile", () => {
+    for (const id of [undefined, "device", "theory", "data", "roadmap", "empirical"] as const) {
+      const criteria = applyCriterionProfile(officialCriteria, id)
+      const scores = criteria.criteria.map((criterion) => ({
+        criterionId: criterion.id,
+        score: criterion.id === "global-goals" ? 25 : 80,
+      }))
+      expect(weightedMean(scores, criteria)).toBe(80)
+      if (criteria.ideaCriterionIds.includes("global-goals")) {
+        expect(weightedMean(scores, criteria, criteria.ideaCriterionIds)).not.toBe(80)
+      }
+    }
+    const stored = review({ id: "bonus", score: 80 })
+    const goals = stored.report.scores.find((score) => score.criterionId === "global-goals")
+    if (!goals) throw new Error("device profile still scores global goals")
+    goals.score = 25
+    expect(stored.report.overallScore).toBe(80)
+    expect(criteriaForReview(stored).criteria.some((criterion) => criterion.id === "global-goals")).toBe(true)
+    expect(weightedMean(stored.report.scores, criteriaForReview(stored))).toBe(80)
+    expect(PROFILE_RANKING_NOTE).toMatch(/left out of that mean/)
+  })
+})
+
 describe("comment rounds need a migration", () => {
   it("documents that the live check rejects comment until the additive migration is applied", () => {
     const previous = previousMigration

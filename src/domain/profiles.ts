@@ -8,9 +8,10 @@ import type { CriteriaSet, Criterion } from "./types.ts"
  * which criteria enter the mean. It does not change the scale, so a 70 on a theory
  * paper and a 70 on a device proposal sit the same distance from the board's prior
  * of 50. Sub-scores that a profile does not use are left blank.
+ * Global goals is optional recognition and is left out of that mean for every profile.
  */
 export const PROFILE_RANKING_NOTE =
-  "Human reviews and AI readings use the same 0–100 scale. The board score is the weighted mean of the criteria in that reading's profile, then shown out of 100. A reading with no profile uses the device or engineering weights, which are the AIR v0.2 weights, so older readings rank as they did. A different profile changes which criteria enter the mean. It does not change the scale, so a 70 on a theory paper and a 70 on a device proposal sit the same distance from the board's prior of 50. Sub-scores that a profile does not use are left blank."
+  "Human reviews and AI readings use the same 0–100 scale. The board score is the weighted mean of the criteria in that reading's profile, then shown out of 100. Global goals is optional recognition. It is shown as a bonus and left out of that mean for every profile. A reading with no profile uses the device or engineering weights, which are the AIR v0.2 weights, so older readings rank as they did. A different profile changes which criteria enter the mean. It does not change the scale, so a 70 on a theory paper and a 70 on a device proposal sit the same distance from the board's prior of 50. Sub-scores that a profile does not use are left blank."
 
 export const CRITERION_PROFILE_IDS = ["device", "theory", "data", "roadmap", "empirical"] as const
 
@@ -80,6 +81,8 @@ export const CRITERION_PROFILES: CriterionProfile[] = [
       availability:
         "Score whether the data, code, or reference file is public and matches the claim. Figures that were not read are not missing data unless the claim depends on the image itself.",
       impact: "Score who can use the dataset or reference, not a product market.",
+      "global-goals":
+        "Optional recognition. Score the enabling value when the dataset or reference helps a documented public goal. This score is a bonus and is not part of the overall.",
     },
   },
   {
@@ -102,6 +105,8 @@ export const CRITERION_PROFILES: CriterionProfile[] = [
     guidance: {
       feasibility: "Score whether a reader can follow the path the report describes. A missing prototype is not a fail when the work is a map, not a build.",
       impact: "Score the benefit the report itself traces, not an estimated sale price.",
+      "global-goals":
+        "Optional recognition. Score a documented public goal the report helps, including by enabling other work. This score is a bonus and is not part of the overall.",
     },
   },
   {

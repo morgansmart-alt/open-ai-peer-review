@@ -43,6 +43,10 @@ describe("defend my paper", () => {
     const prompt = rebuttalPrompt({ round: 1, rounds: 2, critiques, paperText: "Section 2. Net B collected 1.8 litres." })
     expect(prompt).toContain("Do not invent data")
     expect(prompt).toContain("Section 2")
+    const linked = rebuttalPrompt({ round: 1, rounds: 2, critiques, paperText: "UNIQUEPDF excerpt that must stay out.", includeExcerpt: false })
+    expect(linked).not.toContain("UNIQUEPDF")
+    expect(linked).not.toContain("Paper excerpt")
+    expect(linked).toContain("already in this chat")
     expect(prompt).toContain("The stopping rule is missing.")
     expect(rescorePrompt()).toContain("after author defence")
     const finished = await runDefenceLoop({

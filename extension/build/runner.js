@@ -694,7 +694,7 @@
         name: "Global goals alignment",
         description: "Which documented public goals the work addresses, how directly, and what contribution the record itself supports.",
         weight: 1.1,
-        guidance: "Use only the goals in criteria/global-goals.json. For each goal set a level: none, indirect, partial, or direct. Quote the passage that creates the link. Do not award direct alignment for a slogan. A work that addresses none of these goals can still score well on other criteria; say that plainly.",
+        guidance: "Use only the goals in criteria/global-goals.json. For each goal set a level: none, indirect, partial, or direct. Quote the passage that creates the link. Do not award direct alignment for a slogan. Working towards a documented public goal is a nice-to-have, not a requirement. This score is optional recognition. It must not change overallScore or the score band. A work that addresses none of these goals can still score well on the other criteria; say that plainly.",
         bands: [
           {
             min: 0,
@@ -993,12 +993,17 @@
       }
     };
   }
+  var BONUS_CRITERION_ID = "global-goals";
+  function isBonusCriterion(criterionId) {
+    return criterionId === BONUS_CRITERION_ID;
+  }
   function weightedMean(scores, criteria, ids) {
     const wanted = new Set(ids ?? criteria.criteria.map((item) => item.id));
     let weight = 0;
     let total = 0;
     for (const criterion of criteria.criteria) {
       if (!wanted.has(criterion.id)) continue;
+      if (!ids && isBonusCriterion(criterion.id)) continue;
       const found = scores.find((item) => item.criterionId === criterion.id);
       if (!found) return null;
       weight += criterion.weight;
@@ -1068,7 +1073,8 @@ ${parsed.errors.join("\n")}`);
       ideaCriterionIds: ["availability", "clarity"],
       guidance: {
         availability: "Score whether the data, code, or reference file is public and matches the claim. Figures that were not read are not missing data unless the claim depends on the image itself.",
-        impact: "Score who can use the dataset or reference, not a product market."
+        impact: "Score who can use the dataset or reference, not a product market.",
+        "global-goals": "Optional recognition. Score the enabling value when the dataset or reference helps a documented public goal. This score is a bonus and is not part of the overall."
       }
     },
     {
@@ -1090,7 +1096,8 @@ ${parsed.errors.join("\n")}`);
       ideaCriterionIds: ["impact", "clarity"],
       guidance: {
         feasibility: "Score whether a reader can follow the path the report describes. A missing prototype is not a fail when the work is a map, not a build.",
-        impact: "Score the benefit the report itself traces, not an estimated sale price."
+        impact: "Score the benefit the report itself traces, not an estimated sale price.",
+        "global-goals": "Optional recognition. Score a documented public goal the report helps, including by enabling other work. This score is a bonus and is not part of the overall."
       }
     },
     {
@@ -1167,6 +1174,11 @@ ${parsed.errors.join("\n")}`);
     if (recommendation === expected) return true;
     return recommendation === "accept" && expected === "encourage";
   }
+  function verdictBandNote(recommendation, board) {
+    if (!recommendation || recommendationMatchesBand(recommendation, board)) return null;
+    const rounded = Math.round(board);
+    return `The model said ${recommendation}. The band for ${rounded} is ${expectedVerdict(rounded)}.`;
+  }
   function describeScoring(input) {
     const scale = input.criteria.scale.max >= 100 ? 100 : input.criteria.scale.max <= 5 ? 5 : 10;
     const internalRaw = weightedMean(input.scores, input.criteria);
@@ -1176,9 +1188,6 @@ ${parsed.errors.join("\n")}`);
     if (internal !== null && stated !== null && Math.abs(stated - internal) > MISMATCH_POINTS) {
       reasons.push(`Stated overall ${stated} differs from the weighted score ${internal} by more than ${MISMATCH_POINTS}.`);
     }
-    if (internal !== null && input.recommendation && !recommendationMatchesBand(input.recommendation, internal)) {
-      reasons.push(`Verdict ${input.recommendation} does not match the score band for ${internal} (expected ${expectedVerdict(internal)}).`);
-    }
     return {
       scale,
       statedOverall: input.statedOverall,
@@ -1186,7 +1195,8 @@ ${parsed.errors.join("\n")}`);
         internal: internal ?? 0,
         statedOverall: stated,
         mismatch: reasons.length > 0,
-        reason: reasons.join(" ") || null
+        reason: reasons.join(" ") || null,
+        verdictNote: internal !== null ? verdictBandNote(input.recommendation, internal) : null
       }
     };
   }
@@ -2059,6 +2069,19 @@ ${output}
     const detail = problem.replace(/\s+/g, " ").trim().slice(0, 500);
     return `Your JSON did not validate (${detail}). Reply again with only the corrected JSON object.`;
   }
+  var FILL_REVIEW_PROMPT = "Fill in the review now. Return one completed JSON object for this paper. Do not repeat the rubric template or the instructions.";
+  function rubricTemplateProblem(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const row = value;
+    const scoreIsPlaceholder = typeof row.overallScore === "string";
+    const recommendationIsSchema = typeof row.recommendation === "string" && row.recommendation.includes("|");
+    const strengthsPlaceholder = Array.isArray(row.strengths) && row.strengths.length > 0 && row.strengths.every((item) => item === "string");
+    const scoreFieldsAreStrings = Array.isArray(row.scores) && row.scores.some((item) => item && typeof item === "object" && typeof item.score === "string");
+    if (scoreIsPlaceholder || recommendationIsSchema || strengthsPlaceholder || scoreFieldsAreStrings) {
+      return "The reply repeated the rubric template instead of a completed review.";
+    }
+    return null;
+  }
   async function settleChatJson(raw, ask, log, validate) {
     const ready = (parsed) => {
       if (!validate) return { ok: true };
@@ -2066,14 +2089,15 @@ ${output}
     };
     const first = parseModelJson(raw);
     if (first.ok) {
-      const checked = ready(first);
+      const template = rubricTemplateProblem(first.value);
+      const checked = template ? { ok: false, errors: [template] } : ready(first);
       if (checked.ok) {
         if (first.repaired) log("Repaired the chat's JSON before scoring.");
         return { text: first.repaired ? first.text : raw, repaired: first.repaired, reasked: false };
       }
       const problem = checked.errors.join(" ");
-      log(`Asked once for corrected JSON. ${problem}`);
-      const follow2 = await ask(reaskJsonPrompt(problem));
+      log(template ? `Asked once to fill in the review. ${problem}` : `Asked once for corrected JSON. ${problem}`);
+      const follow2 = await ask(template ? FILL_REVIEW_PROMPT : reaskJsonPrompt(problem));
       const second2 = parseModelJson(follow2);
       if (second2.ok && second2.repaired) log("Repaired the corrected JSON.");
       return { text: second2.ok ? second2.repaired ? second2.text : follow2 : follow2, repaired: Boolean(second2.ok && second2.repaired), reasked: true };
@@ -2336,7 +2360,8 @@ ${output}
     return summary ? [{ criterionId: "summary", claim: summary.slice(0, 500), reason: "", quotedPassage: "" }] : [];
   }
   function rebuttalPrompt(options) {
-    const excerpt = options.paperText.replace(/\s+/g, " ").trim().slice(0, 6e3);
+    const includeExcerpt = options.includeExcerpt !== false;
+    const excerpt = includeExcerpt ? options.paperText.replace(/\s+/g, " ").trim().slice(0, 6e3) : "";
     const lines = options.critiques.map((critique, index) => {
       const quote = critique.quotedPassage ? ` Quoted passage: "${critique.quotedPassage}"` : "";
       const reason = critique.reason ? ` Why it was raised: ${critique.reason}` : "";
@@ -2344,15 +2369,13 @@ ${output}
     });
     return [
       `Author defence, round ${options.round} of ${options.rounds}.`,
-      "Answer only from the paper text already in this chat and the excerpt below.",
+      includeExcerpt ? "Answer only from the paper text already in this chat and the excerpt below." : "The paper is already in this chat. Do not paste it again. Answer only from that text.",
       "Quote a section or a page when the paper itself states one. If a criticism is fair, say so plainly.",
       "Do not invent data, experiments, citations, or page numbers.",
       "",
       "Criticisms to answer:",
       ...lines,
-      "",
-      "Paper excerpt:",
-      excerpt || "(The paper text is in the earlier messages.)"
+      ...includeExcerpt ? ["", "Paper excerpt:", excerpt || "(The paper text is in the earlier messages.)"] : []
     ].join("\n");
   }
   function rescorePrompt() {
@@ -2367,12 +2390,13 @@ ${output}
     const rounds = clampDefenceRounds(options.rounds);
     const transcript = [];
     const pause = options.pause ?? (async () => void 0);
+    const includeExcerpt = options.includeExcerpt !== false;
     for (let round = 1; round <= rounds; round += 1) {
       if (options.aborted()) return { transcript, defendedText: null, stopped: true };
       options.onProgress?.(`Defence round ${round} of ${rounds}. Stay on the chat tab.`);
-      const prompt2 = rebuttalPrompt({ round, rounds, critiques: options.critiques, paperText: options.paperText });
+      const prompt2 = rebuttalPrompt({ round, rounds, critiques: options.critiques, paperText: options.paperText, includeExcerpt });
       transcript.push({ round, kind: "rebuttal", text: prompt2 });
-      const reply = await options.send(prompt2);
+      const reply = await options.send(prompt2, `defence round ${round} of ${rounds}`);
       if (options.aborted()) return { transcript, defendedText: null, stopped: true };
       transcript.push({ round, kind: "reply", text: reply });
       await pause();
@@ -2381,7 +2405,7 @@ ${output}
     options.onProgress?.("Asking for the score after author defence.");
     const prompt = rescorePrompt();
     transcript.push({ round: rounds, kind: "rescore", text: prompt });
-    const defendedText = await options.send(prompt);
+    const defendedText = await options.send(prompt, "score after author defence");
     if (options.aborted()) return { transcript, defendedText: null, stopped: true };
     transcript.push({ round: rounds, kind: "rescore-reply", text: defendedText });
     return { transcript, defendedText, stopped: false };
@@ -3267,7 +3291,9 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     if (visible.length > 40) return "reply seen, JSON not parsed";
     return "no reply seen";
   }
-  async function waitForReply(doc, provider, before, hooks, composer, beforeJson = "") {
+  async function waitForReply(doc, provider, before, hooks, composer, beforeJson = "", label = "review", attempt = 1) {
+    hooks.onProgress?.(`Waiting for the reply: ${label}.`);
+    await hooks.keepAwake?.();
     const pollMs = hooks.pollMs ?? 400;
     const stableMs = hooks.stableMs ?? 2e3;
     const timeoutMs = hooks.stepTimeoutMs ?? 4 * 60 * 1e3;
@@ -3327,7 +3353,12 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       }
       await hooks.sleep(pollMs);
     }
-    throw new TurnError("timeout", `Reply step on ${provider.label} did not finish in time. ${replyTimeoutReason(doc, composer)}.`);
+    if (attempt < 2) {
+      hooks.onProgress?.(`Reply step (${label}) timed out. Focusing the chat tab and waiting once more.`);
+      await hooks.keepAwake?.();
+      return waitForReply(doc, provider, before, hooks, composer, beforeJson, label, attempt + 1);
+    }
+    throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} did not finish in time. ${replyTimeoutReason(doc, composer)}.`);
   }
   async function waitForEnabledSubmit(doc, provider, composer, hooks) {
     const timeoutMs = hooks.submitReadyMs ?? 5e3;
@@ -3404,7 +3435,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       `Attachment step on ${provider.label} timed out. The file chip never showed as ready, and Send was not enabled. ${stepDiagnostic(doc)}`
     );
   }
-  async function sendStep(doc, provider, step, hooks) {
+  async function sendStep(doc, provider, step, hooks, label = "review") {
     if (step.kind === "upload") {
       hooks.onProgress?.(`Attachment step on ${provider.label}. Waiting for the file chip, or for Send to become enabled.`);
       const input = queryFirst(doc, provider.selectors.fileInput);
@@ -3419,11 +3450,11 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     writeComposer(composer, step.text);
     const method = await commitSend(doc, provider, composer, before, hooks);
     hooks.onProgress?.(`Send step on ${provider.label}. Method that sent: ${method}.`);
-    return waitForReply(doc, provider, before, hooks, composer, beforeJson);
+    return waitForReply(doc, provider, before, hooks, composer, beforeJson, label);
   }
-  async function sendFollowUp(doc, provider, text, hooks) {
+  async function sendFollowUp(doc, provider, text, hooks, label = "follow-up") {
     const step = { kind: "paste", text, files: [], index: 1, total: 1, final: true };
-    return sendStep(doc, provider, step, hooks);
+    return sendStep(doc, provider, step, hooks, label);
   }
   async function pageIsLive(url, hooks) {
     try {
@@ -3462,16 +3493,20 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       let steps = planned.steps;
       let fellBack = false;
       let linkFellBack = false;
+      let route = activePacket.textUrl ? "link" : "paste";
+      hooks.onProgress?.(route === "link" ? `Review route: public text link. ${activePacket.textUrl}` : "Review route: pasted paper.");
       for (let index = 0; index < steps.length; index += 1) {
         const step = steps[index];
         if (!step) continue;
+        const label = step.link ? "public text link" : `part ${step.index} of ${step.total}`;
         hooks.onProgress?.(`Sending part ${step.index} of ${step.total} on ${provider.label}. Stay on this tab.`);
         try {
-          const reply = await sendStep(doc, provider, step, hooks);
+          const reply = await sendStep(doc, provider, step, hooks, label);
           if (step.link && !linkFellBack && (couldNotReadPaper(reply) || textPageUntrusted(reply))) {
             linkFellBack = true;
+            route = "paste";
             notice = TEXT_PAGE_NOTE;
-            hooks.onProgress?.(`${TEXT_PAGE_NOTE}. Sending the paper in the chat instead.`);
+            hooks.onProgress?.(`${TEXT_PAGE_NOTE}. Review route: pasted paper.`);
             const { textUrl: dropped, ...rest } = activePacket;
             void dropped;
             activePacket = rest;
@@ -3481,7 +3516,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
             index = -1;
             continue;
           }
-          if (step.final) return { ok: true, text: reply, steps: steps.length, ...notice ? { notice } : {} };
+          if (step.final) return { ok: true, text: reply, steps: steps.length, route, ...notice ? { notice } : {} };
         } catch (error) {
           if (error instanceof TurnError && error.code === "upload-miss" && !fellBack) {
             fellBack = true;
@@ -3602,10 +3637,22 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     showBanner(provider.label);
     sendResponse({ ok: true, started: true });
     const observedModel = () => detectChatModel(document, provider.id);
+    let lastFocus = 0;
+    const focusChat = () => {
+      lastFocus = Date.now();
+      chrome.runtime.sendMessage({ type: "air-web-chat-focus" });
+    };
     const hooks = {
       aborted: () => aborted,
       onProgress: (text) => report({ type: "air-web-chat-progress", requestId: message.requestId, message: text }),
-      sleep: (ms) => new Promise((resolve) => window.setTimeout(resolve, ms))
+      sleep: (ms) => {
+        if (document.hidden && Date.now() - lastFocus > 2e3) focusChat();
+        return new Promise((resolve) => window.setTimeout(resolve, ms));
+      },
+      keepAwake: () => new Promise((resolve) => {
+        lastFocus = Date.now();
+        chrome.runtime.sendMessage({ type: "air-web-chat-focus" }, () => resolve());
+      })
     };
     void runTurn(document, provider, message.packet, hooks).then(async (result) => {
       if (!result.ok) {
@@ -3615,7 +3662,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       const criteria = readingCriteria(officialCriteria, message.packet.criterionProfile, false);
       const settled = await settleChatJson(
         result.text,
-        (prompt) => sendFollowUp(document, provider, prompt, hooks),
+        (prompt) => sendFollowUp(document, provider, prompt, hooks, "corrected JSON"),
         (note) => hooks.onProgress?.(note),
         (text) => {
           const accepted2 = acceptWebChatResult(text, criteria);
@@ -3633,16 +3680,18 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
         report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: settled.text, defendedText: null, transcript: [], stopped: false, chatModel: observedModel(), notice });
         return;
       }
-      const paperText = message.packet.files.map((file) => file.text).join("\n\n");
+      const linked = result.route === "link";
+      const paperText = linked ? "" : message.packet.files.map((file) => file.text).join("\n\n");
       try {
         const defence = await runDefenceLoop({
           rounds,
           critiques: critiquesFromReport(accepted.report),
           paperText,
+          includeExcerpt: !linked,
           aborted: () => aborted,
           pause: () => new Promise((resolve) => window.setTimeout(resolve, DEFENCE_PAUSE_MS)),
           onProgress: (text) => report({ type: "air-web-chat-progress", requestId: message.requestId, message: text }),
-          send: (prompt) => sendFollowUp(document, provider, prompt, hooks)
+          send: (prompt, label) => sendFollowUp(document, provider, prompt, hooks, label ?? "author defence")
         });
         report({
           type: "air-web-chat-done",

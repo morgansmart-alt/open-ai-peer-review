@@ -88,6 +88,25 @@ export function reaskJsonPrompt(problem: string): string {
   return `Your JSON did not validate (${detail}). Reply again with only the corrected JSON object.`
 }
 
+export const FILL_REVIEW_PROMPT =
+  "Fill in the review now. Return one completed JSON object for this paper. Do not repeat the rubric template or the instructions."
+
+/** A reply that echoes the rubric schema instead of a completed review. */
+export function rubricTemplateProblem(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const row = value as Record<string, unknown>
+  const scoreIsPlaceholder = typeof row.overallScore === "string"
+  const recommendationIsSchema = typeof row.recommendation === "string" && row.recommendation.includes("|")
+  const strengthsPlaceholder = Array.isArray(row.strengths) && row.strengths.length > 0 && row.strengths.every((item) => item === "string")
+  const scoreFieldsAreStrings =
+    Array.isArray(row.scores) &&
+    row.scores.some((item) => item && typeof item === "object" && typeof (item as { score?: unknown }).score === "string")
+  if (scoreIsPlaceholder || recommendationIsSchema || strengthsPlaceholder || scoreFieldsAreStrings) {
+    return "The reply repeated the rubric template instead of a completed review."
+  }
+  return null
+}
+
 /** Repair when possible. A parse or schema failure asks the chat once, naming the problem. */
 export async function settleChatJson(
   raw: string,
@@ -101,14 +120,15 @@ export async function settleChatJson(
   }
   const first = parseModelJson(raw)
   if (first.ok) {
-    const checked = ready(first)
+    const template = rubricTemplateProblem(first.value)
+    const checked = template ? { ok: false as const, errors: [template] } : ready(first)
     if (checked.ok) {
       if (first.repaired) log("Repaired the chat's JSON before scoring.")
       return { text: first.repaired ? first.text : raw, repaired: first.repaired, reasked: false }
     }
     const problem = checked.errors.join(" ")
-    log(`Asked once for corrected JSON. ${problem}`)
-    const follow = await ask(reaskJsonPrompt(problem))
+    log(template ? `Asked once to fill in the review. ${problem}` : `Asked once for corrected JSON. ${problem}`)
+    const follow = await ask(template ? FILL_REVIEW_PROMPT : reaskJsonPrompt(problem))
     const second = parseModelJson(follow)
     if (second.ok && second.repaired) log("Repaired the corrected JSON.")
     return { text: second.ok ? (second.repaired ? second.text : follow) : follow, repaired: Boolean(second.ok && second.repaired), reasked: true }

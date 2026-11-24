@@ -49,9 +49,13 @@ export interface TurnHooks {
   sendVerifyMs?: number
   /** Probe the public text page. Absent means a normal fetch. */
   loadTextPage?(url: string): Promise<{ status: number; body: string }>
+  /** Bring the chat tab forward so a background tab does not freeze the reply wait. */
+  keepAwake?(): Promise<void> | void
 }
 
-export type TurnResult = { ok: true; text: string; steps: number; notice?: string } | { ok: false; code: string; message: string }
+export type TurnResult =
+  | { ok: true; text: string; steps: number; route: "link" | "paste"; notice?: string }
+  | { ok: false; code: string; message: string }
 
 class TurnError extends Error {
   code: string
@@ -95,7 +99,18 @@ function replyTimeoutReason(doc: Document, composer: Element): string {
   return "no reply seen"
 }
 
-async function waitForReply(doc: Document, provider: ProviderAdapter, before: string, hooks: TurnHooks, composer: Element, beforeJson = ""): Promise<string> {
+async function waitForReply(
+  doc: Document,
+  provider: ProviderAdapter,
+  before: string,
+  hooks: TurnHooks,
+  composer: Element,
+  beforeJson = "",
+  label = "review",
+  attempt = 1,
+): Promise<string> {
+  hooks.onProgress?.(`Waiting for the reply: ${label}.`)
+  await hooks.keepAwake?.()
   const pollMs = hooks.pollMs ?? 400
   const stableMs = hooks.stableMs ?? 2000
   const timeoutMs = hooks.stepTimeoutMs ?? 4 * 60 * 1000
@@ -155,7 +170,12 @@ async function waitForReply(doc: Document, provider: ProviderAdapter, before: st
     }
     await hooks.sleep(pollMs)
   }
-  throw new TurnError("timeout", `Reply step on ${provider.label} did not finish in time. ${replyTimeoutReason(doc, composer)}.`)
+  if (attempt < 2) {
+    hooks.onProgress?.(`Reply step (${label}) timed out. Focusing the chat tab and waiting once more.`)
+    await hooks.keepAwake?.()
+    return waitForReply(doc, provider, before, hooks, composer, beforeJson, label, attempt + 1)
+  }
+  throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} did not finish in time. ${replyTimeoutReason(doc, composer)}.`)
 }
 
 async function waitForEnabledSubmit(doc: Document, provider: ProviderAdapter, composer: Element, hooks: TurnHooks): Promise<Element | null> {
@@ -237,7 +257,7 @@ async function waitForAttachment(doc: Document, provider: ProviderAdapter, files
   )
 }
 
-async function sendStep(doc: Document, provider: ProviderAdapter, step: DeliveryStep, hooks: TurnHooks): Promise<string> {
+async function sendStep(doc: Document, provider: ProviderAdapter, step: DeliveryStep, hooks: TurnHooks, label = "review"): Promise<string> {
   if (step.kind === "upload") {
     hooks.onProgress?.(`Attachment step on ${provider.label}. Waiting for the file chip, or for Send to become enabled.`)
     const input = queryFirst(doc, provider.selectors.fileInput)
@@ -252,13 +272,13 @@ async function sendStep(doc: Document, provider: ProviderAdapter, step: Delivery
   writeComposer(composer, step.text)
   const method = await commitSend(doc, provider, composer, before, hooks)
   hooks.onProgress?.(`Send step on ${provider.label}. Method that sent: ${method}.`)
-  return waitForReply(doc, provider, before, hooks, composer, beforeJson)
+  return waitForReply(doc, provider, before, hooks, composer, beforeJson, label)
 }
 
 /** One more message in the chat that is already open. Waits until streaming stops. */
-export async function sendFollowUp(doc: Document, provider: ProviderAdapter, text: string, hooks: TurnHooks): Promise<string> {
+export async function sendFollowUp(doc: Document, provider: ProviderAdapter, text: string, hooks: TurnHooks, label = "follow-up"): Promise<string> {
   const step: DeliveryStep = { kind: "paste", text, files: [], index: 1, total: 1, final: true }
-  return sendStep(doc, provider, step, hooks)
+  return sendStep(doc, provider, step, hooks, label)
 }
 
 async function pageIsLive(url: string, hooks: TurnHooks): Promise<boolean> {
@@ -299,16 +319,20 @@ export async function runTurn(doc: Document, provider: ProviderAdapter, packet: 
     let steps = planned.steps
     let fellBack = false
     let linkFellBack = false
+    let route: "link" | "paste" = activePacket.textUrl ? "link" : "paste"
+    hooks.onProgress?.(route === "link" ? `Review route: public text link. ${activePacket.textUrl}` : "Review route: pasted paper.")
     for (let index = 0; index < steps.length; index += 1) {
       const step = steps[index]
       if (!step) continue
+      const label = step.link ? "public text link" : `part ${step.index} of ${step.total}`
       hooks.onProgress?.(`Sending part ${step.index} of ${step.total} on ${provider.label}. Stay on this tab.`)
       try {
-        const reply = await sendStep(doc, provider, step, hooks)
+        const reply = await sendStep(doc, provider, step, hooks, label)
         if (step.link && !linkFellBack && (couldNotReadPaper(reply) || textPageUntrusted(reply))) {
           linkFellBack = true
+          route = "paste"
           notice = TEXT_PAGE_NOTE
-          hooks.onProgress?.(`${TEXT_PAGE_NOTE}. Sending the paper in the chat instead.`)
+          hooks.onProgress?.(`${TEXT_PAGE_NOTE}. Review route: pasted paper.`)
           const { textUrl: dropped, ...rest } = activePacket
           void dropped
           activePacket = rest
@@ -318,7 +342,7 @@ export async function runTurn(doc: Document, provider: ProviderAdapter, packet: 
           index = -1
           continue
         }
-        if (step.final) return { ok: true, text: reply, steps: steps.length, ...(notice ? { notice } : {}) }
+        if (step.final) return { ok: true, text: reply, steps: steps.length, route, ...(notice ? { notice } : {}) }
       } catch (error) {
         if (error instanceof TurnError && error.code === "upload-miss" && !fellBack) {
           fellBack = true

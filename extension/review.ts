@@ -60,7 +60,7 @@ function historyItem(review: StoredReview) {
   return {
     id: review.id,
     title: review.title,
-    overall: review.report.overallScore,
+    overall: card.overall,
     doi: review.doi === "local-file" ? "" : review.doi,
     url: review.paperUrl,
     site: review.modelId,
@@ -72,6 +72,9 @@ function historyItem(review: StoredReview) {
 }
 
 function paint(): void {
+  const typing = document.activeElement instanceof HTMLInputElement && document.activeElement.id === "publication-link"
+  const draft = typing ? document.activeElement.value : null
+  const caret = typing ? document.activeElement.selectionStart : null
   const latest = reviews[0]
   renderReviewApp(
     root as HTMLElement,
@@ -154,6 +157,14 @@ function paint(): void {
       },
     },
   )
+  if (draft !== null) {
+    const field = document.getElementById("publication-link")
+    if (field instanceof HTMLInputElement) {
+      field.value = draft
+      field.focus()
+      if (caret !== null) field.setSelectionRange(caret, caret)
+    }
+  }
 }
 
 async function readPaper(next: File): Promise<{ filename: string; text: string; note?: string }> {

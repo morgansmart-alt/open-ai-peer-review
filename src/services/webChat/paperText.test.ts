@@ -104,6 +104,7 @@ describe("public paper text", () => {
   })
 
   it("asks for a concrete AIR note instead of an empty string", () => {
+    expect(reviewSystemPrompt(officialCriteria)).toContain("leaves global-goals out of that weighted total")
     expect(reviewSystemPrompt(officialCriteria)).toContain("Never use an empty string")
     expect(reviewSystemPrompt(officialCriteria)).toContain("at least one concrete")
   })
@@ -168,6 +169,20 @@ describe("json repair and the text page check", () => {
     expect(schemaAsked[0]).toContain("Add at least one strength.")
     expect(schemaAsked[0]).not.toContain("criteria category ids")
     expect(schemaNotes.join(" ")).toContain("Asked once for corrected JSON.")
+    const templateAsked: string[] = []
+    const template = await settleChatJson(
+      '{"overallScore":"number","recommendation":"accept | encourage | revise","strengths":["string"],"scores":[{"criterionId":"clarity","score":"number"}]}',
+      async (prompt) => {
+        templateAsked.push(prompt)
+        return '{"overallScore":81,"recommendation":"encourage"}'
+      },
+      () => undefined,
+    )
+    expect(templateAsked).toHaveLength(1)
+    expect(templateAsked[0]).toContain("Fill in the review now")
+    expect(templateAsked[0]).not.toContain("overallScore")
+    expect(template.reasked).toBe(true)
+    expect(template.text).toContain("81")
   })
 
   it("treats a 404 page as down and a scored reply that cites that 404 as untrusted", () => {
