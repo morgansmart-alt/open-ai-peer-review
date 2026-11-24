@@ -377,12 +377,51 @@ export function assistantMessages(root: ParentNode, selectors: string[], compose
  * A new node is the reply. A node that only grew contributes the added tail.
  */
 export function replyAfter(before: string[], now: string[]): string {
-  if (now.length > before.length) return now.slice(before.length).join("\n").trim()
+  if (now.length > before.length) return now[now.length - 1]?.trim() ?? ""
   const previous = before[before.length - 1] ?? ""
   const latest = now[now.length - 1] ?? ""
   if (!latest || latest === previous) return ""
   if (previous && latest.startsWith(previous)) return latest.slice(previous.length).trim()
   return latest.trim()
+}
+
+/** Text that showed up in the conversation after the snapshot taken at send time. */
+export function addedText(before: string, now: string): string {
+  const prev = before.replace(/\u00a0/g, " ")
+  const next = now.replace(/\u00a0/g, " ")
+  if (!next.trim() || next.trim() === prev.trim()) return ""
+  if (next.startsWith(prev)) return next.slice(prev.length).trim()
+  const normPrev = normaliseComposerText(prev)
+  const normNext = normaliseComposerText(next)
+  if (normPrev && normNext.startsWith(normPrev) && normNext.length > normPrev.length + 10) return normNext.slice(normPrev.length).trim()
+  return ""
+}
+
+/** Message-sized blocks in the chat region. Test ids are not required. */
+export function messageBlocks(root: ParentNode, composer: Element | null): string[] {
+  const region = chatRegion(root)
+  let nodes: Element[] = []
+  try {
+    nodes = queryAllDeep(region, "article, [role='article'], div, p, li")
+  } catch {
+    nodes = []
+  }
+  const usable = nodes.filter((el) => {
+    if (isIgnoredRegion(el)) return false
+    if (composer && (el === composer || composer.contains(el) || el.contains(composer))) return false
+    return elementText(el).length >= 40
+  })
+  const leaves = usable.filter((el) => !usable.some((other) => other !== el && el.contains(other)))
+  return leaves.map((el) => elementText(el))
+}
+
+/** The last block whose opening is not already in the pre-send snapshot. */
+export function blockAfterPrompt(blocks: string[], beforeRegion: string): string {
+  const fresh = blocks.filter((block) => {
+    const probe = block.replace(/\s+/g, " ").trim().slice(0, 80)
+    return probe.length >= 40 && !beforeRegion.includes(probe)
+  })
+  return fresh[fresh.length - 1] ?? ""
 }
 
 function walkReplyText(node: Node, composer: Element | null, chunks: string[]): void {
@@ -460,9 +499,26 @@ function dispatchInput(el: Element, text: string): void {
   }
 }
 
+/** Editors collapse blank lines and runs of spaces. Compare that form, not the raw character count. */
+export function normaliseComposerText(value: string): string {
+  return value.replace(/\u00a0/g, " ").replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{2,}/g, "\n").replace(/[ \t]{2,}/g, " ").trim()
+}
+
+export function composerTextMatches(actual: string, intended: string): boolean {
+  if (!intended.trim()) return !actual.trim()
+  const left = normaliseComposerText(actual)
+  const right = normaliseComposerText(intended)
+  if (left === right) return true
+  if (left.length < 40 || right.length < 40) return false
+  const start = right.slice(0, 48)
+  const end = right.slice(-48)
+  if (!left.startsWith(start) || !left.endsWith(end)) return false
+  const ratio = Math.min(left.length, right.length) / Math.max(left.length, right.length)
+  return ratio >= 0.95
+}
+
 function messageMatches(actual: string, intended: string): boolean {
-  const clean = (value: string) => value.replace(/\u00a0/g, " ").replace(/\r\n/g, "\n")
-  return clean(actual) === clean(intended)
+  return composerTextMatches(actual, intended)
 }
 
 function setControlValue(control: HTMLTextAreaElement | HTMLInputElement, text: string): void {
@@ -552,8 +608,7 @@ export function writeComposer(el: Element, text: string): void {
  * Returns the text that was verified in the box.
  */
 export function placeComposerText(el: Element, text: string): { ok: true; chunk: string; method: string } | { ok: false; actual: string; method: string } {
-  let placed = fillComposer(el, text)
-  if (!placed.ok) placed = fillComposer(el, text)
+  const placed = fillComposer(el, text)
   if (placed.ok) return { ok: true, chunk: text, method: placed.method }
   if (placed.truncated && placed.actual.trim().length >= 20) {
     const prefix = text.slice(0, placed.actual.length)
@@ -561,6 +616,30 @@ export function placeComposerText(el: Element, text: string): { ok: true; chunk:
     if (exact.ok) return { ok: true, chunk: prefix, method: exact.method }
   }
   return { ok: false, actual: placed.actual, method: placed.method }
+}
+
+/** Insert once, then re-read for up to two seconds. A late paint is not a second insert. */
+export async function confirmComposerText(
+  el: Element,
+  text: string,
+  wait: { sleep(ms: number): Promise<void>; pollMs?: number; timeoutMs?: number },
+): Promise<{ ok: true; chunk: string; method: string; actual: string } | { ok: false; actual: string; method: string }> {
+  const placed = fillComposer(el, text)
+  const timeoutMs = wait.timeoutMs ?? 2_000
+  const pollMs = wait.pollMs ?? 50
+  const start = Date.now()
+  let actual = composerText(el)
+  while (Date.now() - start <= timeoutMs) {
+    actual = composerText(el)
+    if (messageMatches(actual, text)) return { ok: true, chunk: text, method: placed.method, actual }
+    await wait.sleep(pollMs)
+  }
+  actual = composerText(el)
+  if (messageMatches(actual, text)) return { ok: true, chunk: text, method: placed.method, actual }
+  if (placed.truncated && placed.actual.trim().length >= 20 && messageMatches(placed.actual, text.slice(0, placed.actual.length))) {
+    return { ok: true, chunk: text.slice(0, placed.actual.length), method: placed.method, actual: placed.actual }
+  }
+  return { ok: false, actual, method: placed.method }
 }
 
 /** One click, then ignore a second call on the same element until the turn yields. */

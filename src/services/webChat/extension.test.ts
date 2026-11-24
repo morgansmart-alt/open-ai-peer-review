@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 import { webChatProvider } from "../../../extension/adapters/index.ts"
 import { CRITERION_PROFILES, readingCriteria } from "../../domain/profiles.ts"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
-import { ackReply, assistantText, attachmentReady, clickElement, describeCandidates, diagnose, fillComposer, findComposer, findSubmit, placeComposerText, reviewJsonOnPage, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
+import { ackReply, assistantText, attachmentReady, clickElement, composerTextMatches, confirmComposerText, describeCandidates, diagnose, fillComposer, findComposer, findSubmit, placeComposerText, reviewJsonOnPage, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
 import { buildWebChatPacket } from "./packet.ts"
 import { runTurn, sendFollowUp } from "./runTurn.ts"
 import { acceptWebChatResult } from "./accept.ts"
@@ -708,7 +708,22 @@ describe("live chat composers", () => {
     expect(rescored).not.toContain('"overallScore":86')
   })
 
-  it("uses the insert X's editor accepts and retries once when the first insert is garbled", () => {
+  it("accepts a multi-paragraph readback whose blank lines collapsed", () => {
+    const intended = "Open this public text page.\n\n\nScore every criterion from 0 to 100.\n\nReturn one JSON object."
+    const readback = "Open this public text page.\nScore every criterion from 0 to 100.\nReturn one JSON object."
+    expect(composerTextMatches(readback, intended)).toBe(true)
+    const box = document.createElement("textarea")
+    document.body.append(box)
+    box.addEventListener("input", () => {
+      box.value = box.value.replace(/\n{2,}/g, "\n")
+    })
+    const placed = placeComposerText(box, intended)
+    expect(placed.ok).toBe(true)
+    if (placed.ok) expect(placed.chunk).toBe(intended)
+    expect(box.value.replace(/\n{2,}/g, "\n")).toBe(readback)
+  })
+
+  it("waits for a late composer paint and does not insert twice", async () => {
     const box = document.createElement("div")
     box.setAttribute("contenteditable", "true")
     document.body.append(box)
@@ -716,15 +731,18 @@ describe("live chat composers", () => {
     box.addEventListener("beforeinput", (event) => {
       calls += 1
       event.preventDefault()
-      box.textContent = calls === 1 ? "garbled" : ((event as InputEvent).data ?? "")
+      const data = (event as InputEvent).data ?? ""
+      setTimeout(() => {
+        box.textContent = data
+      }, 40)
     })
-    const placed = placeComposerText(box, "Open this public text page")
-    expect(calls).toBe(2)
+    const placed = await confirmComposerText(box, "Open this public text page", {
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      pollMs: 5,
+      timeoutMs: 500,
+    })
+    expect(calls).toBe(1)
     expect(placed.ok).toBe(true)
-    if (placed.ok) {
-      expect(placed.method).toBe("beforeinput")
-      expect(placed.chunk).toBe("Open this public text page")
-    }
     expect(box.textContent).toBe("Open this public text page")
   })
 
@@ -763,7 +781,7 @@ describe("live chat composers", () => {
     )
     expect(reply).toContain("The record is public")
     expect(reply).not.toContain('"overallScore":86')
-    expect(notes.join("\n")).toContain("selector [data-testid=\"grokResponse\"]")
+    expect(notes.join("\n")).toContain("candidate [data-testid=\"grokResponse\"]")
     expect(notes.join("\n")).toContain("characters")
     expect(notes.join("\n")).toContain("last change")
   })
@@ -803,9 +821,49 @@ describe("live chat composers", () => {
     if (result.ok) return
     const log = notes.join("\n")
     expect(log).toContain("Re-polling")
-    expect(log).toContain("selector none")
+    expect(log).toContain("candidate none")
     expect(log).toContain("0 characters")
     expect(log).toContain("last change none")
-    expect(result.message).toContain("selector none")
+    expect(result.message).toContain("candidate none")
+  })
+
+  it("reads a Grok reply from new conversation text when no test id matches", async () => {
+    document.body.innerHTML = `<main>
+      <div id="box" contenteditable="true" role="textbox" aria-label="Ask anything"></div>
+      <button id="send" type="button" aria-label="Send">Send</button>
+      <div id="thread"><div>Earlier note about the record stays on screen.</div></div>
+    </main>`
+    const provider = webChatProvider("grok-x")
+    if (!provider) throw new Error("missing grok-x")
+    const notes: string[] = []
+    document.getElementById("send")?.addEventListener("click", () => {
+      document.getElementById("box")!.textContent = ""
+      const reply = document.createElement("div")
+      reply.textContent = '{"overallScore":87,"recommendation":"accept","summary":"The reply is in the conversation."}'
+      document.getElementById("thread")!.append(reply)
+    })
+    const reply = await sendFollowUp(
+      document,
+      provider,
+      "Review the paper.",
+      {
+        aborted: () => false,
+        sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+        pollMs: 5,
+        stableMs: 0,
+        stepTimeoutMs: 800,
+        replyStartTimeoutMs: 300,
+        submitStableMs: 0,
+        submitReadyMs: 20,
+        sendVerifyMs: 20,
+        onProgress: (message, meta) => notes.push(`${message} ${meta?.detail ?? ""}`),
+      },
+      "review",
+      "json",
+    )
+    expect(reply).toContain('"overallScore":87')
+    const log = notes.join("\n")
+    expect(log).toMatch(/candidate (conversation-region|message-block)/)
+    expect(log).toContain("characters")
   })
 })

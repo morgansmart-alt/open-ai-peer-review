@@ -520,7 +520,7 @@ export function ReviewPage() {
         documents,
         useTextPage: usePage,
       })
-      const text = packet.textUrl ? linkReadingPrompt(packet.textUrl, packet.system, packet.instructions) : webChatPromptText(packet)
+      const text = packet.textUrl ? linkReadingPrompt(packet.textUrl, packet.instructions) : webChatPromptText(packet)
       try {
         await navigator.clipboard.writeText(text)
         setCopyText("")

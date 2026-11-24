@@ -167,7 +167,7 @@ export function planDelivery(packet: WebChatPacket, provider: ProviderAdapter): 
       steps: [
         {
           kind: "paste",
-          text: linkReadingPrompt(packet.textUrl, packet.system, packet.instructions),
+          text: linkReadingPrompt(packet.textUrl, packet.instructions),
           files: [],
           index: 1,
           total: 1,
