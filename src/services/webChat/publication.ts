@@ -7,6 +7,8 @@ export interface PublicationPreview {
   url: string
   pdfUrl: string
   filename: string
+  /** Full public record when the lookup was Zenodo. The prompt uses its ids. */
+  source?: ZenodoRecord
 }
 
 export type PublicationRef =
@@ -46,6 +48,7 @@ export function previewFromZenodo(record: ZenodoRecord): PublicationPreview {
     url: record.htmlUrl || `https://zenodo.org/records/${record.id}`,
     pdfUrl: pdf?.downloadUrl ?? "",
     filename,
+    source: record,
   }
 }
 

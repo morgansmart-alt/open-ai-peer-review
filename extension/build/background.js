@@ -418,6 +418,10 @@
   function requestAllowed(sender) {
     return fromExtensionPage(sender) || originAllowed(senderOrigin(sender));
   }
+  function keepAirPanel() {
+    if (!chrome.sidePanel?.setOptions) return;
+    void chrome.sidePanel.setOptions({ path: "review.html", enabled: true }).catch(() => void 0);
+  }
   function emit(message, airTabId) {
     chrome.runtime.sendMessage(message, () => {
       void chrome.runtime.lastError;
@@ -429,6 +433,7 @@
     if (decision.kind === "ignore") return;
     const envelope = extensionEnvelope(decision);
     const targets = { panel: true, airTabId: decision.airTabId > 0 ? decision.airTabId : 0 };
+    if (decision.kind === "result" || decision.kind === "error") keepAirPanel();
     emit(envelope, targets.airTabId);
   }
   function waitForLoad(tabId) {

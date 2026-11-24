@@ -6,6 +6,7 @@ import type { CriteriaSet, ReviewReport, StoredReview } from "./types.ts"
 export const BOARD_MAX = 100
 export const BOARD_PRIOR = 50
 export const MISMATCH_POINTS = 10
+/** Band checks use the score rounded to the nearest point, so 79.74 is the same band as 80. */
 export const ASSESSOR_SPREAD = 30
 
 export function criteriaForReview(review: StoredReview): CriteriaSet {
@@ -52,7 +53,7 @@ export function expectedVerdict(board: number): "encourage" | "revise" | "major-
  * Older readings that stored encourage stay in band. A non-proposal profile may store accept.
  */
 export function recommendationMatchesBand(recommendation: string, board: number): boolean {
-  const expected = expectedVerdict(board)
+  const expected = expectedVerdict(Math.round(board))
   if (recommendation === expected) return true
   return recommendation === "accept" && expected === "encourage"
 }

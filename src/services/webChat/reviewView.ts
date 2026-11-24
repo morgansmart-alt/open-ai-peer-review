@@ -10,6 +10,8 @@ export interface ReviewCard {
   label: string
   defendedOverall?: number | null
   defendedLabel?: string
+  scores?: { criterionId: string; score: number }[]
+  feedback?: { label: string; text: string }[]
 }
 
 export interface HistoryItem {
@@ -237,7 +239,23 @@ export function renderReviewApp(root: HTMLElement, model: ReviewModel, actions: 
     }
     if (model.result.mismatch) el(card, "p", model.result.mismatch, "mismatch")
     el(card, "p", model.result.summary)
-    el(card, "p", "This score stays in this browser. It is off the public board and out of the two-family count.", "note")
+    if (model.result.scores && model.result.scores.length > 0) {
+      const list = el(card, "ul")
+      list.id = "criterion-scores"
+      for (const score of model.result.scores) {
+        el(list, "li", `${score.criterionId}: ${Math.round(score.score)}`)
+      }
+    }
+    if (model.result.feedback && model.result.feedback.length > 0) {
+      const details = el(card, "details")
+      details.id = "air-feedback"
+      const summary = el(details, "summary", "Feedback on AIR")
+      summary.id = "air-feedback-summary"
+      for (const note of model.result.feedback) {
+        el(details, "p", `${note.label}: ${note.text}`)
+      }
+    }
+    el(card, "p", "This score stays in this browser until you send it. It is labelled free web-chat, uncalibrated.", "note")
   }
 
   if (model.history.length > 0) {

@@ -1174,7 +1174,7 @@ ${parsed2.errors.join("\n")}`);
     return "not-ready";
   }
   function recommendationMatchesBand(recommendation, board) {
-    const expected = expectedVerdict(board);
+    const expected = expectedVerdict(Math.round(board));
     if (recommendation === expected) return true;
     return recommendation === "accept" && expected === "encourage";
   }
@@ -1255,6 +1255,9 @@ ${parsed2.errors.join("\n")}`);
       feedback[field] = text2;
     }
     return Object.keys(feedback).length > 0 ? feedback : void 0;
+  }
+  function hasAirFeedback(feedback) {
+    return Boolean(feedback && Object.values(feedback).some((item) => item && item.trim()));
   }
 
   // src/services/validateReport.ts
@@ -2142,7 +2145,23 @@ ${parsed2.errors.join("\n")}`);
       }
       if (model.result.mismatch) el(card, "p", model.result.mismatch, "mismatch");
       el(card, "p", model.result.summary);
-      el(card, "p", "This score stays in this browser. It is off the public board and out of the two-family count.", "note");
+      if (model.result.scores && model.result.scores.length > 0) {
+        const list = el(card, "ul");
+        list.id = "criterion-scores";
+        for (const score of model.result.scores) {
+          el(list, "li", `${score.criterionId}: ${Math.round(score.score)}`);
+        }
+      }
+      if (model.result.feedback && model.result.feedback.length > 0) {
+        const details = el(card, "details");
+        details.id = "air-feedback";
+        const summary = el(details, "summary", "Feedback on AIR");
+        summary.id = "air-feedback-summary";
+        for (const note of model.result.feedback) {
+          el(details, "p", `${note.label}: ${note.text}`);
+        }
+      }
+      el(card, "p", "This score stays in this browser until you send it. It is labelled free web-chat, uncalibrated.", "note");
     }
     if (model.history.length > 0) {
       el(form, "h2", "Saved on this browser");
@@ -2225,7 +2244,8 @@ ${parsed2.errors.join("\n")}`);
       doi: record.doi,
       url: record.htmlUrl || `https://zenodo.org/records/${record.id}`,
       pdfUrl: pdf?.downloadUrl ?? "",
-      filename
+      filename,
+      source: record
     };
   }
   function filenameFrom(url) {
@@ -2328,13 +2348,34 @@ ${parsed2.errors.join("\n")}`);
       htmlUrl: ""
     };
   }
+  function sourceRecordFromText(filename, text2) {
+    const base = localPaperRecord(filename);
+    const withoutChats = text2.replace(/https?:\/\/(?:www\.)?(?:share\.google|chatgpt\.com\/share|claude\.ai\/share|grok\.com\/share)\S+/gi, "");
+    const recordIds = [...withoutChats.matchAll(/zenodo\.org\/records\/(\d+)/gi)].map((match) => match[1] ?? "").filter(Boolean);
+    const dois = [...withoutChats.matchAll(/\b(10\.5281\/zenodo\.(\d+))\b/gi)].map((match) => ({ doi: match[1] ?? "", id: match[2] ?? "" }));
+    const versionId = recordIds[0] || dois[0]?.id || "";
+    const doi = dois[0]?.doi || (versionId ? `10.5281/zenodo.${versionId}` : "");
+    if (!versionId && !doi) return null;
+    const concept = withoutChats.match(/concept(?:recid|doi)?[:\s]+(?:10\.5281\/zenodo\.)?(\d{5,})/i)?.[1] ?? "";
+    const conceptId = concept || versionId;
+    return {
+      ...base,
+      id: versionId || base.id,
+      conceptId: conceptId || base.conceptId,
+      doi: doi || base.doi,
+      conceptDoi: conceptId ? `10.5281/zenodo.${conceptId}` : doi || base.conceptDoi,
+      htmlUrl: versionId ? `https://zenodo.org/records/${versionId}` : "",
+      title: base.title
+    };
+  }
   function packetForLocalPaper(options) {
+    const record = options.source ?? sourceRecordFromText(options.filename, options.text) ?? localPaperRecord(options.filename);
     return buildWebChatPacket({
       requestId: options.requestId,
       providerId: options.providerId,
       criteria: options.criteria,
       criterionProfile: options.criterionProfile,
-      record: localPaperRecord(options.filename),
+      record,
       documents: [{ filename: options.filename, text: options.text }]
     });
   }
@@ -2411,6 +2452,15 @@ ${JSON.stringify(report)}`),
   }
   function resultCard(review) {
     const check = scoringMismatch(review);
+    const feedback = hasAirFeedback(review.report.airFeedback) ? review.report.airFeedback : void 0;
+    const labels = [
+      { key: "criteria", label: "Criteria" },
+      { key: "profile", label: "Profile" },
+      { key: "missingContext", label: "Missing context or files" },
+      { key: "prompt", label: "Prompt" },
+      { key: "rubric", label: "Rubric" },
+      { key: "scoringProcess", label: "Scoring process" }
+    ];
     return {
       title: review.title,
       overall: review.report.overallScore,
@@ -2419,7 +2469,9 @@ ${JSON.stringify(report)}`),
       mismatch: check.mismatch ? `Scoring mismatch, needs re-check. ${check.reason ?? ""}`.trim() : null,
       label: WEB_CHAT_LABEL,
       defendedOverall: review.defended?.overallScore ?? null,
-      defendedLabel: review.defended?.label ?? ""
+      defendedLabel: review.defended?.label ?? "",
+      scores: review.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score })),
+      feedback: feedback ? labels.flatMap((item) => feedback[item.key] ? [{ label: item.label, text: feedback[item.key] }] : []) : []
     };
   }
   async function textFromPdfDocument(pdf, pageCap) {
@@ -2819,7 +2871,8 @@ ${JSON.stringify(report)}`),
         criteria: officialCriteria,
         criterionProfile: profileId,
         filename: paper.filename,
-        text: paper.text
+        text: paper.text,
+        source: publication?.source ?? null
       });
       status = paper.note ? `${paper.note} Opening ${provider.label}. Stay on that tab.` : `Opening ${provider.label}. Stay on that tab.`;
       paint();
@@ -2909,11 +2962,17 @@ ${JSON.stringify(report)}`),
     error = "";
     paint();
   }
-  void storageGet(ONBOARD_STORAGE_KEY).then((seen) => {
-    showOnboarding = seen !== true;
-    return storageGet(RESULT_STORAGE_KEY);
-  }).then((saved) => {
-    reviews = Array.isArray(saved) ? saved : [];
-    paint();
+  function restoreSaved() {
+    return storageGet(ONBOARD_STORAGE_KEY).then((seen) => {
+      showOnboarding = seen !== true;
+      return storageGet(RESULT_STORAGE_KEY);
+    }).then((saved) => {
+      reviews = Array.isArray(saved) ? saved : [];
+      paint();
+    });
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void restoreSaved();
   });
+  void restoreSaved();
 })();

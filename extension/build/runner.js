@@ -1163,7 +1163,7 @@ ${parsed.errors.join("\n")}`);
     return "not-ready";
   }
   function recommendationMatchesBand(recommendation, board) {
-    const expected = expectedVerdict(board);
+    const expected = expectedVerdict(Math.round(board));
     if (recommendation === expected) return true;
     return recommendation === "accept" && expected === "encourage";
   }
@@ -1994,30 +1994,118 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     }
   }
   var clickLock = /* @__PURE__ */ new WeakMap();
-  function pressEnterOnce(el) {
+  function pressEnterSequence(el) {
     if (clickLock.has(el)) return false;
     clickLock.set(el, 1);
     queueMicrotask(() => {
       setTimeout(() => clickLock.delete(el), 0);
     });
-    el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+    const init = {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true
+    };
+    el.dispatchEvent(new KeyboardEvent("keydown", init));
+    el.dispatchEvent(new KeyboardEvent("keypress", init));
+    el.dispatchEvent(new KeyboardEvent("keyup", init));
     return true;
   }
-  function submitOnce(composer, submit) {
-    if (submit) return clickElement(submit) ? "click" : "blocked";
-    return pressEnterOnce(composer) ? "enter" : "blocked";
+  function pointerClick(el) {
+    if (typeof el.focus === "function") el.focus();
+    const view = el.ownerDocument?.defaultView ?? void 0;
+    const common = { bubbles: true, cancelable: true, view };
+    try {
+      el.dispatchEvent(new PointerEvent("pointerdown", common));
+    } catch {
+    }
+    el.dispatchEvent(new MouseEvent("mousedown", common));
+    try {
+      el.dispatchEvent(new PointerEvent("pointerup", common));
+    } catch {
+    }
+    el.dispatchEvent(new MouseEvent("mouseup", common));
+    el.dispatchEvent(new MouseEvent("click", common));
   }
-  function clickElement(el) {
-    if (clickLock.has(el)) return false;
-    clickLock.set(el, 1);
-    queueMicrotask(() => {
-      setTimeout(() => clickLock.delete(el), 0);
+  function requestSubmitButton(button) {
+    const control = button;
+    const form = control.form;
+    if (!form || typeof form.requestSubmit !== "function") return false;
+    try {
+      form.requestSubmit(control);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  function composerText(el) {
+    if ("value" in el && typeof el.value === "string") return el.value;
+    return el.textContent ?? "";
+  }
+  function sendLanded(doc, composer, beforeAssistant, previousComposer) {
+    const now = composerText(composer).trim();
+    const placeholder = (composer.getAttribute("placeholder") ?? "").toLowerCase();
+    if (/ask, create images, or build anything/.test(placeholder) && now.length < 12) return true;
+    if (previousComposer.trim().length > 12 && now.length < previousComposer.trim().length * 0.25) return true;
+    const reply = assistantText(doc, [], composer);
+    if (reply && reply !== beforeAssistant) return true;
+    if (ackReply(doc, composer)) return true;
+    if (stopControlActive(doc, [])) return true;
+    const probe = previousComposer.trim().slice(0, 24);
+    if (probe.length > 8 && userTurnHas(doc, composer, probe)) return true;
+    return false;
+  }
+  function userTurnHas(doc, composer, probe) {
+    let nodes = [];
+    try {
+      nodes = queryAllDeep(doc, "div, p, span, article");
+    } catch {
+      return false;
+    }
+    return nodes.some((el) => {
+      if (el === composer || composer.contains(el) || el.contains(composer) || isIgnoredRegion(el)) return false;
+      const text = (el.textContent ?? "").trim();
+      return text.length < 8e3 && text.includes(probe);
     });
-    const node = el;
-    if (typeof node.focus === "function") node.focus();
-    if (typeof node.click === "function") node.click();
-    else el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    return true;
+  }
+  function ackReply(root, composer) {
+    let nodes = [];
+    try {
+      nodes = queryAllDeep(root, "div, p, span");
+    } catch {
+      return "";
+    }
+    const hits = nodes.filter((el) => {
+      if (isIgnoredRegion(el) || composer && (el === composer || composer.contains(el))) return false;
+      const text = (el.textContent ?? "").trim();
+      return text.length < 40 && /^RECEIVED \d+$/i.test(text);
+    });
+    return hits[hits.length - 1]?.textContent?.trim() ?? "";
+  }
+  function replyActionsVisible(root) {
+    let nodes = [];
+    try {
+      nodes = queryAllDeep(root, "button, [role='button']");
+    } catch {
+      return false;
+    }
+    return nodes.some((el) => {
+      if (isIgnoredRegion(el) || isHiddenControl(el)) return false;
+      return /\b(copy|regenerate|retry|rewrite)\b/i.test(buttonLabel(el));
+    });
+  }
+  function describeMessages(root, limit = 4) {
+    let nodes = [];
+    try {
+      nodes = queryAllDeep(root, "div, p, article");
+    } catch {
+      return "Messages: none.";
+    }
+    const lines = nodes.filter((el) => !isIgnoredRegion(el)).map((el) => (el.textContent ?? "").trim().replace(/\s+/g, " ")).filter((text) => text.length > 2 && text.length < 180).slice(-limit);
+    if (lines.length === 0) return "Messages: none.";
+    return `Messages: ${lines.join(" | ")}.`;
   }
   var ATTACHMENT_SELECTORS = [
     '[data-attachment-state="ready"]',
@@ -2137,9 +2225,11 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     let started = false;
     while (Date.now() - start < timeoutMs) {
       if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.");
-      const text = assistantText(doc, provider.selectors.assistant, composer);
+      const text = assistantText(doc, provider.selectors.assistant, composer) || ackReply(doc, composer);
       const stopping = stopControlActive(doc, provider.selectors.stop);
+      const finishedAck = /^RECEIVED \d+$/i.test(text.trim());
       if (text && text !== before) started = true;
+      if (started && !stopping && (finishedAck || replyActionsVisible(doc))) return text;
       if (!started && !stopping && Date.now() - start >= startLimit) {
         const send = findSubmit(doc, provider.selectors.submit, composer);
         if (send) {
@@ -2158,7 +2248,61 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       }
       await hooks.sleep(pollMs);
     }
-    throw new TurnError("timeout", `Reply step on ${provider.label} did not finish in time. ${stepDiagnostic(doc)}`);
+    throw new TurnError("timeout", `Reply step on ${provider.label} did not finish in time. ${stepDiagnostic(doc)} ${describeMessages(doc)}`);
+  }
+  async function waitForEnabledSubmit(doc, provider, composer, hooks) {
+    const timeoutMs = hooks.submitReadyMs ?? 5e3;
+    const stableMs = hooks.submitStableMs ?? 300;
+    const pollMs = hooks.pollMs ?? 200;
+    const start = Date.now();
+    let last = null;
+    let stableFor = 0;
+    while (Date.now() - start <= timeoutMs) {
+      if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.");
+      const button = findSubmit(doc, provider.selectors.submit, composer);
+      if (button && button === last && stableFor >= stableMs) return button;
+      if (button && button === last) stableFor += pollMs;
+      else {
+        last = button;
+        stableFor = button ? pollMs : 0;
+      }
+      if (button && stableMs <= 0) return button;
+      await hooks.sleep(pollMs);
+    }
+    return last;
+  }
+  async function verifySend(doc, composer, beforeAssistant, previousComposer, hooks) {
+    const timeoutMs = hooks.sendVerifyMs ?? 3e3;
+    const pollMs = hooks.pollMs ?? 200;
+    const start = Date.now();
+    while (Date.now() - start <= timeoutMs) {
+      if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.");
+      if (sendLanded(doc, composer, beforeAssistant, previousComposer)) return true;
+      await hooks.sleep(pollMs);
+    }
+    return sendLanded(doc, composer, beforeAssistant, previousComposer);
+  }
+  async function commitSend(doc, provider, composer, beforeAssistant, hooks) {
+    const previousComposer = composerText(composer);
+    const button = await waitForEnabledSubmit(doc, provider, composer, hooks);
+    let primary = "none";
+    if (button) {
+      primary = requestSubmitButton(button) ? "requestSubmit" : "pointer";
+      if (primary === "pointer") pointerClick(button);
+      hooks.onProgress?.(`Send step on ${provider.label}. Tried ${primary}.`);
+      if (await verifySend(doc, composer, beforeAssistant, previousComposer, hooks)) return primary;
+      if (sendLanded(doc, composer, beforeAssistant, previousComposer)) return primary;
+    }
+    if (sendLanded(doc, composer, beforeAssistant, previousComposer)) return primary;
+    const entered = pressEnterSequence(composer);
+    hooks.onProgress?.(`Send step on ${provider.label}. Tried Enter after ${primary} did not send.`);
+    if (!entered) return primary;
+    if (await verifySend(doc, composer, beforeAssistant, previousComposer, hooks)) return "enter";
+    const still = findSubmit(doc, provider.selectors.submit, composer);
+    throw new TurnError(
+      "send-timeout",
+      `Send step on ${provider.label} did not start a reply. Tried ${primary}, then Enter. ${still ? "The Send button was still enabled." : "Send was not enabled."} ${stepDiagnostic(doc)} ${describeMessages(doc)}`
+    );
   }
   async function waitForAttachment(doc, provider, files, hooks) {
     const timeoutMs = hooks.attachmentTimeoutMs ?? 2e4;
@@ -2193,12 +2337,8 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     if (!composer) throw new TurnError("selector-miss", selectorMiss(provider, describeCandidates(doc)));
     const before = assistantText(doc, provider.selectors.assistant, composer);
     writeComposer(composer, step.text);
-    const submit = findSubmit(doc, provider.selectors.submit, composer);
-    hooks.onProgress?.(`Send step on ${provider.label}. Clicking Send once.`);
-    const sent = submitOnce(composer, submit);
-    if (sent === "blocked") {
-      throw new TurnError("double-click", `Send on ${provider.label} was already clicked for this message. AIR did not click again, so a Stop button is not pressed.`);
-    }
+    const method = await commitSend(doc, provider, composer, before, hooks);
+    hooks.onProgress?.(`Send step on ${provider.label}. Method that sent: ${method}.`);
     return waitForReply(doc, provider, before, hooks, composer);
   }
   async function sendFollowUp(doc, provider, text, hooks) {

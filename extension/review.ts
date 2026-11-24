@@ -241,6 +241,7 @@ async function run(): Promise<void> {
       criterionProfile: profileId,
       filename: paper.filename,
       text: paper.text,
+      source: publication?.source ?? null,
     })
     status = paper.note ? `${paper.note} Opening ${provider.label}. Stay on that tab.` : `Opening ${provider.label}. Stay on that tab.`
     paint()
@@ -336,10 +337,18 @@ async function sendScores(ids: string[]): Promise<void> {
   paint()
 }
 
-void storageGet(ONBOARD_STORAGE_KEY).then((seen) => {
-  showOnboarding = seen !== true
-  return storageGet(RESULT_STORAGE_KEY)
-}).then((saved) => {
-  reviews = Array.isArray(saved) ? (saved as StoredReview[]) : []
-  paint()
+function restoreSaved(): Promise<void> {
+  return storageGet(ONBOARD_STORAGE_KEY).then((seen) => {
+    showOnboarding = seen !== true
+    return storageGet(RESULT_STORAGE_KEY)
+  }).then((saved) => {
+    reviews = Array.isArray(saved) ? (saved as StoredReview[]) : []
+    paint()
+  })
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") void restoreSaved()
 })
+
+void restoreSaved()

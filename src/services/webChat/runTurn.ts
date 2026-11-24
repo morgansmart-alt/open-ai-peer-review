@@ -5,14 +5,21 @@ import {
   attachTextFiles,
   attachmentReady,
   ATTACHMENT_SELECTORS,
+  ackReply,
   describeButtons,
   describeCandidates,
+  describeMessages,
   findComposer,
   findSubmit,
+  pointerClick,
+  pressEnterSequence,
   queryFirst,
+  replyActionsVisible,
+  requestSubmitButton,
+  sendLanded,
   stopControlActive,
-  submitOnce,
   writeComposer,
+  composerText,
 } from "./dom.ts"
 import type { WebChatPacket } from "./protocol.ts"
 
@@ -31,6 +38,12 @@ export interface TurnHooks {
   composerTimeoutMs?: number
   /** How long Send may stay enabled before the click is reported as a miss. */
   replyStartTimeoutMs?: number
+  /** How long to wait for an enabled submit button to appear. */
+  submitReadyMs?: number
+  /** How long to wait for the submit button to stay enabled before the first attempt. */
+  submitStableMs?: number
+  /** How long to wait after a send attempt before trying the other method. */
+  sendVerifyMs?: number
 }
 
 export type TurnResult = { ok: true; text: string; steps: number } | { ok: false; code: string; message: string }
@@ -81,9 +94,11 @@ async function waitForReply(doc: Document, provider: ProviderAdapter, before: st
   let started = false
   while (Date.now() - start < timeoutMs) {
     if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.")
-    const text = assistantText(doc, provider.selectors.assistant, composer)
+    const text = assistantText(doc, provider.selectors.assistant, composer) || ackReply(doc, composer)
     const stopping = stopControlActive(doc, provider.selectors.stop)
+    const finishedAck = /^RECEIVED \d+$/i.test(text.trim())
     if (text && text !== before) started = true
+    if (started && !stopping && (finishedAck || replyActionsVisible(doc))) return text
     if (!started && !stopping && Date.now() - start >= startLimit) {
       const send = findSubmit(doc, provider.selectors.submit, composer)
       if (send) {
@@ -102,7 +117,64 @@ async function waitForReply(doc: Document, provider: ProviderAdapter, before: st
     }
     await hooks.sleep(pollMs)
   }
-  throw new TurnError("timeout", `Reply step on ${provider.label} did not finish in time. ${stepDiagnostic(doc)}`)
+  throw new TurnError("timeout", `Reply step on ${provider.label} did not finish in time. ${stepDiagnostic(doc)} ${describeMessages(doc)}`)
+}
+
+async function waitForEnabledSubmit(doc: Document, provider: ProviderAdapter, composer: Element, hooks: TurnHooks): Promise<Element | null> {
+  const timeoutMs = hooks.submitReadyMs ?? 5_000
+  const stableMs = hooks.submitStableMs ?? 300
+  const pollMs = hooks.pollMs ?? 200
+  const start = Date.now()
+  let last: Element | null = null
+  let stableFor = 0
+  while (Date.now() - start <= timeoutMs) {
+    if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.")
+    const button = findSubmit(doc, provider.selectors.submit, composer)
+    if (button && button === last && stableFor >= stableMs) return button
+    if (button && button === last) stableFor += pollMs
+    else {
+      last = button
+      stableFor = button ? pollMs : 0
+    }
+    if (button && stableMs <= 0) return button
+    await hooks.sleep(pollMs)
+  }
+  return last
+}
+
+async function verifySend(doc: Document, composer: Element, beforeAssistant: string, previousComposer: string, hooks: TurnHooks): Promise<boolean> {
+  const timeoutMs = hooks.sendVerifyMs ?? 3_000
+  const pollMs = hooks.pollMs ?? 200
+  const start = Date.now()
+  while (Date.now() - start <= timeoutMs) {
+    if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.")
+    if (sendLanded(doc, composer, beforeAssistant, previousComposer)) return true
+    await hooks.sleep(pollMs)
+  }
+  return sendLanded(doc, composer, beforeAssistant, previousComposer)
+}
+
+async function commitSend(doc: Document, provider: ProviderAdapter, composer: Element, beforeAssistant: string, hooks: TurnHooks): Promise<string> {
+  const previousComposer = composerText(composer)
+  const button = await waitForEnabledSubmit(doc, provider, composer, hooks)
+  let primary = "none"
+  if (button) {
+    primary = requestSubmitButton(button) ? "requestSubmit" : "pointer"
+    if (primary === "pointer") pointerClick(button)
+    hooks.onProgress?.(`Send step on ${provider.label}. Tried ${primary}.`)
+    if (await verifySend(doc, composer, beforeAssistant, previousComposer, hooks)) return primary
+    if (sendLanded(doc, composer, beforeAssistant, previousComposer)) return primary
+  }
+  if (sendLanded(doc, composer, beforeAssistant, previousComposer)) return primary
+  const entered = pressEnterSequence(composer)
+  hooks.onProgress?.(`Send step on ${provider.label}. Tried Enter after ${primary} did not send.`)
+  if (!entered) return primary
+  if (await verifySend(doc, composer, beforeAssistant, previousComposer, hooks)) return "enter"
+  const still = findSubmit(doc, provider.selectors.submit, composer)
+  throw new TurnError(
+    "send-timeout",
+    `Send step on ${provider.label} did not start a reply. Tried ${primary}, then Enter. ${still ? "The Send button was still enabled." : "Send was not enabled."} ${stepDiagnostic(doc)} ${describeMessages(doc)}`,
+  )
 }
 
 async function waitForAttachment(doc: Document, provider: ProviderAdapter, files: DeliveryStep["files"], hooks: TurnHooks): Promise<void> {
@@ -139,12 +211,8 @@ async function sendStep(doc: Document, provider: ProviderAdapter, step: Delivery
   if (!composer) throw new TurnError("selector-miss", selectorMiss(provider, describeCandidates(doc)))
   const before = assistantText(doc, provider.selectors.assistant, composer)
   writeComposer(composer, step.text)
-  const submit = findSubmit(doc, provider.selectors.submit, composer)
-  hooks.onProgress?.(`Send step on ${provider.label}. Clicking Send once.`)
-  const sent = submitOnce(composer, submit)
-  if (sent === "blocked") {
-    throw new TurnError("double-click", `Send on ${provider.label} was already clicked for this message. AIR did not click again, so a Stop button is not pressed.`)
-  }
+  const method = await commitSend(doc, provider, composer, before, hooks)
+  hooks.onProgress?.(`Send step on ${provider.label}. Method that sent: ${method}.`)
   return waitForReply(doc, provider, before, hooks, composer)
 }
 

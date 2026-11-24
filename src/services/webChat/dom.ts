@@ -414,6 +414,138 @@ export function pressEnterOnce(el: Element): boolean {
   return true
 }
 
+/** One Enter attempt: keydown, keypress, and keyup. A second call in the same turn does nothing. */
+export function pressEnterSequence(el: Element): boolean {
+  if (clickLock.has(el)) return false
+  clickLock.set(el, 1)
+  queueMicrotask(() => {
+    setTimeout(() => clickLock.delete(el), 0)
+  })
+  const init: KeyboardEventInit & { keyCode?: number; which?: number } = {
+    key: "Enter",
+    code: "Enter",
+    keyCode: 13,
+    which: 13,
+    bubbles: true,
+    cancelable: true,
+  }
+  el.dispatchEvent(new KeyboardEvent("keydown", init))
+  el.dispatchEvent(new KeyboardEvent("keypress", init))
+  el.dispatchEvent(new KeyboardEvent("keyup", init))
+  return true
+}
+
+/** One pointer gesture ending in a single click. Does not also call element.click(). */
+export function pointerClick(el: Element): void {
+  if (typeof (el as HTMLElement).focus === "function") (el as HTMLElement).focus()
+  const view = el.ownerDocument?.defaultView ?? undefined
+  const common = { bubbles: true, cancelable: true, view }
+  try {
+    el.dispatchEvent(new PointerEvent("pointerdown", common))
+  } catch {
+    // PointerEvent can be missing in a test realm.
+  }
+  el.dispatchEvent(new MouseEvent("mousedown", common))
+  try {
+    el.dispatchEvent(new PointerEvent("pointerup", common))
+  } catch {
+    // Same as pointerdown.
+  }
+  el.dispatchEvent(new MouseEvent("mouseup", common))
+  el.dispatchEvent(new MouseEvent("click", common))
+}
+
+/** Prefer the form's own submit when the button is inside one. Returns false if there is no form. */
+export function requestSubmitButton(button: Element): boolean {
+  const control = button as HTMLButtonElement
+  const form = control.form
+  if (!form || typeof form.requestSubmit !== "function") return false
+  try {
+    form.requestSubmit(control)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function composerText(el: Element): string {
+  if ("value" in el && typeof (el as HTMLTextAreaElement).value === "string") return (el as HTMLTextAreaElement).value
+  return el.textContent ?? ""
+}
+
+/** True when the chat accepted the message: the box cleared, a reply or stop appeared, or the text showed up as a user turn. */
+export function sendLanded(doc: ParentNode, composer: Element, beforeAssistant: string, previousComposer: string): boolean {
+  const now = composerText(composer).trim()
+  const placeholder = (composer.getAttribute("placeholder") ?? "").toLowerCase()
+  if (/ask, create images, or build anything/.test(placeholder) && now.length < 12) return true
+  if (previousComposer.trim().length > 12 && now.length < previousComposer.trim().length * 0.25) return true
+  const reply = assistantText(doc, [], composer)
+  if (reply && reply !== beforeAssistant) return true
+  if (ackReply(doc, composer)) return true
+  if (stopControlActive(doc, [])) return true
+  const probe = previousComposer.trim().slice(0, 24)
+  if (probe.length > 8 && userTurnHas(doc, composer, probe)) return true
+  return false
+}
+
+function userTurnHas(doc: ParentNode, composer: Element, probe: string): boolean {
+  let nodes: Element[] = []
+  try {
+    nodes = queryAllDeep(doc, "div, p, span, article")
+  } catch {
+    return false
+  }
+  return nodes.some((el) => {
+    if (el === composer || composer.contains(el) || el.contains(composer) || isIgnoredRegion(el)) return false
+    const text = (el.textContent ?? "").trim()
+    return text.length < 8000 && text.includes(probe)
+  })
+}
+
+export function ackReply(root: ParentNode, composer: Element | null): string {
+  let nodes: Element[] = []
+  try {
+    nodes = queryAllDeep(root, "div, p, span")
+  } catch {
+    return ""
+  }
+  const hits = nodes.filter((el) => {
+    if (isIgnoredRegion(el) || (composer && (el === composer || composer.contains(el)))) return false
+    const text = (el.textContent ?? "").trim()
+    return text.length < 40 && /^RECEIVED \d+$/i.test(text)
+  })
+  return hits[hits.length - 1]?.textContent?.trim() ?? ""
+}
+
+export function replyActionsVisible(root: ParentNode): boolean {
+  let nodes: Element[] = []
+  try {
+    nodes = queryAllDeep(root, "button, [role='button']")
+  } catch {
+    return false
+  }
+  return nodes.some((el) => {
+    if (isIgnoredRegion(el) || isHiddenControl(el)) return false
+    return /\b(copy|regenerate|retry|rewrite)\b/i.test(buttonLabel(el))
+  })
+}
+
+export function describeMessages(root: ParentNode, limit = 4): string {
+  let nodes: Element[] = []
+  try {
+    nodes = queryAllDeep(root, "div, p, article")
+  } catch {
+    return "Messages: none."
+  }
+  const lines = nodes
+    .filter((el) => !isIgnoredRegion(el))
+    .map((el) => (el.textContent ?? "").trim().replace(/\s+/g, " "))
+    .filter((text) => text.length > 2 && text.length < 180)
+    .slice(-limit)
+  if (lines.length === 0) return "Messages: none."
+  return `Messages: ${lines.join(" | ")}.`
+}
+
 /** Click Send once, or press Enter once when the page has not drawn a send button yet. */
 export function submitOnce(composer: Element, submit: Element | null): "click" | "enter" | "blocked" {
   if (submit) return clickElement(submit) ? "click" : "blocked"

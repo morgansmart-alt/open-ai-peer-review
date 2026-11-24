@@ -887,7 +887,7 @@ function expectedVerdict(board) {
   return "not-ready";
 }
 function recommendationMatchesBand(recommendation, board) {
-  const expected = expectedVerdict(board);
+  const expected = expectedVerdict(Math.round(board));
   if (recommendation === expected) return true;
   return recommendation === "accept" && expected === "encourage";
 }

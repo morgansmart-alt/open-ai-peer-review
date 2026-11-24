@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 import { webChatProvider } from "../../../extension/adapters/index.ts"
 import { CRITERION_PROFILES, readingCriteria } from "../../domain/profiles.ts"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
-import { assistantText, attachmentReady, clickElement, describeCandidates, diagnose, findComposer, findSubmit, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
+import { ackReply, assistantText, attachmentReady, clickElement, describeCandidates, diagnose, findComposer, findSubmit, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
 import { buildWebChatPacket } from "./packet.ts"
 import { runTurn } from "./runTurn.ts"
 import { acceptWebChatResult } from "./accept.ts"
@@ -194,6 +194,7 @@ describe("live chat composers", () => {
     let clicks = 0
     send.addEventListener("click", () => {
       clicks += 1
+      ;(document.getElementById("composer") as HTMLTextAreaElement).value = ""
       document.getElementById("assistant")!.textContent = "summary: the record is readable."
     })
     const packet = buildWebChatPacket({
@@ -202,6 +203,10 @@ describe("live chat composers", () => {
       criteria: officialCriteria,
       record,
       documents: [{ filename: "paper.pdf", text: "Measured yield in one season." }],
+    })
+    let enters = 0
+    document.getElementById("composer")?.addEventListener("keydown", () => {
+      enters += 1
     })
     const result = await runTurn(document, provider, packet, {
       aborted: () => false,
@@ -212,8 +217,12 @@ describe("live chat composers", () => {
       attachmentTimeoutMs: 200,
       replyStartTimeoutMs: 200,
       stepTimeoutMs: 400,
+      submitStableMs: 0,
+      submitReadyMs: 40,
+      sendVerifyMs: 40,
     })
     expect(clicks).toBe(1)
+    expect(enters).toBe(0)
     expect(result.ok).toBe(true)
   })
 
@@ -238,10 +247,14 @@ describe("live chat composers", () => {
       attachmentTimeoutMs: 50,
       replyStartTimeoutMs: 30,
       stepTimeoutMs: 80,
+      submitStableMs: 0,
+      submitReadyMs: 20,
+      sendVerifyMs: 20,
     })
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.message).toContain("Send step on Grok")
+    expect(result.message).toContain("Enter")
     expect(result.message).toContain("still enabled")
     expect(result.message).toContain("aria-label=Send")
     expect(result.message).toContain("aria-label=Message Grok")
@@ -271,6 +284,15 @@ describe("live chat composers", () => {
     expect(result.message).toContain("placeholder=Ask anything")
     expect(result.message).toContain("role=textbox")
     expect(describeCandidates(document)).toContain("textarea")
+  })
+
+  it("treats a finished RECEIVED line as the end of a turn", () => {
+    document.body.innerHTML = `<main><div id="note">RECEIVED 1</div><textarea id="box" aria-label="Ask anything"></textarea></main>`
+    const provider = webChatProvider("grok-x")
+    if (!provider) throw new Error("missing grok-x")
+    const box = document.getElementById("box") as HTMLTextAreaElement
+    expect(ackReply(document, box)).toBe("RECEIVED 1")
+    expect(findComposer(document, provider.selectors.composer)?.id).toBe("box")
   })
 
   it("presses Enter once when Send has not been drawn", () => {
