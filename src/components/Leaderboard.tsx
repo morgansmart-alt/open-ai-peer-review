@@ -362,6 +362,11 @@ function FreeScreening() {
   )
 }
 
+function uncitedCriteria(scores: { criterionId: string; uncited?: boolean }[]): string {
+  const names = scores.filter((score) => score.uncited).map((score) => score.criterionId)
+  return names.length > 0 ? ` · uncited ${names.join(", ")} (half weight)` : ""
+}
+
 function WebChatBoard() {
   const air = useAir()
   const rows = air.db.webChat ?? []
@@ -378,7 +383,9 @@ function WebChatBoard() {
             <span className="mr-2 rounded-full bg-gold/15 px-2 py-0.5 text-[11px] text-gold">uncalibrated web-chat</span>
             {review.title}
             {review.doi ? ` · ${review.doi}` : ""} · blind {formatScore(boardValue(review.report.overallScore, review.report, review.criteriaVersion))} / 100
-            {review.defended ? ` · after author defence ${formatScore(review.defended.overallScore)}` : ""} · {storedProfileLabel(review.criterionProfile)} · {review.modelId}
+            {uncitedCriteria(review.report.scores)}
+            {review.defended ? ` · after author defence ${formatScore(review.defended.overallScore)}` : ""}
+            {review.defended ? uncitedCriteria(review.defended.scores) : ""} · {storedProfileLabel(review.criterionProfile)} · {review.modelId}
           </li>
         ))}
       </ul>

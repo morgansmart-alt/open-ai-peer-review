@@ -235,7 +235,7 @@ export interface StoredReview {
     overallScore: number
     recommendation: string
     summary: string
-    scores: { criterionId: string; score: number }[]
+    scores: { criterionId: string; score: number; uncited?: boolean }[]
   }
   /** Local only. Never copied into a leaderboard payload. */
   defenceTranscript?: { round: number; kind: string; text: string }[]

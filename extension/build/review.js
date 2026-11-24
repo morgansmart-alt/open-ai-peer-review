@@ -3721,9 +3721,34 @@ ${JSON.stringify(report)}`),
     if (rounded < 0 || rounded > 100) return null;
     return rounded;
   }
+  function readPostedScores(value) {
+    if (!Array.isArray(value)) return null;
+    const scores = [];
+    for (const item of value) {
+      if (!isRecord5(item)) return null;
+      if (Object.keys(item).some((key) => key !== "criterionId" && key !== "score" && key !== "uncited")) return null;
+      if ("uncited" in item && typeof item.uncited !== "boolean") return null;
+      const criterionId = clip3(item.criterionId, 80);
+      const score = Number(item.score);
+      if (!criterionId || !Number.isInteger(score)) return null;
+      scores.push({ criterionId, score, ...item.uncited === true ? { uncited: true } : {} });
+    }
+    return scores;
+  }
+  function scoresCoverProfile(scores, criteria) {
+    const known = new Set(criteria.criteria.map((item) => item.id));
+    const ids = scores.map((item) => item.criterionId);
+    if (new Set(ids).size !== ids.length) return false;
+    if (ids.some((id) => !known.has(id))) return false;
+    return criteria.criteria.every((item) => isBonusCriterion(item.id) || ids.includes(item.id));
+  }
   function submissionFromReview(review, site) {
     const criteria = criteriaForReview(review);
-    const checkScores = review.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score }));
+    const checkScores = review.report.scores.map((score) => ({
+      criterionId: score.criterionId,
+      score: score.score,
+      ...score.uncited ? { uncited: true } : {}
+    }));
     const described = describeScoring({
       scores: checkScores,
       statedOverall: review.report.overallScore,
@@ -3785,18 +3810,9 @@ ${JSON.stringify(report)}`),
     const criteriaVersion = clip3(input.criteriaVersion, 40);
     if (!criteriaVersion.startsWith("0.2")) return { ok: false, error: "The board accepts AIR v0.2 scores." };
     const criterionProfile = clip3(input.criterionProfile, 40);
-    if (!Array.isArray(input.scores)) return { ok: false, error: "The criterion scores are missing." };
-    const scores = input.scores.map((item) => {
-      if (!isRecord5(item)) return null;
-      if (Object.keys(item).some((key) => key !== "criterionId" && key !== "score")) return null;
-      const criterionId = clip3(item.criterionId, 80);
-      const score = Number(item.score);
-      return { criterionId, score };
-    });
-    if (scores.some((item) => item === null)) return { ok: false, error: "A criterion score had extra text." };
-    const ready = scores.filter((item) => item !== null);
-    const wanted = new Set(criteria.criteria.map((item) => item.id));
-    if (ready.length !== wanted.size || ready.some((item) => !wanted.has(item.criterionId) || !Number.isInteger(item.score))) {
+    const ready = readPostedScores(input.scores);
+    if (!ready) return { ok: false, error: "A criterion score had extra text." };
+    if (!scoresCoverProfile(ready, criteria)) {
       return { ok: false, error: "Every criterion in this profile needs an integer score." };
     }
     const summary = stripChatShareLinks(clip3(input.summary, 4e3));
@@ -3843,15 +3859,9 @@ ${JSON.stringify(report)}`),
       if (!DEFENDED_KEYS.has(key)) return { ok: false, error: "The defended score included a field the board does not accept." };
     }
     if (input.label !== "after author defence") return { ok: false, error: "The second score must be labelled after author defence." };
-    if (!Array.isArray(input.scores)) return { ok: false, error: "The defended score is missing its criterion scores." };
-    const scores = input.scores.flatMap((item) => {
-      if (!isRecord5(item) || Object.keys(item).some((key) => key !== "criterionId" && key !== "score")) return [];
-      const criterionId = clip3(item.criterionId, 80);
-      const score = Number(item.score);
-      return Number.isInteger(score) && criterionId ? [{ criterionId, score }] : [];
-    });
-    const wanted = new Set(criteria.criteria.map((item) => item.id));
-    if (scores.length !== wanted.size || scores.some((item) => !wanted.has(item.criterionId))) {
+    const scores = readPostedScores(input.scores);
+    if (!scores) return { ok: false, error: "The defended score is missing its criterion scores." };
+    if (!scoresCoverProfile(scores, criteria)) {
       return { ok: false, error: "The defended score needs every criterion in this profile." };
     }
     const summary = stripChatShareLinks(clip3(input.summary, 4e3));
