@@ -1223,8 +1223,8 @@ ${parsed.errors.join("\n")}`);
   function parseAirFeedback(input) {
     if (input == null || input === "") return void 0;
     if (typeof input === "string") {
-      const note = clip(input);
-      return note ? { scoringProcess: note } : void 0;
+      const note2 = clip(input);
+      return note2 ? { scoringProcess: note2 } : void 0;
     }
     if (typeof input !== "object" || Array.isArray(input)) return void 0;
     const feedback = {};
@@ -2396,7 +2396,7 @@ ${output}
       options.onProgress?.(`Defence round ${round} of ${rounds}. Stay on the chat tab.`);
       const prompt2 = rebuttalPrompt({ round, rounds, critiques: options.critiques, paperText: options.paperText, includeExcerpt });
       transcript.push({ round, kind: "rebuttal", text: prompt2 });
-      const reply = await options.send(prompt2, `defence round ${round} of ${rounds}`);
+      const reply = await options.send(prompt2, `defence round ${round} of ${rounds}`, "text");
       if (options.aborted()) return { transcript, defendedText: null, stopped: true };
       transcript.push({ round, kind: "reply", text: reply });
       await pause();
@@ -2405,7 +2405,7 @@ ${output}
     options.onProgress?.("Asking for the score after author defence.");
     const prompt = rescorePrompt();
     transcript.push({ round: rounds, kind: "rescore", text: prompt });
-    const defendedText = await options.send(prompt, "score after author defence");
+    const defendedText = await options.send(prompt, "score after author defence", "json");
     if (options.aborted()) return { transcript, defendedText: null, stopped: true };
     transcript.push({ round: rounds, kind: "rescore-reply", text: defendedText });
     return { transcript, defendedText, stopped: false };
@@ -2485,10 +2485,10 @@ ${output}
   }
 
   // src/services/webChat/deliver.ts
-  function splitText(text, size) {
+  function splitText(text, size, floor = 500) {
     const clean = text.replace(/\r\n/g, "\n");
     if (!clean.trim()) return [];
-    const limit = Math.max(500, size);
+    const limit = Math.max(floor, size);
     if (clean.length <= limit) return [clean];
     const parts = [];
     let cursor = 0;
@@ -2945,30 +2945,49 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     const text = consider(pool.filter(looksLikeAssistant));
     return text;
   }
-  function walkReplyText(node, composer, chunks) {
-    if (node instanceof Element) {
-      if (isIgnoredRegion(node)) return;
-      if (composer && (node === composer || composer.contains(node))) return;
-      if (node.shadowRoot) walkReplyText(node.shadowRoot, composer, chunks);
+  function assistantNodes(root, selectors, composer) {
+    const seen = /* @__PURE__ */ new Set();
+    const collect = (nodes) => {
+      const usable = nodes.filter((el) => {
+        if (seen.has(el) || isIgnoredRegion(el)) return false;
+        seen.add(el);
+        if (!composer) return true;
+        if (el === composer || composer.contains(el) || el.contains(composer)) return false;
+        return true;
+      });
+      return usable.filter((el) => !usable.some((other) => other !== el && other.contains(el)));
+    };
+    for (const selector of selectors) {
+      let nodes = [];
+      try {
+        nodes = queryAllDeep(root, selector);
+      } catch {
+        continue;
+      }
+      const found = collect(nodes);
+      if (found.length) return found;
     }
-    if (node.nodeType === Node.TEXT_NODE) {
-      const text = node.textContent ?? "";
-      if (text.trim()) chunks.push(text);
-      return;
+    let pool = [];
+    try {
+      pool = queryAllDeep(root, "[data-testid], [data-message-author], [data-message-author-role], [class*='assistant'], [class*='response']");
+    } catch {
+      pool = [];
     }
-    for (const child of node.childNodes) walkReplyText(child, composer, chunks);
+    return collect(pool.filter(looksLikeAssistant));
   }
-  function visibleReplyText(root, composer) {
-    const chunks = [];
-    const scope = root instanceof Document ? root.body ?? root.documentElement : root;
-    walkReplyText(scope, composer, chunks);
-    return chunks.join("\n");
+  function assistantMessages(root, selectors, composer) {
+    return assistantNodes(root, selectors, composer).map((el) => elementText(el)).filter((text) => text.length > 0);
+  }
+  function replyAfter(before, now) {
+    if (now.length > before.length) return now.slice(before.length).join("\n").trim();
+    const previous = before[before.length - 1] ?? "";
+    const latest = now[now.length - 1] ?? "";
+    if (!latest || latest === previous) return "";
+    if (previous && latest.startsWith(previous)) return latest.slice(previous.length).trim();
+    return latest.trim();
   }
   function reviewJsonBlock(text) {
     return lastScoreJson(text)?.text ?? "";
-  }
-  function reviewJsonOnPage(root, composer) {
-    return reviewJsonBlock(visibleReplyText(root, composer));
   }
   function stopControlActive(root, selectors) {
     const extra = ["button", "[role='button']"];
@@ -3009,53 +3028,81 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       el.dispatchEvent(new Event("input", { bubbles: true }));
     }
   }
-  function containsStart(el, text) {
-    if (!text) return true;
-    const probe = text.slice(0, Math.min(16, text.length));
-    const value = "value" in el ? String(el.value ?? "") : "";
-    return value.includes(probe) || (el.textContent ?? "").includes(probe);
+  function messageMatches(actual, intended) {
+    const clean = (value) => value.replace(/\u00a0/g, " ").replace(/\r\n/g, "\n");
+    return clean(actual) === clean(intended);
   }
-  function pasteText(el, text) {
-    try {
-      const transfer = new DataTransfer();
-      transfer.setData("text/plain", text);
-      const event = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer });
-      el.dispatchEvent(event);
-    } catch {
-      return false;
-    }
-    return containsStart(el, text);
+  function setControlValue(control, text) {
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(control), "value")?.set;
+    if (typeof setter === "function") setter.call(control, text);
+    else control.value = text;
+    dispatchInput(control, text);
+    control.dispatchEvent(new Event("change", { bubbles: true }));
   }
-  function writeComposer(el, text) {
-    const tag = el.tagName;
-    if (tag === "TEXTAREA" || tag === "INPUT") {
-      const control = el;
-      const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(control), "value")?.set;
-      if (typeof setter === "function") setter.call(control, text);
-      else control.value = text;
-      dispatchInput(control, text);
-      control.dispatchEvent(new Event("change", { bubbles: true }));
-      return;
-    }
-    const editable = el;
-    if (typeof editable.focus === "function") editable.focus();
-    const doc = el.ownerDocument;
-    let inserted = false;
+  function clearEditable(el) {
+    if (typeof el.focus === "function") el.focus();
     try {
+      const doc = el.ownerDocument;
       const selection = doc.getSelection?.();
       const range = doc.createRange();
       range.selectNodeContents(el);
       selection?.removeAllRanges();
       selection?.addRange(range);
-      inserted = Boolean(doc.execCommand?.("insertText", false, text));
+      doc.execCommand?.("delete", false);
     } catch {
-      inserted = false;
     }
-    if (!inserted || !containsStart(editable, text)) inserted = pasteText(editable, text);
-    if (!inserted || !containsStart(editable, text)) {
-      editable.textContent = text;
-      dispatchInput(editable, text);
+    el.textContent = "";
+  }
+  function fillComposer(el, text) {
+    const tag = el.tagName;
+    if (tag === "TEXTAREA" || tag === "INPUT") {
+      setControlValue(el, text);
+    } else {
+      const editable = el;
+      clearEditable(editable);
+      let inserted = false;
+      try {
+        const doc = el.ownerDocument;
+        const selection = doc.getSelection?.();
+        const range = doc.createRange();
+        range.selectNodeContents(el);
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        inserted = Boolean(doc.execCommand?.("insertText", false, text));
+      } catch {
+        inserted = false;
+      }
+      let actual2 = composerText(el);
+      if (text && actual2 === text + text) {
+        editable.textContent = text;
+        dispatchInput(editable, text);
+        actual2 = composerText(el);
+      }
+      if (!inserted || !messageMatches(actual2, text)) {
+        editable.textContent = text;
+        dispatchInput(editable, text);
+      }
     }
+    const actual = composerText(el);
+    const ok = messageMatches(actual, text);
+    const truncated = !ok && actual.trim().length > 0 && text.startsWith(actual);
+    return { ok, actual, truncated };
+  }
+  function placeComposerText(el, text) {
+    let attempt = text;
+    for (let pass = 0; pass < 8 && attempt.length > 0; pass += 1) {
+      const placed = fillComposer(el, attempt);
+      if (placed.ok) return { ok: true, chunk: attempt };
+      if (placed.truncated && placed.actual.trim().length >= 20) {
+        const prefix = text.slice(0, placed.actual.length);
+        const exact = fillComposer(el, prefix);
+        if (exact.ok) return { ok: true, chunk: prefix };
+      }
+      const next = Math.floor(attempt.length / 2);
+      if (next < 20) break;
+      attempt = attempt.slice(0, next);
+    }
+    return { ok: false, actual: composerText(el) };
   }
   var clickLock = /* @__PURE__ */ new WeakMap();
   function pressEnterSequence(el) {
@@ -3154,18 +3201,6 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       return Boolean(ackLabel(el.textContent ?? ""));
     });
     return ackLabel(hits[hits.length - 1]?.textContent ?? "");
-  }
-  function replyActionsVisible(root) {
-    let nodes = [];
-    try {
-      nodes = queryAllDeep(root, "button, [role='button']");
-    } catch {
-      return false;
-    }
-    return nodes.some((el) => {
-      if (isIgnoredRegion(el) || isHiddenControl(el)) return false;
-      return /\b(copy|regenerate|retry|rewrite)\b/i.test(buttonLabel(el));
-    });
   }
   function describeMessages(root, limit = 4) {
     let nodes = [];
@@ -3285,21 +3320,23 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
   function stepDiagnostic(doc) {
     return `${describeButtons(doc)} ${describeCandidates(doc)}`;
   }
-  function replyTimeoutReason(doc, composer) {
-    if (reviewJsonOnPage(doc, composer) || ackReply(doc, composer)) return "reply seen, JSON not parsed";
-    const visible = visibleReplyText(doc, composer).replace(/\s+/g, " ").trim();
-    if (visible.length > 40) return "reply seen, JSON not parsed";
-    return "no reply seen";
+  function note(hooks, step, status, detail) {
+    hooks.onProgress?.(detail, { step, status });
   }
-  async function waitForReply(doc, provider, before, hooks, composer, beforeJson = "", label = "review", attempt = 1) {
-    hooks.onProgress?.(`Waiting for the reply: ${label}.`);
+  function replyTimeoutReason(reply, expect) {
+    if (!reply) return "no reply seen";
+    if (expect === "json" && !reviewJsonBlock(reply)) return "reply seen, JSON not parsed";
+    return "reply seen";
+  }
+  async function waitForReply(doc, provider, beforeMessages, hooks, composer, label = "review", expect = "json", attempt = 1) {
+    note(hooks, label, "waiting", `Waiting for the reply: ${label}.`);
     await hooks.keepAwake?.();
     const pollMs = hooks.pollMs ?? 400;
     const stableMs = hooks.stableMs ?? 2e3;
     const timeoutMs = hooks.stepTimeoutMs ?? 4 * 60 * 1e3;
     const startLimit = hooks.replyStartTimeoutMs ?? 2e4;
     const start = Date.now();
-    let last = before;
+    let lastReply = "";
     let stableFor = 0;
     let lastJson = "";
     let jsonStable = 0;
@@ -3308,23 +3345,24 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     let started = false;
     while (Date.now() - start < timeoutMs) {
       if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.");
-      const json = reviewJsonOnPage(doc, composer);
-      const freshJson = json && json !== beforeJson ? json : "";
+      const reply2 = replyAfter(beforeMessages, assistantMessages(doc, provider.selectors.assistant, composer));
+      const json = expect === "json" ? reviewJsonBlock(reply2) : "";
       const ack = ackReply(doc, composer);
-      const assistant = assistantText(doc, provider.selectors.assistant, composer);
-      const stopping = stopControlActive(doc, provider.selectors.stop);
-      if (freshJson || ack || assistant && assistant !== before) started = true;
-      if (freshJson) {
-        if (freshJson === lastJson && jsonStable >= stableMs) return freshJson;
-        if (freshJson !== lastJson) {
-          lastJson = freshJson;
+      const streaming = stopControlActive(doc, provider.selectors.stop);
+      const sendReady = Boolean(findSubmit(doc, provider.selectors.submit, composer));
+      const idle = sendReady && !streaming;
+      if (reply2 || ack) started = true;
+      if (expect === "json" && json) {
+        if (json === lastJson && jsonStable >= stableMs && (!streaming || sendReady)) return json;
+        if (json !== lastJson) {
+          lastJson = json;
           jsonStable = 0;
         } else jsonStable += pollMs;
       } else {
         lastJson = "";
         jsonStable = 0;
       }
-      if (ack && !freshJson) {
+      if (expect === "text" && ack && !reply2) {
         if (ack === lastAck && ackStable >= stableMs) return ack;
         if (ack !== lastAck) {
           lastAck = ack;
@@ -3334,31 +3372,31 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
         lastAck = "";
         ackStable = 0;
       }
-      if (!started && !stopping && Date.now() - start >= startLimit) {
-        const send = findSubmit(doc, provider.selectors.submit, composer);
-        if (send) {
+      if (!started && !streaming && Date.now() - start >= startLimit) {
+        if (sendReady) {
           throw new TurnError(
             "send-timeout",
             `Send step on ${provider.label} did not start a reply. The Send button was still enabled. ${stepDiagnostic(doc)}`
           );
         }
       }
-      const settled = Boolean(assistant) && assistant !== before && assistant === last && !stopping && stableFor >= stableMs;
-      if (!freshJson && !ack && (settled || started && !stopping && replyActionsVisible(doc) && assistant && assistant !== before)) return assistant;
-      if (assistant !== last) {
-        last = assistant;
+      const settled = Boolean(reply2) && reply2 === lastReply && stableFor >= stableMs && (!streaming || idle || sendReady);
+      if (expect === "text" && settled) return reply2;
+      if (reply2 !== lastReply) {
+        lastReply = reply2;
         stableFor = 0;
       } else {
         stableFor += pollMs;
       }
       await hooks.sleep(pollMs);
     }
+    const reply = replyAfter(beforeMessages, assistantMessages(doc, provider.selectors.assistant, composer));
     if (attempt < 2) {
-      hooks.onProgress?.(`Reply step (${label}) timed out. Focusing the chat tab and waiting once more.`);
+      note(hooks, label, "retry", `Reply step (${label}) timed out. Focusing the chat tab and waiting once more.`);
       await hooks.keepAwake?.();
-      return waitForReply(doc, provider, before, hooks, composer, beforeJson, label, attempt + 1);
+      return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1);
     }
-    throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} did not finish in time. ${replyTimeoutReason(doc, composer)}.`);
+    throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} did not finish in time. ${replyTimeoutReason(reply, expect)}.`);
   }
   async function waitForEnabledSubmit(doc, provider, composer, hooks) {
     const timeoutMs = hooks.submitReadyMs ?? 5e3;
@@ -3435,9 +3473,34 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       `Attachment step on ${provider.label} timed out. The file chip never showed as ready, and Send was not enabled. ${stepDiagnostic(doc)}`
     );
   }
-  async function sendStep(doc, provider, step, hooks, label = "review") {
+  async function sendComposerText(doc, provider, composer, text, hooks, label, expect) {
+    let pending = text;
+    let part = 1;
+    while (pending.length > 0) {
+      const placed = placeComposerText(composer, pending);
+      if (!placed.ok) {
+        throw new TurnError(
+          "insert-miss",
+          `The message box on ${provider.label} did not hold the message for ${label}. The box has ${placed.actual.length} characters and the message has ${pending.length}.`
+        );
+      }
+      const chunk = placed.chunk;
+      const rest = pending.slice(chunk.length).trim();
+      const beforeMessages = assistantMessages(doc, provider.selectors.assistant, composer);
+      const beforeAssistant = beforeMessages[beforeMessages.length - 1] ?? "";
+      note(hooks, label, "sending", `Sending ${label}${rest ? ` part ${part}` : ""} on ${provider.label}. ${chunk.length} characters verified in the message box.`);
+      const method = await commitSend(doc, provider, composer, beforeAssistant, hooks);
+      note(hooks, label, "sent", `Send step on ${provider.label}. Method that sent: ${method}.`);
+      if (!rest) return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect);
+      part += 1;
+      pending = rest;
+      await waitForReply(doc, provider, beforeMessages, hooks, composer, `${label} part ${part - 1}`, "text");
+    }
+    throw new TurnError("insert-miss", `The message for ${label} was empty.`);
+  }
+  async function sendStep(doc, provider, step, hooks, label = "review", expect = "json") {
     if (step.kind === "upload") {
-      hooks.onProgress?.(`Attachment step on ${provider.label}. Waiting for the file chip, or for Send to become enabled.`);
+      note(hooks, label, "sending", `Attachment step on ${provider.label}. Waiting for the file chip, or for Send to become enabled.`);
       const input = queryFirst(doc, provider.selectors.fileInput);
       const attached = input ? attachTextFiles(input, step.files) : false;
       if (!attached) throw new TurnError("upload-miss", "file upload was not accepted");
@@ -3445,16 +3508,11 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     }
     const composer = findComposer(doc, provider.selectors.composer);
     if (!composer) throw new TurnError("selector-miss", selectorMiss(provider, describeCandidates(doc)));
-    const before = assistantText(doc, provider.selectors.assistant, composer);
-    const beforeJson = reviewJsonOnPage(doc, composer);
-    writeComposer(composer, step.text);
-    const method = await commitSend(doc, provider, composer, before, hooks);
-    hooks.onProgress?.(`Send step on ${provider.label}. Method that sent: ${method}.`);
-    return waitForReply(doc, provider, before, hooks, composer, beforeJson, label);
+    return sendComposerText(doc, provider, composer, step.text, hooks, label, step.final ? expect : "text");
   }
-  async function sendFollowUp(doc, provider, text, hooks, label = "follow-up") {
+  async function sendFollowUp(doc, provider, text, hooks, label = "follow-up", expect = "json") {
     const step = { kind: "paste", text, files: [], index: 1, total: 1, final: true };
-    return sendStep(doc, provider, step, hooks, label);
+    return sendStep(doc, provider, step, hooks, label, expect);
   }
   async function pageIsLive(url, hooks) {
     try {
@@ -3494,7 +3552,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       let fellBack = false;
       let linkFellBack = false;
       let route = activePacket.textUrl ? "link" : "paste";
-      hooks.onProgress?.(route === "link" ? `Review route: public text link. ${activePacket.textUrl}` : "Review route: pasted paper.");
+      note(hooks, "Review route", route, route === "link" ? `Review route: public text link. ${activePacket.textUrl}` : "Review route: pasted paper.");
       for (let index = 0; index < steps.length; index += 1) {
         const step = steps[index];
         if (!step) continue;
@@ -3644,7 +3702,13 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     };
     const hooks = {
       aborted: () => aborted,
-      onProgress: (text) => report({ type: "air-web-chat-progress", requestId: message.requestId, message: text }),
+      onProgress: (text, meta) => report({
+        type: "air-web-chat-progress",
+        requestId: message.requestId,
+        message: text,
+        step: meta?.step ?? "Review",
+        status: meta?.status ?? "update"
+      }),
       sleep: (ms) => {
         if (document.hidden && Date.now() - lastFocus > 2e3) focusChat();
         return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -3652,6 +3716,15 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       keepAwake: () => new Promise((resolve) => {
         lastFocus = Date.now();
         chrome.runtime.sendMessage({ type: "air-web-chat-focus" }, () => resolve());
+      }),
+      loadTextPage: (url) => new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: "air-web-chat-text-page", url }, (response) => {
+          if (chrome.runtime.lastError || !response || typeof response.status !== "number") {
+            void fetch(url).then(async (page) => resolve({ status: page.status, body: await page.text() })).catch(() => resolve({ status: 0, body: "" }));
+            return;
+          }
+          resolve({ status: response.status, body: typeof response.body === "string" ? response.body : "" });
+        });
       })
     };
     void runTurn(document, provider, message.packet, hooks).then(async (result) => {
@@ -3663,7 +3736,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       const settled = await settleChatJson(
         result.text,
         (prompt) => sendFollowUp(document, provider, prompt, hooks, "corrected JSON"),
-        (note) => hooks.onProgress?.(note),
+        (text) => hooks.onProgress?.(text, { step: "Corrected JSON", status: "sending" }),
         (text) => {
           const accepted2 = acceptWebChatResult(text, criteria);
           return accepted2.ok ? { ok: true } : { ok: false, errors: accepted2.errors };
@@ -3690,8 +3763,8 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
           includeExcerpt: !linked,
           aborted: () => aborted,
           pause: () => new Promise((resolve) => window.setTimeout(resolve, DEFENCE_PAUSE_MS)),
-          onProgress: (text) => report({ type: "air-web-chat-progress", requestId: message.requestId, message: text }),
-          send: (prompt, label) => sendFollowUp(document, provider, prompt, hooks, label ?? "author defence")
+          onProgress: (text) => hooks.onProgress?.(text, { step: text.replace(/\.$/, ""), status: "sending" }),
+          send: (prompt, label, expect) => sendFollowUp(document, provider, prompt, hooks, label ?? "author defence", expect ?? "text")
         });
         report({
           type: "air-web-chat-done",

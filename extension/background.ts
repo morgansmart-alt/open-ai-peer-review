@@ -132,11 +132,30 @@ chrome.runtime.onMessage.addListener((message: { source?: string; type?: string;
     }
     void sessionGet<JobRecord>(JOB_KEY).then(async (job) => {
       if (job && job.requestId === message.requestId) {
+        emit(
+          extensionEnvelope({
+            kind: "error",
+            requestId: job.requestId,
+            airTabId: job.airTabId,
+            message: "Stopped. The chat tab stays open.",
+          }),
+          job.airTabId,
+        )
         await tabSend(job.providerTabId, { type: "air-web-chat-abort", requestId: job.requestId }).catch(() => undefined)
         await sessionRemove(JOB_KEY)
       }
       sendResponse({ ok: true })
     })
+    return true
+  }
+  if (message?.type === "air-web-chat-text-page" && typeof (message as { url?: string }).url === "string") {
+    const url = (message as { url: string }).url
+    void fetch(url)
+      .then(async (response) => {
+        const body = await response.text()
+        sendResponse({ status: response.status, body: body.slice(0, 20_000) })
+      })
+      .catch(() => sendResponse({ status: 0, body: "" }))
     return true
   }
   if (message?.type === "air-web-chat-focus") {

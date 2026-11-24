@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom"
 import { publishNotices } from "../content/notices.ts"
 import { PROFILE_RANKING_NOTE } from "../domain/profiles.ts"
+import { weightLabel } from "../domain/criteria.ts"
 import { airCriteriaV02 } from "../domain/officialCriteria.ts"
 import { globalGoals } from "../domain/goals.ts"
 
@@ -103,7 +104,7 @@ export function MethodPage() {
       <ul className="mt-2 space-y-1 text-sm">
         {airCriteriaV02.criteria.map((criterion) => (
           <li key={criterion.id}>
-            <span className="font-medium">{criterion.name}</span> · weight {criterion.weight}
+            <span className="font-medium">{weightLabel(criterion)}</span>
           </li>
         ))}
       </ul>

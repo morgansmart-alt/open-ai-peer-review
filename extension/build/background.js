@@ -367,7 +367,14 @@
   function relayFromProvider(job, senderTabId, message) {
     if (!job || senderTabId == null || senderTabId !== job.providerTabId || message.requestId !== job.requestId) return { kind: "ignore" };
     if (message.type === "air-web-chat-progress") {
-      return { kind: "progress", requestId: job.requestId, message: typeof message.message === "string" ? message.message : "", airTabId: job.airTabId };
+      return {
+        kind: "progress",
+        requestId: job.requestId,
+        message: typeof message.message === "string" ? message.message : "",
+        airTabId: job.airTabId,
+        step: typeof message.step === "string" && message.step.trim() ? message.step.trim() : "Review",
+        status: typeof message.status === "string" && message.status.trim() ? message.status.trim() : "update"
+      };
     }
     if (message.type === "air-web-chat-done") {
       if (message.ok && typeof message.text === "string" && message.text) {
@@ -389,7 +396,15 @@
   }
   function extensionEnvelope(decision) {
     if (decision.kind === "progress") {
-      return { source: EXTENSION_SOURCE, version: PROTOCOL_VERSION, type: "air-web-chat-progress", requestId: decision.requestId, message: decision.message };
+      return {
+        source: EXTENSION_SOURCE,
+        version: PROTOCOL_VERSION,
+        type: "air-web-chat-progress",
+        requestId: decision.requestId,
+        message: decision.message,
+        step: decision.step,
+        status: decision.status
+      };
     }
     if (decision.kind === "result") {
       return {
@@ -529,11 +544,28 @@
       }
       void sessionGet(JOB_KEY).then(async (job) => {
         if (job && job.requestId === message.requestId) {
+          emit(
+            extensionEnvelope({
+              kind: "error",
+              requestId: job.requestId,
+              airTabId: job.airTabId,
+              message: "Stopped. The chat tab stays open."
+            }),
+            job.airTabId
+          );
           await tabSend(job.providerTabId, { type: "air-web-chat-abort", requestId: job.requestId }).catch(() => void 0);
           await sessionRemove(JOB_KEY);
         }
         sendResponse({ ok: true });
       });
+      return true;
+    }
+    if (message?.type === "air-web-chat-text-page" && typeof message.url === "string") {
+      const url = message.url;
+      void fetch(url).then(async (response) => {
+        const body = await response.text();
+        sendResponse({ status: response.status, body: body.slice(0, 2e4) });
+      }).catch(() => sendResponse({ status: 0, body: "" }));
       return true;
     }
     if (message?.type === "air-web-chat-focus") {

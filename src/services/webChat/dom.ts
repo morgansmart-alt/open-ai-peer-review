@@ -319,6 +319,57 @@ export function assistantText(root: ParentNode, selectors: string[], composer?: 
   return text
 }
 
+function assistantNodes(root: ParentNode, selectors: string[], composer?: Element | null): Element[] {
+  const seen = new Set<Element>()
+  const collect = (nodes: Element[]): Element[] => {
+    const usable = nodes.filter((el) => {
+      if (seen.has(el) || isIgnoredRegion(el)) return false
+      seen.add(el)
+      if (!composer) return true
+      if (el === composer || composer.contains(el) || el.contains(composer)) return false
+      return true
+    })
+    return usable.filter((el) => !usable.some((other) => other !== el && other.contains(el)))
+  }
+  for (const selector of selectors) {
+    let nodes: Element[] = []
+    try {
+      nodes = queryAllDeep(root, selector)
+    } catch {
+      continue
+    }
+    const found = collect(nodes)
+    if (found.length) return found
+  }
+  let pool: Element[] = []
+  try {
+    pool = queryAllDeep(root, "[data-testid], [data-message-author], [data-message-author-role], [class*='assistant'], [class*='response']")
+  } catch {
+    pool = []
+  }
+  return collect(pool.filter(looksLikeAssistant))
+}
+
+/** Assistant replies in document order. Nested copies of the same message are skipped. */
+export function assistantMessages(root: ParentNode, selectors: string[], composer?: Element | null): string[] {
+  return assistantNodes(root, selectors, composer)
+    .map((el) => elementText(el))
+    .filter((text) => text.length > 0)
+}
+
+/**
+ * Text that arrived after the snapshot taken before this send.
+ * A new node is the reply. A node that only grew contributes the added tail.
+ */
+export function replyAfter(before: string[], now: string[]): string {
+  if (now.length > before.length) return now.slice(before.length).join("\n").trim()
+  const previous = before[before.length - 1] ?? ""
+  const latest = now[now.length - 1] ?? ""
+  if (!latest || latest === previous) return ""
+  if (previous && latest.startsWith(previous)) return latest.slice(previous.length).trim()
+  return latest.trim()
+}
+
 function walkReplyText(node: Node, composer: Element | null, chunks: string[]): void {
   if (node instanceof Element) {
     if (isIgnoredRegion(node)) return
@@ -394,55 +445,95 @@ function dispatchInput(el: Element, text: string): void {
   }
 }
 
-function containsStart(el: Element, text: string): boolean {
-  if (!text) return true
-  const probe = text.slice(0, Math.min(16, text.length))
-  const value = "value" in el ? String((el as HTMLTextAreaElement).value ?? "") : ""
-  return value.includes(probe) || (el.textContent ?? "").includes(probe)
+function messageMatches(actual: string, intended: string): boolean {
+  const clean = (value: string) => value.replace(/\u00a0/g, " ").replace(/\r\n/g, "\n")
+  return clean(actual) === clean(intended)
 }
 
-function pasteText(el: Element, text: string): boolean {
-  try {
-    const transfer = new DataTransfer()
-    transfer.setData("text/plain", text)
-    const event = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer })
-    el.dispatchEvent(event)
-  } catch {
-    return false
-  }
-  return containsStart(el, text)
+function setControlValue(control: HTMLTextAreaElement | HTMLInputElement, text: string): void {
+  const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(control) as object, "value")?.set
+  if (typeof setter === "function") setter.call(control, text)
+  else control.value = text
+  dispatchInput(control, text)
+  control.dispatchEvent(new Event("change", { bubbles: true }))
 }
 
-export function writeComposer(el: Element, text: string): void {
-  const tag = el.tagName
-  if (tag === "TEXTAREA" || tag === "INPUT") {
-    const control = el as HTMLTextAreaElement
-    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(control) as object, "value")?.set
-    if (typeof setter === "function") setter.call(control, text)
-    else control.value = text
-    dispatchInput(control, text)
-    control.dispatchEvent(new Event("change", { bubbles: true }))
-    return
-  }
-  const editable = el as HTMLElement
-  if (typeof editable.focus === "function") editable.focus()
-  const doc = el.ownerDocument
-  let inserted = false
+function clearEditable(el: HTMLElement): void {
+  if (typeof el.focus === "function") el.focus()
   try {
+    const doc = el.ownerDocument
     const selection = doc.getSelection?.()
     const range = doc.createRange()
     range.selectNodeContents(el)
     selection?.removeAllRanges()
     selection?.addRange(range)
-    inserted = Boolean(doc.execCommand?.("insertText", false, text))
+    doc.execCommand?.("delete", false)
   } catch {
-    inserted = false
+    // The text assignment below still empties the box.
   }
-  if (!inserted || !containsStart(editable, text)) inserted = pasteText(editable, text)
-  if (!inserted || !containsStart(editable, text)) {
-    editable.textContent = text
-    dispatchInput(editable, text)
+  el.textContent = ""
+}
+
+/** One insert. A second paste is not issued. A doubled insert is collapsed back to one copy. */
+export function fillComposer(el: Element, text: string): { ok: boolean; actual: string; truncated: boolean } {
+  const tag = el.tagName
+  if (tag === "TEXTAREA" || tag === "INPUT") {
+    setControlValue(el as HTMLTextAreaElement, text)
+  } else {
+    const editable = el as HTMLElement
+    clearEditable(editable)
+    let inserted = false
+    try {
+      const doc = el.ownerDocument
+      const selection = doc.getSelection?.()
+      const range = doc.createRange()
+      range.selectNodeContents(el)
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      inserted = Boolean(doc.execCommand?.("insertText", false, text))
+    } catch {
+      inserted = false
+    }
+    let actual = composerText(el)
+    if (text && actual === text + text) {
+      editable.textContent = text
+      dispatchInput(editable, text)
+      actual = composerText(el)
+    }
+    if (!inserted || !messageMatches(actual, text)) {
+      editable.textContent = text
+      dispatchInput(editable, text)
+    }
   }
+  const actual = composerText(el)
+  const ok = messageMatches(actual, text)
+  const truncated = !ok && actual.trim().length > 0 && text.startsWith(actual)
+  return { ok, actual, truncated }
+}
+
+export function writeComposer(el: Element, text: string): void {
+  fillComposer(el, text)
+}
+
+/**
+ * Put `text` in the box, shortening from the end until the box holds that exact prefix.
+ * Returns the text that was verified in the box.
+ */
+export function placeComposerText(el: Element, text: string): { ok: true; chunk: string } | { ok: false; actual: string } {
+  let attempt = text
+  for (let pass = 0; pass < 8 && attempt.length > 0; pass += 1) {
+    const placed = fillComposer(el, attempt)
+    if (placed.ok) return { ok: true, chunk: attempt }
+    if (placed.truncated && placed.actual.trim().length >= 20) {
+      const prefix = text.slice(0, placed.actual.length)
+      const exact = fillComposer(el, prefix)
+      if (exact.ok) return { ok: true, chunk: prefix }
+    }
+    const next = Math.floor(attempt.length / 2)
+    if (next < 20) break
+    attempt = attempt.slice(0, next)
+  }
+  return { ok: false, actual: composerText(el) }
 }
 
 /** One click, then ignore a second call on the same element until the turn yields. */

@@ -5,9 +5,9 @@ import { describe, expect, it } from "vitest"
 import { webChatProvider } from "../../../extension/adapters/index.ts"
 import { CRITERION_PROFILES, readingCriteria } from "../../domain/profiles.ts"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
-import { ackReply, assistantText, attachmentReady, clickElement, describeCandidates, diagnose, findComposer, findSubmit, reviewJsonOnPage, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
+import { ackReply, assistantText, attachmentReady, clickElement, describeCandidates, diagnose, fillComposer, findComposer, findSubmit, placeComposerText, reviewJsonOnPage, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
 import { buildWebChatPacket } from "./packet.ts"
-import { runTurn } from "./runTurn.ts"
+import { runTurn, sendFollowUp } from "./runTurn.ts"
 import { acceptWebChatResult } from "./accept.ts"
 import { extensionEnvelope, relayFromProvider, relayTargets, type RelayJob } from "./relay.ts"
 import type { ZenodoRecord } from "../zenodo.ts"
@@ -195,7 +195,7 @@ describe("live chat composers", () => {
     send.addEventListener("click", () => {
       clicks += 1
       ;(document.getElementById("composer") as HTMLTextAreaElement).value = ""
-      document.getElementById("assistant")!.textContent = "summary: the record is readable."
+      document.getElementById("assistant")!.textContent = '{"overallScore":70,"summary":"the record is readable."}'
     })
     const packet = buildWebChatPacket({
       requestId: "grok-live",
@@ -348,7 +348,7 @@ describe("live chat composers", () => {
       <main>
         <textarea id="composer" aria-label="Message Grok"></textarea>
         <button id="send" type="submit" aria-label="Send">Send</button>
-        <div id="reply">The model wrote a paragraph about the record and then stopped without a score.</div>
+        <div id="reply" class="assistant-message"></div>
       </main>
       <div id="stl-forge"><button type="button">Send</button><div>STL Forge overlay controls</div></div>
     `
@@ -357,6 +357,7 @@ describe("live chat composers", () => {
     document.getElementById("send")?.addEventListener("click", () => {
       ;(document.getElementById("composer") as HTMLTextAreaElement).value = ""
       ;(document.getElementById("send") as HTMLButtonElement).disabled = true
+      document.getElementById("reply")!.textContent = "The model wrote a paragraph about the record and then stopped without a score."
     })
     const packet = buildWebChatPacket({
       requestId: "grok-timeout",
@@ -364,7 +365,9 @@ describe("live chat composers", () => {
       criteria: officialCriteria,
       record,
       documents: [{ filename: "paper.md", text: "Measured yield in one season." }],
+      useTextPage: true,
     })
+    const livePage = `${"The public paper text is long enough to count as the record. ".repeat(12)}\nZenodo record: https://zenodo.org/records/1\nVersion DOI: https://doi.org/10.5281/zenodo.1`
     const hooks = {
       aborted: () => false,
       sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
@@ -375,6 +378,7 @@ describe("live chat composers", () => {
       submitStableMs: 0,
       submitReadyMs: 20,
       sendVerifyMs: 20,
+      loadTextPage: async () => ({ status: 200, body: livePage }),
     }
     const seen = await runTurn(document, { ...provider, fileUpload: false }, packet, hooks)
     expect(seen.ok).toBe(false)
@@ -393,7 +397,7 @@ describe("live chat composers", () => {
   })
 
   it("sends the next part after RECEIVED and keeps the record links on part 1", async () => {
-    document.body.innerHTML = `<main><textarea id="box" aria-label="Ask anything"></textarea><button id="send" type="button" aria-label="Send">Send</button><div id="reply"></div></main>`
+    document.body.innerHTML = `<main><textarea id="box" aria-label="Ask anything"></textarea><button id="send" type="button" aria-label="Send">Send</button><div id="reply" class="assistant-message"></div></main>`
     const provider = webChatProvider("grok-x")
     if (!provider) throw new Error("missing grok-x")
     const sent: string[] = []
@@ -621,5 +625,85 @@ describe("live chat composers", () => {
     expect(submitOnce(box, null)).toBe("enter")
     expect(submitOnce(box, null)).toBe("blocked")
     expect(keys).toBe(1)
+  })
+
+  it("inserts a contenteditable message once, and keeps only the prefix the box will hold", () => {
+    const box = document.createElement("div")
+    box.setAttribute("contenteditable", "true")
+    document.body.append(box)
+    const original = typeof document.execCommand === "function" ? document.execCommand.bind(document) : undefined
+    document.execCommand = ((command: string, _show?: boolean, value?: string) => {
+      if (command === "insertText" && value) {
+        box.textContent = `${box.textContent ?? ""}${value}${value}`
+        return true
+      }
+      if (command === "delete") {
+        box.textContent = ""
+        return true
+      }
+      return false
+    }) as typeof document.execCommand
+    const filled = fillComposer(box, "Author defence, round 1.")
+    expect(filled.ok).toBe(true)
+    expect(box.textContent).toBe("Author defence, round 1.")
+    box.addEventListener("input", () => {
+      const value = box.textContent ?? ""
+      if (value.length > 24) box.textContent = value.slice(0, 24)
+    })
+    document.execCommand = ((command: string, _show?: boolean, value?: string) => {
+      if (command === "insertText" && value) {
+        box.textContent = value.slice(0, 24)
+        return true
+      }
+      if (command === "delete") {
+        box.textContent = ""
+        return true
+      }
+      return false
+    }) as typeof document.execCommand
+    const full = "Author defence, round 1 of 2. The first criticism continues past the limit."
+    const placed = placeComposerText(box, full)
+    expect(placed.ok).toBe(true)
+    if (placed.ok) {
+      expect(placed.chunk.length).toBeLessThan(full.length)
+      expect(full.startsWith(placed.chunk)).toBe(true)
+      expect(box.textContent).toBe(placed.chunk)
+    }
+    if (original) document.execCommand = original
+  })
+
+  it("finishes a defence round on the new prose reply and ignores the earlier score", async () => {
+    document.body.innerHTML = `<main>
+      <textarea id="box" aria-label="Ask anything"></textarea>
+      <button id="send" type="button" aria-label="Send">Send</button>
+      <div id="old" class="assistant-message">{"overallScore":86,"summary":"The first score."}</div>
+      <div id="next" class="assistant-message"></div>
+    </main>`
+    const provider = webChatProvider("grok-x")
+    if (!provider) throw new Error("missing grok-x")
+    document.getElementById("send")?.addEventListener("click", () => {
+      const text = (document.getElementById("box") as HTMLTextAreaElement).value
+      ;(document.getElementById("box") as HTMLTextAreaElement).value = ""
+      document.getElementById("next")!.textContent = text.includes("overallScore")
+        ? '{"overallScore":80,"summary":"After defence."}'
+        : "The stopping rule is stated in section 2. The criticism is fair."
+    })
+    const hooks = {
+      aborted: () => false,
+      sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+      pollMs: 5,
+      stableMs: 0,
+      stepTimeoutMs: 800,
+      replyStartTimeoutMs: 300,
+      submitStableMs: 0,
+      submitReadyMs: 20,
+      sendVerifyMs: 20,
+    }
+    const reply = await sendFollowUp(document, provider, "Author defence, round 1 of 2. Answer the criticism about numerical values.", hooks, "defence round 1 of 2", "text")
+    expect(reply).toContain("stopping rule")
+    expect(reply).not.toContain("overallScore")
+    const rescored = await sendFollowUp(document, provider, "Score the paper again. Return JSON with overallScore.", hooks, "score after author defence", "json")
+    expect(rescored).toContain('"overallScore":80')
+    expect(rescored).not.toContain('"overallScore":86')
   })
 })

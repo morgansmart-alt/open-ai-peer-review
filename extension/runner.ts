@@ -55,7 +55,14 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
   }
   const hooks: TurnHooks = {
     aborted: () => aborted,
-    onProgress: (text) => report({ type: "air-web-chat-progress", requestId: message.requestId, message: text }),
+    onProgress: (text, meta) =>
+      report({
+        type: "air-web-chat-progress",
+        requestId: message.requestId,
+        message: text,
+        step: meta?.step ?? "Review",
+        status: meta?.status ?? "update",
+      }),
     sleep: (ms) => {
       if (document.hidden && Date.now() - lastFocus > 2000) focusChat()
       return new Promise((resolve) => window.setTimeout(resolve, ms))
@@ -64,6 +71,18 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
       new Promise((resolve) => {
         lastFocus = Date.now()
         chrome.runtime.sendMessage({ type: "air-web-chat-focus" }, () => resolve())
+      }),
+    loadTextPage: (url) =>
+      new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: "air-web-chat-text-page", url }, (response: { status?: number; body?: string } | undefined) => {
+          if (chrome.runtime.lastError || !response || typeof response.status !== "number") {
+            void fetch(url)
+              .then(async (page) => resolve({ status: page.status, body: await page.text() }))
+              .catch(() => resolve({ status: 0, body: "" }))
+            return
+          }
+          resolve({ status: response.status, body: typeof response.body === "string" ? response.body : "" })
+        })
       }),
   }
   void runTurn(document, provider, message.packet, hooks).then(async (result) => {
@@ -75,7 +94,7 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
     const settled = await settleChatJson(
       result.text,
       (prompt) => sendFollowUp(document, provider, prompt, hooks, "corrected JSON"),
-      (note) => hooks.onProgress?.(note),
+      (text) => hooks.onProgress?.(text, { step: "Corrected JSON", status: "sending" }),
       (text) => {
         const accepted = acceptWebChatResult(text, criteria)
         return accepted.ok ? { ok: true } : { ok: false, errors: accepted.errors }
@@ -102,8 +121,8 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
         includeExcerpt: !linked,
         aborted: () => aborted,
         pause: () => new Promise((resolve) => window.setTimeout(resolve, DEFENCE_PAUSE_MS)),
-        onProgress: (text) => report({ type: "air-web-chat-progress", requestId: message.requestId, message: text }),
-        send: (prompt, label) => sendFollowUp(document, provider, prompt, hooks, label ?? "author defence"),
+        onProgress: (text) => hooks.onProgress?.(text, { step: text.replace(/\.$/, ""), status: "sending" }),
+        send: (prompt, label, expect) => sendFollowUp(document, provider, prompt, hooks, label ?? "author defence", expect ?? "text"),
       })
       report({
         type: "air-web-chat-done",

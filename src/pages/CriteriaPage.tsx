@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { Link } from "react-router-dom"
-import { parseCriteria } from "../domain/criteria.ts"
+import { isBonusCriterion, parseCriteria, weightLabel } from "../domain/criteria.ts"
 import { applyCriterionProfile, CRITERION_PROFILES, PROFILE_RANKING_NOTE } from "../domain/profiles.ts"
 import { officialCriteria } from "../domain/officialCriteria.ts"
 import { useAir } from "../context/AirContext.tsx"
@@ -44,7 +44,10 @@ export function CriteriaPage() {
         {officialCriteria.criteria.map((criterion) => (
           <li key={criterion.id} className="rounded-2xl border border-line bg-white/60 p-4">
             <h3 className="font-medium">
-              {criterion.name} <span className="text-sm font-normal text-ink-soft">weight {criterion.weight}</span>
+              {criterion.name}{" "}
+              <span className="text-sm font-normal text-ink-soft">
+                {isBonusCriterion(criterion.id) ? "bonus, not counted in the overall" : `weight ${criterion.weight}`}
+              </span>
             </h3>
             <p className="mt-1 text-sm">{criterion.description}</p>
             <p className="mt-2 text-sm text-ink-soft">{criterion.guidance}</p>
@@ -72,7 +75,7 @@ export function CriteriaPage() {
               <p className="mt-1 text-sm">{profile.summary}</p>
               <p className="mt-2 text-xs text-ink-soft">
                 {profile.proposal ? "Includes estimated project value." : "Estimated project value is hidden."} Weights:{" "}
-                {applied.criteria.map((criterion) => `${criterion.name} ${criterion.weight}`).join(" · ")}
+                {applied.criteria.map((criterion) => weightLabel(criterion)).join(" · ")}
               </p>
             </li>
           )

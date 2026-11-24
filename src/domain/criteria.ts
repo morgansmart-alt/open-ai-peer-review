@@ -124,6 +124,11 @@ export function globalGoalsBadge(score: number): string {
   return `Global goals: ${Math.round(score)} (bonus, not counted in overall)`
 }
 
+export function weightLabel(criterion: { id: string; name: string; weight: number }): string {
+  if (isBonusCriterion(criterion.id)) return `${criterion.name} · bonus, not counted in the overall`
+  return `${criterion.name} · weight ${criterion.weight}`
+}
+
 export function weightedMean(
   scores: { criterionId: string; score: number }[],
   criteria: CriteriaSet,
