@@ -124,23 +124,55 @@ const SCORE_KEY_SKIP = new Set([
   "confidence",
 ])
 
-function scoreEntry(key: string, field: unknown): Record<string, unknown> | null {
-  if (SCORE_KEY_SKIP.has(key.toLowerCase().replace(/[_-]/g, ""))) return null
-  if (typeof field === "number" && Number.isFinite(field)) return { criterionId: key, score: field }
-  if (field && typeof field === "object" && !Array.isArray(field) && "score" in field) return { criterionId: key, ...(field as Record<string, unknown>) }
-  return null
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-/** Turn a scores object, or top-level criterion fields, into the scores array the validator expects. */
+function parseScoreValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.round(value)
+  if (typeof value !== "string") return null
+  const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*(?:\/\s*100)?$/)
+  if (!match) return null
+  return Math.round(Number(match[1]))
+}
+
+function scoreEntry(key: string, field: unknown): Record<string, unknown> | null {
+  if (SCORE_KEY_SKIP.has(key.toLowerCase().replace(/[_-]/g, ""))) return null
+  const direct = parseScoreValue(field)
+  if (direct != null && (typeof field === "number" || typeof field === "string")) return { criterionId: key, score: direct }
+  if (!isRecord(field)) return null
+  const score = parseScoreValue(field.score)
+  if (score == null && !("score" in field)) return null
+  const id = field.criterionId ?? field.id ?? field.name ?? field.label ?? key
+  return { ...field, criterionId: String(id), ...(score != null ? { score } : {}) }
+}
+
+function scoreRows(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) => {
+    if (!isRecord(item)) return []
+    const id = item.criterionId ?? item.id ?? item.name ?? item.label
+    const score = parseScoreValue(item.score)
+    return [{ ...item, ...(id ? { criterionId: String(id) } : {}), ...(score != null ? { score } : {}) }]
+  })
+}
+
+/** Turn nested reviews, criterion-name lists, score objects, and "71/100" strings into the scores array. */
 export function normaliseScoreShape(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value
-  const row = { ...(value as Record<string, unknown>) }
-  if (row.scores && typeof row.scores === "object" && !Array.isArray(row.scores)) {
-    row.scores = Object.entries(row.scores as Record<string, unknown>).flatMap(([key, field]) => {
-      const entry = scoreEntry(key, field) ?? (typeof field === "number" ? { criterionId: key, score: field } : null)
+  if (!isRecord(value)) return value
+  let row = { ...value }
+  for (const key of ["review", "result", "assessment", "report"]) {
+    const inner = row[key]
+    if (isRecord(inner) && (inner.scores || inner.summary || inner.overallScore || inner.criteria)) row = { ...row, ...inner }
+  }
+  if (!Array.isArray(row.scores) && Array.isArray(row.criteria)) row.scores = row.criteria
+  if (row.scores && isRecord(row.scores)) {
+    row.scores = Object.entries(row.scores).flatMap(([key, field]) => {
+      const entry = scoreEntry(key, field)
       return entry ? [entry] : []
     })
   }
+  if (Array.isArray(row.scores)) row.scores = scoreRows(row.scores)
   if (!Array.isArray(row.scores)) {
     const lifted = Object.entries(row).flatMap(([key, field]) => {
       const entry = scoreEntry(key, field)
@@ -149,6 +181,46 @@ export function normaliseScoreShape(value: unknown): unknown {
     if (lifted.length > 0) row.scores = lifted
   }
   return row
+}
+
+function mergeScoreLists(base: unknown, patch: unknown[]): Record<string, unknown>[] {
+  const map = new Map<string, Record<string, unknown>>()
+  for (const item of scoreRows(base)) {
+    const id = String(item.criterionId ?? "")
+    if (id) map.set(id, item)
+  }
+  for (const item of scoreRows(patch)) {
+    const id = String(item.criterionId ?? "")
+    if (!id) continue
+    const previous = map.get(id)
+    if (!previous) {
+      map.set(id, item)
+      continue
+    }
+    const citations = Array.isArray(item.citations) && item.citations.length === 0 && Array.isArray(previous.citations) && previous.citations.length > 0
+      ? previous.citations
+      : item.citations
+    map.set(id, { ...previous, ...item, criterionId: id, ...(citations ? { citations } : {}) })
+  }
+  return [...map.values()]
+}
+
+/** Keep valid fields from the first reply when a correction is only a patch. */
+export function mergeReviewFields(base: unknown, patch: unknown): unknown {
+  const left = isRecord(base) ? { ...base } : {}
+  const right = isRecord(patch) ? patch : {}
+  for (const [key, value] of Object.entries(right)) {
+    if (value == null) continue
+    if (typeof value === "string" && !value.trim()) continue
+    if (Array.isArray(value) && value.length === 0) continue
+    if (key === "summary" && typeof value === "string" && value.trim().length < 40 && typeof left.summary === "string" && left.summary.trim().length >= 40) continue
+    if (key === "scores" && Array.isArray(value)) {
+      left.scores = mergeScoreLists(left.scores, value)
+      continue
+    }
+    left[key] = value
+  }
+  return normaliseScoreShape(left)
 }
 
 /** Strict JSON first. A repair pass covers trailing commas, missing commas, and similar damage. */
@@ -167,7 +239,7 @@ export function reaskJsonPrompt(problem: string, criterionIds: readonly string[]
   const exampleId = criterionIds[0] ?? "impact"
   return [
     `Your JSON did not validate (${detail}).`,
-    "Reply with one JSON object and nothing else.",
+    "Return the FULL corrected JSON object, not a patch. Repeat every field that was already valid.",
     "summary must be a string of at least 40 characters.",
     "scores must be an array with one object for each criterion id.",
     "Each scores object needs criterionId, score (integer 0-100), rationale (at least 20 characters), citations (an array of {quote, location}), and confidence (low, medium, or high).",
@@ -200,7 +272,7 @@ export function rubricTemplateProblem(value: unknown): string | null {
 
 /** Repair when possible. A parse or schema failure asks the chat once, naming the problem. */
 function rejectionNote(problem: string, raw: string): string {
-  const chosen = raw.replace(/\s+/g, " ").trim().slice(0, 200)
+  const chosen = raw.replace(/\s+/g, " ").trim().slice(0, 600)
   return `Rejected the reply. ${problem} Chosen JSON: ${chosen}`
 }
 
@@ -224,11 +296,24 @@ export async function settleChatJson(
       return { text: first.repaired ? first.text : raw, repaired: first.repaired, reasked: false }
     }
     const problem = checked.errors.join(" ")
-    log(rejectionNote(problem, first.text))
+    log(rejectionNote(problem, first.text || raw))
     const follow = await ask(template ? FILL_REVIEW_PROMPT : reaskJsonPrompt(problem, criterionIds))
     const second = parseModelJson(follow)
-    if (second.ok && second.repaired) log("Repaired the corrected JSON.")
-    return { text: second.ok ? (second.repaired ? second.text : follow) : follow, repaired: Boolean(second.ok && second.repaired), reasked: true }
+    const merged = mergeReviewFields(first.value, second.ok ? second.value : {})
+    const mergedText = JSON.stringify(merged)
+    const mergedCheck = validate ? validate(mergedText) : { ok: true as const }
+    if (mergedCheck.ok) {
+      if (second.ok && second.repaired) log("Repaired the corrected JSON.")
+      return { text: mergedText, repaired: true, reasked: true }
+    }
+    const firstText = JSON.stringify(first.value)
+    const firstCheck = validate ? validate(firstText) : { ok: false as const, errors: ["The first reply was not usable."] }
+    if (firstCheck.ok) {
+      log("The correction was less complete than the first reply. Kept the first reply.")
+      return { text: firstText, repaired: true, reasked: true }
+    }
+    log(rejectionNote("errors" in mergedCheck ? mergedCheck.errors.join(" ") : "The corrected JSON was not usable.", mergedText))
+    return { text: mergedText, repaired: true, reasked: true }
   }
   log(rejectionNote(first.error, raw))
   const follow = await ask(reaskJsonPrompt(first.error, criterionIds))

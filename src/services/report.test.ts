@@ -7,7 +7,7 @@ import { weightedMean } from "../domain/criteria.ts"
 import { sha256Hex } from "./hash.ts"
 import { chunkText } from "./textTools.ts"
 import { extractJsonValue, validateReport } from "./validateReport.ts"
-import { parseModelJson, reaskJsonPrompt } from "./jsonText.ts"
+import { mergeReviewFields, parseModelJson, reaskJsonPrompt } from "./jsonText.ts"
 
 const good = {
   summary: "The record states a narrow claim and shows the weighing steps that support it, with the season limit written in the text.",
@@ -158,6 +158,71 @@ describe("validateReport", () => {
     expect(prompt).toContain("at least 40 characters")
     expect(prompt).toContain("impact, clarity")
     expect(prompt).toContain('"criterionId":"impact"')
+    expect(prompt).toContain("FULL corrected JSON")
+  })
+
+  it("keeps an uncited score, maps loose enums, and merges a thinner correction", () => {
+    const scores = officialCriteria.criteria.map((criterion) => ({
+      criterionId: criterion.id,
+      score: criterion.id === "estimated-value" || criterion.id === "simulation" ? 60 : 80,
+      rationale: `${criterion.name} is supported by a passage a reader can find, with the remaining gap named.`,
+      citations: criterion.id === "estimated-value" || criterion.id === "simulation" ? [] : [{ quote: "Net B collected 1.8 litres.", location: "results" }],
+      confidence: "medium" as const,
+    }))
+    const base = {
+      summary: "The record states a narrow claim and shows the weighing steps that support it, with the season limit written in the text.",
+      scores,
+      strengths: ["The files are public."],
+      majorIssues: [],
+      minorIssues: ["The season is narrow."],
+      questionsForAuthors: ["What would a second season change?"],
+      suggestedNextSteps: ["Publish the weighing sheet beside the figure."],
+      ontologyClass: "a physical experiment that can be repeated",
+      physics: { classification: "consistent with known physics", laws: ["conservation of mass"], howAddressed: "The mass balance is written out." },
+      simulation: { reported: 0, passed: 0, methods: "Simulation does not apply to this record.", inputsAvailable: false },
+      valueEstimate: { assumptions: ["The season is one site."], marketDisruption: "Not estimated." },
+      goals: [{ goalId: "clean-water", level: "indirect", note: "The record is about collection, not a target." }],
+      recommendation: "encourage",
+      overallScore: 80,
+    }
+    const accepted = validateReport(base, officialCriteria)
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) return
+    expect(accepted.report.scores.find((score) => score.criterionId === "estimated-value")?.uncited).toBe(true)
+    expect(accepted.report.scores.find((score) => score.criterionId === "impact")?.uncited).toBeUndefined()
+    expect(accepted.report.ontologyClass).toBe("physical-testable")
+    expect(accepted.report.physics?.classification).toBe("CONSISTENT")
+    expect(accepted.report.fieldNotes ?? []).toEqual([])
+    const unknown = validateReport({ ...base, ontologyClass: "banana split" }, officialCriteria)
+    expect(unknown.ok).toBe(true)
+    if (unknown.ok) expect(unknown.report.fieldNotes?.join(" ")).toContain("logical-mathematical")
+    const cited = validateReport({
+      ...base,
+      scores: scores.map((score) => (score.citations.length === 0 ? { ...score, citations: [{ quote: "Net B collected 1.8 litres.", location: "results" }] } : score)),
+    }, officialCriteria)
+    expect(cited.ok && accepted.ok).toBe(true)
+    if (cited.ok) expect(accepted.report.overallScore).not.toBe(cited.report.overallScore)
+    const nested = parseModelJson(JSON.stringify({
+      review: {
+        ...base,
+        criteria: scores.map((score) => ({ name: score.criterionId, score: `${score.score}/100`, rationale: score.rationale, citations: score.citations, confidence: "medium" })),
+        scores: undefined,
+      },
+    }))
+    expect(nested.ok).toBe(true)
+    if (nested.ok) {
+      const shaped = validateReport(nested.value, officialCriteria)
+      expect(shaped.ok).toBe(true)
+      if (shaped.ok) expect(shaped.report.scores.find((score) => score.criterionId === "impact")?.score).toBe(80)
+    }
+    const merged = mergeReviewFields(base, { summary: "short", overallScore: 71, strengths: ["Kept."] })
+    const mergedReport = validateReport(merged, officialCriteria)
+    expect(mergedReport.ok).toBe(true)
+    if (mergedReport.ok) {
+      expect(mergedReport.report.summary).toContain("narrow claim")
+      expect(mergedReport.report.scores.some((score) => score.criterionId === "impact")).toBe(true)
+      expect(mergedReport.report.strengths).toContain("Kept.")
+    }
   })
 
   it("puts Zenodo, DOI, and concept links in the shared prompt and leaves private chat links out of that block", () => {

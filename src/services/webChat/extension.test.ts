@@ -7,7 +7,7 @@ import { CRITERION_PROFILES, readingCriteria } from "../../domain/profiles.ts"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
 import { ackReply, assistantText, attachmentReady, chooseReplyBlock, clickElement, composerTextMatches, confirmComposerText, describeCandidates, diagnose, fillComposer, findComposer, findSubmit, heldPrefix, isPromptEcho, liveTurnText, messageBlocks, placeComposerText, reviewJsonBlock, reviewJsonOnPage, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
 import { buildWebChatPacket } from "./packet.ts"
-import { runTurn, sendFollowUp } from "./runTurn.ts"
+import { replySettled, runTurn, sendFollowUp } from "./runTurn.ts"
 import { acceptWebChatResult } from "./accept.ts"
 import { parseModelJson, settleChatJson } from "../jsonText.ts"
 import { extensionEnvelope, relayFromProvider, relayTargets, type RelayJob } from "./relay.ts"
@@ -1035,6 +1035,9 @@ describe("live chat composers", () => {
     )
     expect(returned).toContain('"overallScore":91')
     expect(returned).not.toContain("must not be scored again")
+    expect(replySettled(3_000, 5_000, false, true)).toBe(false)
+    expect(replySettled(5_000, 5_000, false, true)).toBe(true)
+    expect(replySettled(5_000, 5_000, true, true)).toBe(false)
   })
 
   it("waits out a streaming X reply and does not send a correction for the partial JSON", async () => {

@@ -135,7 +135,7 @@ export function weightLabel(criterion: { id: string; name: string; weight: numbe
 }
 
 export function weightedMean(
-  scores: { criterionId: string; score: number }[],
+  scores: { criterionId: string; score: number; uncited?: boolean }[],
   criteria: CriteriaSet,
   ids?: string[],
 ): number | null {
@@ -151,8 +151,9 @@ export function weightedMean(
       if (isBonusCriterion(criterion.id)) continue
       return null
     }
-    weight += criterion.weight
-    total += criterion.weight * found.score
+    const factor = found.uncited ? 0.5 : 1
+    weight += criterion.weight * factor
+    total += criterion.weight * factor * found.score
   }
   if (weight <= 0) return null
   return round2(total / weight)

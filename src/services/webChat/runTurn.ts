@@ -102,6 +102,11 @@ function stepDiagnostic(doc: Document): string {
 
 export type ReplyExpect = "json" | "text"
 
+/** A reply is ready only after the text has been still for the full gate and the stop control is gone. */
+export function replySettled(quietMs: number, stableMs: number, streaming: boolean, hasReply: boolean): boolean {
+  return hasReply && !streaming && quietMs >= stableMs
+}
+
 function note(hooks: TurnHooks, step: string, status: string, detail: string, diagnostic = ""): void {
   hooks.onProgress?.(detail, { step, status, ...(diagnostic ? { detail: diagnostic } : {}) })
 }
@@ -172,7 +177,6 @@ async function waitForReply(
   const startLimit = hooks.replyStartTimeoutMs ?? 20_000
   const start = Date.now()
   let lastReply = ""
-  let stableFor = 0
   let lastAck = ""
   let ackStable = 0
   let started = false
@@ -201,12 +205,10 @@ async function waitForReply(
     const sendReady = Boolean(findSubmit(doc, provider.selectors.submit, composer))
     if (reply || ack) started = true
     const changed = reply !== lastReply
-    if (changed) lastChange = Date.now()
-    if (changed || streaming) {
-      if (changed) lastReply = reply
-      stableFor = 0
-    } else stableFor += pollMs
-    const diagnostic = replyDiagnostic(selector, reply.length, lastChange, changed ? 0 : stableFor, stableMs, streaming)
+    if (changed) lastReply = reply
+    if (changed || streaming || lastChange === null) lastChange = Date.now()
+    const quietFor = Date.now() - lastChange
+    const diagnostic = replyDiagnostic(selector, reply.length, changed ? Date.now() : lastChange, changed || streaming ? 0 : quietFor, stableMs, streaming)
     if (changed || Date.now() - lastLog >= 3_000) {
       note(hooks, label, reply ? "reading" : "waiting", `Waiting for the reply: ${label}.`, diagnostic)
       lastLog = Date.now()
@@ -229,7 +231,7 @@ async function waitForReply(
         )
       }
     }
-    const settled = Boolean(reply) && !changed && !streaming && stableFor >= stableMs
+    const settled = replySettled(quietFor, stableMs, streaming, Boolean(reply) && !changed)
     if (expect === "text" && settled) return reply
     if (expect === "json" && settled && json) return json
     if (!reply && Date.now() - start >= silentMs) {

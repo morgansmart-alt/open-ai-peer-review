@@ -13,7 +13,7 @@ export interface ReviewCard {
   defendedLabel?: string
   roundsLabel?: string
   sheetNote?: string
-  scores?: { criterionId: string; score: number }[]
+  scores?: { criterionId: string; score: number; uncited?: boolean }[]
   feedback?: { label: string; text: string }[]
   model?: string
   notice?: string
@@ -341,7 +341,7 @@ export function renderReviewApp(root: HTMLElement, model: ReviewModel, actions: 
         const line =
           score.criterionId === "global-goals"
             ? `Global goals: ${Math.round(score.score)} (bonus, not counted in overall)`
-            : `${score.criterionId}: ${Math.round(score.score)}`
+            : `${score.criterionId}: ${Math.round(score.score)}${score.uncited ? " · uncited, half weight" : ""}`
         el(list, "li", line)
       }
     }

@@ -31,31 +31,84 @@ function payloads<T>(rows: { payload: T }[] | null): T[] {
   return (rows ?? []).map((row) => row.payload)
 }
 
-async function loadRemote(sb: SupabaseClient): Promise<AirDatabase> {
-  const [reviews, nodes, issues, claims] = await Promise.all([
-    sb.from("air_reviews").select("payload").limit(1000),
-    sb.from("air_nodes").select("payload").limit(2000),
-    sb.from("air_issues").select("payload").limit(2000),
-    sb.from("air_claims").select("payload").limit(1000),
-  ])
-  const webChat = await sb.from("air_web_chat").select("id, payload").limit(1000)
-  const error = reviews.error || nodes.error || issues.error || claims.error
-  if (error) throw new Error(error.message)
-  const webRows = webChat.error ? [] : ((webChat.data as { id?: string; payload: WebChatSubmission }[] | null) ?? [])
-  return {
-    reviews: payloads<StoredReview>(reviews.data as { payload: StoredReview }[] | null),
-    nodes: payloads<NodeSubmission>(nodes.data as { payload: NodeSubmission }[] | null),
-    issues: payloads<IssueThread>(issues.data as { payload: IssueThread }[] | null),
-    claims: payloads<AuthorClaim>(claims.data as { payload: AuthorClaim }[] | null),
-    webChat: webRows.map((row) => submissionToStored({ ...row.payload, id: row.id })),
+export const REMOTE_BOARD_TIMEOUT_MS = 20_000
+
+export function withTimeout<T>(promise: PromiseLike<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} did not answer within ${Math.round(ms / 1000)} seconds.`)), ms)
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        reject(error instanceof Error ? error : new Error(label))
+      },
+    )
+  })
+}
+
+type QueryResult<T> = { data: T | null; error: { message: string } | null }
+
+async function settledQuery<T>(label: string, query: PromiseLike<QueryResult<T>>): Promise<{ data: T | null; error: string | null }> {
+  try {
+    const result = await withTimeout(query, REMOTE_BOARD_TIMEOUT_MS, label)
+    if (result.error) return { data: null, error: `${label}: ${result.error.message}` }
+    return { data: result.data, error: null }
+  } catch (error) {
+    return { data: null, error: error instanceof Error ? error.message : `${label} failed.` }
   }
+}
+
+export function assembleRemoteBoard(input: {
+  reviews: StoredReview[] | null
+  reviewsError: string | null
+  nodes: NodeSubmission[] | null
+  issues: IssueThread[] | null
+  claims: AuthorClaim[] | null
+  webChat: StoredReview[]
+  webChatError: string | null
+}): { db: AirDatabase; error: string | null } {
+  const notes = [input.reviewsError, input.webChatError].filter((item): item is string => Boolean(item))
+  return {
+    db: {
+      reviews: input.reviews ?? [],
+      nodes: input.nodes ?? [],
+      issues: input.issues ?? [],
+      claims: input.claims ?? [],
+      webChat: input.webChat,
+    },
+    error: notes.length > 0 ? notes.join(" ") : null,
+  }
+}
+
+async function loadRemote(sb: SupabaseClient): Promise<{ db: AirDatabase; error: string | null }> {
+  const [reviews, nodes, issues, claims, webChat] = await Promise.all([
+    settledQuery("Ranked reviews", sb.from("air_reviews").select("payload").limit(1000)),
+    settledQuery("Checks", sb.from("air_nodes").select("payload").limit(2000)),
+    settledQuery("Issues", sb.from("air_issues").select("payload").limit(2000)),
+    settledQuery("Claims", sb.from("air_claims").select("payload").limit(1000)),
+    settledQuery("Web-chat scores", sb.from("air_web_chat").select("id, payload").limit(1000)),
+  ])
+  const webRows = (webChat.data as { id?: string; payload: WebChatSubmission }[] | null) ?? []
+  return assembleRemoteBoard({
+    reviews: reviews.data ? payloads<StoredReview>(reviews.data as { payload: StoredReview }[]) : null,
+    reviewsError: reviews.error,
+    nodes: nodes.data ? payloads<NodeSubmission>(nodes.data as { payload: NodeSubmission }[]) : null,
+    issues: issues.data ? payloads<IssueThread>(issues.data as { payload: IssueThread }[]) : null,
+    claims: claims.data ? payloads<AuthorClaim>(claims.data as { payload: AuthorClaim }[]) : null,
+    webChat: webRows.map((row) => submissionToStored({ ...row.payload, id: row.id })),
+    webChatError: webChat.error,
+  })
 }
 
 export async function openBackend(): Promise<{ mode: BackendMode; db: AirDatabase; error: string | null }> {
   const sb = client()
   if (!sb) return { mode: "local", db: loadLocalDatabase(), error: null }
   try {
-    return { mode: "supabase", db: await loadRemote(sb), error: null }
+    const loaded = await loadRemote(sb)
+    return { mode: "supabase", db: loaded.db, error: loaded.error }
   } catch (error) {
     const message = error instanceof Error ? error.message : "The shared board could not be opened."
     return { mode: "local", db: loadLocalDatabase(), error: message }

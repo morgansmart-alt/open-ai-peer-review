@@ -108,16 +108,21 @@ export function validateReport(input: unknown, criteria: CriteriaSet): { ok: tru
       errors.push(`${criterion.id} score must be an integer from ${criteria.scale.min} to ${criteria.scale.max}.`)
     }
     const rationale = clip(found.rationale ?? found.reason, 2000)
-    if (!bonus && rationale.length < 20) errors.push(`${criterion.id} rationale is too short.`)
-    const citations = citationsFrom(found.citations ?? found.quotes, bonus ? [] : errors, criterion.id)
-    if (!bonus && citations.length === 0) errors.push(`${criterion.id} needs at least one citation.`)
+    const citations = citationsFrom(found.citations ?? found.quotes, [], criterion.id)
+    const uncited = !bonus && citations.length === 0
     const confidenceRaw = clip(found.confidence, 16).toLowerCase()
     const confidence = confidenceRaw === "low" || confidenceRaw === "med" || confidenceRaw === "medium" || confidenceRaw === "high" ? confidenceRaw : ""
-    if (!bonus && criteria.reportSchema === "0.2" && !confidence) errors.push(`${criterion.id} needs a confidence of low, medium, or high.`)
     const normalizedConfidence: Confidence | undefined =
       confidence === "high" ? "high" : confidence === "medium" || confidence === "med" ? "medium" : confidence === "low" ? "low" : undefined
     if (bonus && (!Number.isInteger(score) || score < criteria.scale.min || score > criteria.scale.max)) return null
-    return { criterionId: criterion.id, score, rationale: rationale || (bonus ? "Bonus score. Not counted in the overall." : ""), citations, confidence: normalizedConfidence }
+    return {
+      criterionId: criterion.id,
+      score,
+      rationale: rationale || (bonus ? "Bonus score. Not counted in the overall." : "No rationale was given."),
+      citations,
+      confidence: normalizedConfidence ?? (criteria.reportSchema === "0.2" ? "medium" : undefined),
+      ...(uncited ? { uncited: true } : {}),
+    }
   })
 
   const recommendation = recommendationId(clip(input.recommendation, 160), criteria)
@@ -204,14 +209,38 @@ function rangeFrom(value: unknown, fallbackUnit: string): ValueRange {
   }
 }
 
+function normaliseOntology(raw: string): { value: OntologyClass; assumed: boolean } {
+  const text = raw.toLowerCase().replace(/[_/]+/g, " ").replace(/\s+/g, " ").trim()
+  if (!text) return { value: "logical-mathematical", assumed: true }
+  if (/not yet|untestable|not-yet|not yet testable/.test(text)) return { value: "physical-not-yet-testable", assumed: false }
+  if (/philosoph|metaphys/.test(text)) return { value: "metaphysical-philosophical", assumed: false }
+  if (/math|logic/.test(text)) return { value: "logical-mathematical", assumed: false }
+  if (/physical|empiric|testable|experiment/.test(text)) return { value: "physical-testable", assumed: false }
+  if (ontologyClasses.has(text)) return { value: text as OntologyClass, assumed: false }
+  return { value: "logical-mathematical", assumed: true }
+}
+
+function normalisePhysicsClass(raw: string): { value: PhysicsCheck["classification"]; assumed: boolean } {
+  const text = raw.toLowerCase().replace(/[_/]+/g, " ").replace(/\s+/g, " ").trim()
+  if (!text) return { value: "CONSISTENT", assumed: true }
+  if (text === "extends" || text.startsWith("extend") || text === "extension") return { value: "EXTENDS", assumed: false }
+  if (text.startsWith("challenge") || text.includes("contradict")) return { value: "CHALLENGES", assumed: false }
+  if (text === "consistent" || text.startsWith("consistent")) return { value: "CONSISTENT", assumed: false }
+  if (physicsClasses.has(text.toUpperCase())) return { value: text.toUpperCase() as PhysicsCheck["classification"], assumed: false }
+  return { value: "CONSISTENT", assumed: true }
+}
+
 function readV2(input: Record<string, unknown>, errors: string[], includeValue: boolean): Partial<ReviewReport> {
-  const ontologyClass = clip(input.ontologyClass, 80)
-  if (!ontologyClasses.has(ontologyClass)) errors.push("ontologyClass must be one of the four AIR classes.")
+  const ontologySource = clip(input.ontologyClass, 120)
+  const ontology = normaliseOntology(ontologySource)
+  const fieldNotes: string[] = []
+  if (ontology.assumed) fieldNotes.push(`ontologyClass "${ontologySource || "missing"}" was read as ${ontology.value}.`)
   const physicsRaw = isRecord(input.physics) ? input.physics : null
-  const classification = clip(physicsRaw?.classification, 20).toUpperCase()
-  if (!physicsClasses.has(classification)) errors.push("physics.classification must be CONSISTENT, EXTENDS, or CHALLENGES.")
+  const classSource = clip(physicsRaw?.classification, 80)
+  const physicsClass = normalisePhysicsClass(classSource)
+  if (physicsClass.assumed) fieldNotes.push(`physics.classification "${classSource || "missing"}" was read as ${physicsClass.value}.`)
   const physics: PhysicsCheck = {
-    classification: (physicsClasses.has(classification) ? classification : "CONSISTENT") as PhysicsCheck["classification"],
+    classification: physicsClass.value,
     laws: stringArray(physicsRaw?.laws, 8, 120),
     howAddressed: clip(physicsRaw?.howAddressed, 800),
   }
@@ -250,11 +279,12 @@ function readV2(input: Record<string, unknown>, errors: string[], includeValue: 
     : []
   if (goals.length === 0) errors.push("goals must list a level for the documented public goals you considered.")
   return {
-    ontologyClass: (ontologyClasses.has(ontologyClass) ? ontologyClass : undefined) as OntologyClass | undefined,
+    ontologyClass: ontology.value,
     physics,
     simulation,
     ...(includeValue ? { valueEstimate } : {}),
     goals,
+    ...(fieldNotes.length > 0 ? { fieldNotes } : {}),
   }
 }
 

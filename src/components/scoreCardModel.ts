@@ -42,6 +42,7 @@ export interface CriterionBar {
     badge: ReviewerBadge
     score: number
     evidence?: EvidenceLabel
+    uncited?: boolean
     rationale: string
   }>
 }
@@ -77,6 +78,7 @@ export function criterionBars(reviews: StoredReview[], criteria: CriteriaSet, na
           badge: reviewerBadge(review),
           score: boardValue(score.score, review.report, review.criteriaVersion),
           evidence: score.evidence,
+          uncited: score.uncited,
           rationale: score.rationale,
         },
       ]
