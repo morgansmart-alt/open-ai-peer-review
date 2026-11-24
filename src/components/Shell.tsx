@@ -56,7 +56,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const nextTheme = theme === "dark" ? "light" : "dark"
   return (
     <div className={cx(!embedded && "min-h-screen", "text-ink")}>
-      <a href="#content" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-full focus:border focus:border-line focus:bg-paper focus:px-3 focus:py-2 focus:text-ink">
+      <a href="#content" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-20 focus:z-50 focus:rounded-full focus:border focus:border-line focus:bg-paper focus:px-3 focus:py-2 focus:text-ink focus:shadow-sm">
         Skip to content
       </a>
       <header className="no-print sticky top-0 z-30 border-b border-line/80 bg-paper/90 backdrop-blur">

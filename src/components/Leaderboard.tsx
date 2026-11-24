@@ -69,7 +69,7 @@ export function Leaderboard() {
   if (!method) return null
 
   return (
-    <section id="board" aria-labelledby="board-heading" className="mx-auto max-w-6xl scroll-mt-20 px-4 pb-8">
+    <section id="board" aria-labelledby="board-heading" className="mx-auto max-w-6xl scroll-mt-24 px-4 pb-8">
       <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
         <h2 id="board-heading" className="font-serif text-2xl">
           Records by AIR score

@@ -166,6 +166,8 @@ describe("landing, guide, comments, and score card", () => {
     expect(markup).toContain("For reviewers")
     expect(markup).toContain("The rubric in plain words")
     expect(markup).toContain("How to use the browser extension")
+    expect(markup).toContain('id="rubric"')
+    expect(markup).toContain("scroll-mt-24")
     expect(markup).toContain("Limitations")
     expect(markup).toContain("Load it unpacked")
     expect(markup).not.toContain("testimonial")

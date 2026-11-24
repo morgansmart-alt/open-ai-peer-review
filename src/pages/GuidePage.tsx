@@ -25,7 +25,7 @@ export function GuidePage() {
         ))}
       </nav>
 
-      <section id="for-submitters" tabIndex={-1} aria-labelledby="submitters-heading" className="mt-10">
+      <section id="for-submitters" tabIndex={-1} aria-labelledby="submitters-heading" className="mt-10 scroll-mt-24">
         <h2 id="submitters-heading" className="font-serif text-2xl">
           For submitters
         </h2>
@@ -54,7 +54,7 @@ export function GuidePage() {
         </p>
       </section>
 
-      <section id="for-reviewers" tabIndex={-1} aria-labelledby="reviewers-heading" className="mt-10">
+      <section id="for-reviewers" tabIndex={-1} aria-labelledby="reviewers-heading" className="mt-10 scroll-mt-24">
         <h2 id="reviewers-heading" className="font-serif text-2xl">
           For reviewers
         </h2>
@@ -71,7 +71,7 @@ export function GuidePage() {
         </dl>
       </section>
 
-      <section id="rubric" tabIndex={-1} aria-labelledby="rubric-heading" className="mt-10">
+      <section id="rubric" tabIndex={-1} aria-labelledby="rubric-heading" className="mt-10 scroll-mt-24">
         <h2 id="rubric-heading" className="font-serif text-2xl">
           The rubric in plain words
         </h2>
@@ -94,7 +94,7 @@ export function GuidePage() {
         </p>
       </section>
 
-      <section id="extension" tabIndex={-1} aria-labelledby="extension-heading" className="mt-10">
+      <section id="extension" tabIndex={-1} aria-labelledby="extension-heading" className="mt-10 scroll-mt-24">
         <h2 id="extension-heading" className="font-serif text-2xl">
           How to use the browser extension
         </h2>
