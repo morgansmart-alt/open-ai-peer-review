@@ -2388,6 +2388,40 @@ ${output}
   }
 
   // src/services/webChat/paperText.ts
+  var PAPER_TEXT_ORIGIN = "https://morgansmart-alt.github.io/open-ai-peer-review";
+  var PAPER_TEXT_FUNCTION = "https://lotswxboafsenmszijpf.supabase.co/functions/v1/paper-text";
+  function paperTextUrl(recordId, origin = PAPER_TEXT_ORIGIN) {
+    return `${origin.replace(/\/$/, "")}/paper-text/${encodeURIComponent(recordId)}.txt`;
+  }
+  function paperTextFunctionUrl(recordId, endpoint = PAPER_TEXT_FUNCTION) {
+    return `${endpoint.replace(/\/$/, "")}?id=${encodeURIComponent(recordId)}`;
+  }
+  function paperTextCandidates(recordId) {
+    return [paperTextUrl(recordId), paperTextFunctionUrl(recordId)];
+  }
+  function recordIdFromPaperTextUrl(url) {
+    try {
+      const parsed = new URL(url);
+      const file = parsed.pathname.match(/\/paper-text\/(\d+)\.txt$/);
+      if (file?.[1]) return file[1];
+      const query = parsed.searchParams.get("id");
+      if (query && /^\d+$/.test(query)) return query;
+      const route = parsed.pathname.match(/\/paper\/(\d+)\/text\/?$/);
+      return route?.[1] ?? null;
+    } catch {
+      return null;
+    }
+  }
+  async function choosePaperTextUrl(recordId, load2) {
+    for (const url of paperTextCandidates(recordId)) {
+      try {
+        const loaded = await load2(url);
+        if (textPageHasPaper(loaded.status, loaded.body)) return url;
+      } catch {
+      }
+    }
+    return null;
+  }
   function linkReadingPrompt(url, system, instructions) {
     return [
       "Open this public text page and read the full paper. No sign-in is required.",
@@ -2410,8 +2444,8 @@ ${output}
     if (status !== 200) return false;
     if (/<div id=["']root["']>\s*<\/div>/.test(body) && !/Zenodo record:/.test(body)) return false;
     const text = body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    if (text.length < 400) return false;
-    return /Zenodo record:|Version DOI:/.test(text);
+    if (!/Zenodo record:|Version DOI:/.test(text)) return false;
+    return text.length >= 80;
   }
   function missingContextText(reply) {
     const match = reply.match(/"missingContext"\s*:\s*"((?:\\.|[^"\\])*)"/i);
@@ -2421,7 +2455,7 @@ ${output}
   function textPageUntrusted(reply) {
     const context = missingContextText(reply);
     const failed = /404|could not open|couldn't open|cannot open|can't open|unable to (?:open|access|reach)|page not found|not reachable|failed to (?:open|load|fetch)|returned 404/i;
-    const aboutPage = /paper\/[^/\s"']+\/text|open-ai-peer-review|text page|github\.io/i;
+    const aboutPage = /paper\/[^/\s"']+\/text|open-ai-peer-review|text page|github\.io|paper-text|functions\/v1\/paper-text/i;
     if (context && failed.test(context) && (aboutPage.test(context) || /url|link|page/i.test(context))) return true;
     return aboutPage.test(reply) && failed.test(reply);
   }
@@ -3410,12 +3444,17 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       let activePacket = packet;
       let notice;
       if (activePacket.textUrl) {
-        const live = await pageIsLive(activePacket.textUrl, hooks);
-        if (!live) {
+        const id = recordIdFromPaperTextUrl(activePacket.textUrl);
+        const load2 = hooks.loadTextPage ?? ((url) => fetch(url).then(async (response) => ({ status: response.status, body: await response.text() })));
+        const chosen = id ? await choosePaperTextUrl(id, load2) : await pageIsLive(activePacket.textUrl, hooks) ? activePacket.textUrl : null;
+        if (!chosen) {
           hooks.onProgress?.("The public text page is not available. Sending the paper in the chat instead.");
           const { textUrl: dropped, ...rest } = activePacket;
           void dropped;
           activePacket = rest;
+        } else if (chosen !== activePacket.textUrl) {
+          hooks.onProgress?.("The static text file is not on the site yet. Using the text service instead.");
+          activePacket = { ...activePacket, textUrl: chosen };
         }
       }
       let planned = planDelivery(activePacket, providerForPlan);

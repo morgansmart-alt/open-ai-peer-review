@@ -2727,7 +2727,7 @@ ${output}
     return `https://zenodo.org/records/${cleaned}`;
   }
   function sourceRecordBlock(record) {
-    const versionUrl = zenodoRecordsUrl(record.id) || (record.htmlUrl.startsWith("https://zenodo.org/records/") ? record.htmlUrl : "");
+    const versionUrl = zenodoRecordsUrl(record.id) || (record.htmlUrl?.startsWith("https://zenodo.org/records/") ? record.htmlUrl : "");
     const doiUrl = publicDoiUrl(record.doi);
     const conceptUrl = zenodoRecordsUrl(record.conceptId);
     const conceptDoiUrl = publicDoiUrl(record.conceptDoi);
@@ -2823,18 +2823,19 @@ ${output}
     const doi = (record.doi ?? "").replace(/^https?:\/\/doi\.org\//i, "");
     return doi.match(/zenodo\.(\d+)$/i)?.[1] ?? "";
   }
-  function paperTextPath(recordId) {
-    return `/paper/${encodeURIComponent(recordId)}/text`;
-  }
   function paperTextUrl(recordId, origin = PAPER_TEXT_ORIGIN) {
-    const base = origin.replace(/\/$/, "");
-    return `${base}${paperTextPath(recordId)}`;
+    return `${origin.replace(/\/$/, "")}/paper-text/${encodeURIComponent(recordId)}.txt`;
   }
   function isPublicPaperTextUrl(url) {
     try {
       const parsed2 = new URL(url);
-      if (parsed2.origin !== "https://morgansmart-alt.github.io") return false;
-      return /\/open-ai-peer-review\/paper\/[^/]+\/text\/?$/.test(parsed2.pathname);
+      if (parsed2.origin === "https://lotswxboafsenmszijpf.supabase.co" && parsed2.pathname === "/functions/v1/paper-text") {
+        return /^\d+$/.test(parsed2.searchParams.get("id") ?? "");
+      }
+      if (parsed2.origin === "https://morgansmart-alt.github.io") {
+        return /\/open-ai-peer-review\/paper-text\/\d+\.txt$/.test(parsed2.pathname) || /\/open-ai-peer-review\/paper\/[^/]+\/text\/?$/.test(parsed2.pathname);
+      }
+      return false;
     } catch {
       return false;
     }
