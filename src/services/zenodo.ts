@@ -236,22 +236,97 @@ export function filesAreRestricted(record: ZenodoRecord): boolean {
   return files !== "public" && files !== "open"
 }
 
-async function readJson(url: string): Promise<unknown> {
-  let response: Response
-  try {
-    response = await fetch(url)
-  } catch {
-    throw new ZenodoError("The browser could not reach Zenodo. Check the connection and try again.", 0)
+export interface ZenodoAccess {
+  record: string
+  files: string
+}
+
+/** Gentle pauses before the second and third try. Tests can shorten these. */
+export const zenodoTransport = { delaysMs: [500, 1200] }
+
+function accessWord(value: string): string {
+  return value.trim().toLowerCase()
+}
+
+export function isOpenFileAccess(access: ZenodoAccess): boolean {
+  const open = (value: string) => {
+    const word = accessWord(value)
+    return word === "public" || word === "open"
   }
-  if (response.status === 404) {
-    throw new ZenodoError("No Zenodo record matches that id. Check the link or the DOI.", 404)
+  return open(access.record) && open(access.files)
+}
+
+export function zenodoHttpMessage(status: number, access?: ZenodoAccess | null, kind: "record" | "file" = "record"): string {
+  if (status === 404) return "No Zenodo record matches that id. Check the link or the DOI."
+  if (status === 401 || (status === 403 && access && !isOpenFileAccess(access))) {
+    return kind === "file"
+      ? "This file is restricted or embargoed, so AIR cannot read it."
+      : "Zenodo refused this record. It may be restricted or embargoed."
   }
-  if (response.status === 403 || response.status === 401) {
-    throw new ZenodoError("Zenodo refused this record. It may be restricted or embargoed.", response.status)
+  if (status === 403 || status === 429) {
+    const open = Boolean(access && isOpenFileAccess(access))
+    const why = open
+      ? "The record is open access, so this is likely rate limiting or a temporary block."
+      : "If the record is open, this is likely rate limiting or a temporary block."
+    return `Zenodo returned ${status}. ${why} Wait a moment and try again.`
   }
-  if (!response.ok) {
-    throw new ZenodoError(`Zenodo returned ${response.status} for that record.`, response.status)
+  return kind === "file" ? `The file download failed (${status}).` : `Zenodo returned ${status} for that record.`
+}
+
+/**
+ * Accept is a CORS-safelisted header. User-Agent is forbidden in browser fetch,
+ * so it is sent only where the runtime allows it and cannot trigger a preflight.
+ */
+export function zenodoClientHeaders(kind: "json" | "bytes"): Record<string, string> {
+  const headers: Record<string, string> = {}
+  if (kind === "json") headers.Accept = "application/json"
+  if (typeof window === "undefined") {
+    headers["User-Agent"] = "open-ai-peer-review (https://github.com/morgansmart-alt/open-ai-peer-review)"
   }
+  return headers
+}
+
+function pause(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve()
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+export async function fetchZenodoResponse(url: string, kind: "json" | "bytes", access?: ZenodoAccess | null): Promise<Response> {
+  const delays = zenodoTransport.delaysMs
+  const attempts = delays.length + 1
+  let lastNetworkError = false
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    let response: Response
+    try {
+      response = await fetch(url, { headers: zenodoClientHeaders(kind) })
+      lastNetworkError = false
+    } catch {
+      lastNetworkError = true
+      break
+    }
+    const restricted = Boolean(access && !isOpenFileAccess(access))
+    const retryable = response.status === 429 || response.status === 503 || (response.status === 403 && !restricted)
+    if (!retryable || response.ok || attempt === attempts - 1) return response
+    await pause(delays[attempt] ?? 0)
+  }
+  if (lastNetworkError) {
+    throw new ZenodoError(
+      kind === "bytes"
+        ? "The file host blocked the browser (CORS). Drop the PDF or text file beside the DOI and the review can still run."
+        : "The browser could not reach Zenodo. Check the connection and try again.",
+      0,
+    )
+  }
+  throw new ZenodoError("The browser could not reach Zenodo. Check the connection and try again.", 0)
+}
+
+async function readJson(url: string, access?: ZenodoAccess | null): Promise<unknown> {
+  const response = await fetchZenodoResponse(url, "json", access)
+  if (response.status === 404) throw new ZenodoError(zenodoHttpMessage(404, access), 404)
+  if (response.status === 401 || response.status === 403 || response.status === 429) {
+    throw new ZenodoError(zenodoHttpMessage(response.status, access), response.status)
+  }
+  if (!response.ok) throw new ZenodoError(zenodoHttpMessage(response.status, access), response.status)
   return response.json()
 }
 
@@ -270,27 +345,58 @@ export interface ZenodoVersion {
   stableId: string
 }
 
+function versionFromSearchHit(item: unknown): ZenodoVersion | null {
+  const record = asRecord(item)
+  const metadata = asRecord(record?.metadata)
+  const id = text(record?.id)
+  if (!id) return null
+  const doi = text(record?.doi) || text(metadata?.doi) || `10.5281/zenodo.${id}`
+  return {
+    id,
+    doi,
+    title: text(metadata?.title) || text(record?.title),
+    publicationDate: text(metadata?.publication_date),
+    version: text(metadata?.version),
+    stableId: stableVersionId({ id, doi }),
+  }
+}
+
+function nextPageUrl(link: string, base: string): string | null {
+  if (!link) return null
+  try {
+    const url = new URL(link, base)
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null
+    return url.toString()
+  } catch {
+    return null
+  }
+}
+
+const VERSION_PAGE_CAP = 50
+
 export async function fetchRecordVersions(conceptId: string): Promise<ZenodoVersion[]> {
-  const data = asRecord(await readJson(`https://zenodo.org/api/records?q=${encodeURIComponent(`conceptrecid:${conceptId}`)}&all_versions=true&size=20&sort=mostrecent`))
-  const hits = asRecord(data?.hits)
-  const list = Array.isArray(hits?.hits) ? hits.hits : []
-  return list.flatMap((item) => {
-    const record = asRecord(item)
-    const metadata = asRecord(record?.metadata)
-    const id = text(record?.id)
-    if (!id) return []
-    const doi = text(record?.doi) || text(metadata?.doi) || `10.5281/zenodo.${id}`
-    return [
-      {
-        id,
-        doi,
-        title: text(metadata?.title) || text(record?.title),
-        publicationDate: text(metadata?.publication_date),
-        version: text(metadata?.version),
-        stableId: stableVersionId({ id, doi }),
-      },
-    ]
-  })
+  const versions: ZenodoVersion[] = []
+  const seenIds = new Set<string>()
+  const seenUrls = new Set<string>()
+  let url: string | null = `https://zenodo.org/api/records?q=${encodeURIComponent(`conceptrecid:${conceptId}`)}&all_versions=true&size=100&sort=mostrecent`
+  while (url && !seenUrls.has(url) && seenUrls.size < VERSION_PAGE_CAP) {
+    seenUrls.add(url)
+    const data = asRecord(await readJson(url))
+    const hits = asRecord(data?.hits)
+    const list = Array.isArray(hits?.hits) ? hits.hits : []
+    let added = 0
+    for (const item of list) {
+      const version = versionFromSearchHit(item)
+      if (!version || seenIds.has(version.id)) continue
+      seenIds.add(version.id)
+      versions.push(version)
+      added += 1
+    }
+    const next = nextPageUrl(text(asRecord(data?.links)?.next), url)
+    if (!next || added === 0 || list.length === 0) break
+    url = next
+  }
+  return versions
 }
 
 export interface RelatedSnippet {
@@ -392,6 +498,14 @@ function leadingIndex(file: ZenodoFile): number | null {
   return match ? Number(match[1]) : null
 }
 
+function compareLeading(a: ZenodoFile, b: ZenodoFile): number {
+  const aIndex = leadingIndex(a)
+  const bIndex = leadingIndex(b)
+  if (aIndex !== null && bIndex !== null && aIndex !== bIndex) return aIndex - bIndex
+  if ((aIndex === null) !== (bIndex === null)) return aIndex === null ? 1 : -1
+  return b.size - a.size || a.key.localeCompare(b.key)
+}
+
 export function defaultFileSelection(files: ZenodoFile[]): string[] {
   const seen = new Set<string>()
   const readable = files.filter((file) => {
@@ -403,27 +517,28 @@ export function defaultFileSelection(files: ZenodoFile[]): string[] {
     seen.add(file.key)
     return true
   })
-  const readme = readable.find(isReadmeFile)
+  const supplements = readable.filter(isSupplementFile).sort((a, b) => a.key.localeCompare(b.key))
+  const supplementSet = new Set(supplements)
   const manuscripts = readable
-    .filter((file) => file.extension === "pdf" && !isSupplementFile(file))
+    .filter((file) => file.extension === "pdf" && !supplementSet.has(file))
     .sort((a, b) => {
       const aIndex = leadingIndex(a)
       const bIndex = leadingIndex(b)
       const aPrimary = aIndex === 1 ? 0 : 1
       const bPrimary = bIndex === 1 ? 0 : 1
       if (aPrimary !== bPrimary) return aPrimary - bPrimary
-      if (aIndex !== null && bIndex !== null && aIndex !== bIndex) return aIndex - bIndex
-      if ((aIndex === null) !== (bIndex === null)) return aIndex === null ? 1 : -1
-      return b.size - a.size
+      return compareLeading(a, b)
     })
   const primary = manuscripts[0]
-  const companion = primary && leadingIndex(primary) === 1 ? manuscripts.find((file) => leadingIndex(file) === 2) : undefined
-  const supplements = readable
-    .filter((file) => isSupplementFile(file) && file !== readme && file !== primary && file !== companion)
-    .sort((a, b) => a.key.localeCompare(b.key))
-  const rest = readable
-    .filter((file) => file !== readme && file !== primary && file !== companion && !isSupplementFile(file))
-    .sort((a, b) => b.size - a.size)
+  const otherPdfs = manuscripts.filter((file) => file !== primary).sort(compareLeading)
+  const texts = readable
+    .filter((file) => file.extension !== "pdf" && !supplementSet.has(file))
+    .sort((a, b) => {
+      const aReadme = isReadmeFile(a) ? 0 : 1
+      const bReadme = isReadmeFile(b) ? 0 : 1
+      if (aReadme !== bReadme) return aReadme - bReadme
+      return a.key.localeCompare(b.key)
+    })
   const picked: ZenodoFile[] = []
   let total = 0
   const take = (file: ZenodoFile | undefined) => {
@@ -433,13 +548,16 @@ export function defaultFileSelection(files: ZenodoFile[]): string[] {
     total += file.size
   }
   take(primary)
-  take(companion)
-  take(readme)
   for (const file of supplements) take(file)
-  if (!primary) {
-    for (const file of rest) take(file)
-  }
+  for (const file of otherPdfs) take(file)
+  for (const file of texts) take(file)
   return picked.map((file) => file.key)
+}
+
+/** Readable files from this record whose keys were chosen. Keys from another version do not match. */
+export function selectedReadableFiles(files: ZenodoFile[], selectedKeys: readonly string[]): ZenodoFile[] {
+  const allowed = new Set(selectedKeys)
+  return files.filter((file) => isTextualFile(file) && allowed.has(file.key))
 }
 
 export function formatRecordStamp(record: Pick<ZenodoRecord, "version" | "id" | "publicationDate">): string {

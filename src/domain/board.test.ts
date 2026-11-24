@@ -109,6 +109,32 @@ describe("ranking", () => {
     expect(shrink(5, 1)).toBeLessThan(shrink(4.2, 6))
   })
 
+  it("ranks by the human review score without changing the weighted panel order", () => {
+    const high = scored({ id: "ai-high", assessorId: "grok", doi: "10.5281/zenodo.81", recordId: "81", title: "Panel high" }, 80, 80, "encourage")
+    const lovedAi = scored({ id: "ai-loved", assessorId: "grok", doi: "10.5281/zenodo.82", recordId: "82", title: "Loved by a human" }, 50, 50, "major-revision")
+    const mildAi = scored({ id: "ai-mild", assessorId: "grok", doi: "10.5281/zenodo.83", recordId: "83", title: "Mild human" }, 70, 70, "revise")
+    const lovedHuman = humanReview("h-loved", "82", "Loved by a human", 92, "10.5281/zenodo.82")
+    const mildHuman = humanReview("h-mild", "83", "Mild human", 30, "10.5281/zenodo.83")
+    const onlyHuman = humanReview("h-only", "84", "Human only", 88, "10.5281/zenodo.84")
+    const rows = buildRanking({ reviews: [high, lovedAi, lovedHuman, mildAi, mildHuman, onlyHuman], nodes: [], issues: [], claims: [] })
+    const methods = listRankingMethods(builtinAssessors)
+    expect(methods[0]?.id).toBe("panel")
+    const panel = methods.find((item) => item.id === "panel")
+    const human = methods.find((item) => item.id === "human")
+    expect(panel?.label).toBe("Panel")
+    expect(human?.hint).toMatch(/no human review/i)
+    if (!panel || !human) throw new Error("missing ranking method")
+    for (const row of rows) expect(panel.value(row)).toBe(row.panelRankScore)
+    const byPanel = sortRows(rows, panel).map((row) => row.recordId)
+    const byHuman = sortRows(rows, human).map((row) => row.recordId)
+    expect(byPanel).toEqual(["81", "83", "82", "84"])
+    expect(byHuman).toEqual(["82", "84", "83", "81"])
+    expect(byHuman.at(-1)).toBe("81")
+    expect(rows.find((row) => row.recordId === "81")?.humanMedian).toBeNull()
+    expect(human.value(rows.find((row) => row.recordId === "82")!)).toBe(92)
+    expect(rows.find((row) => row.recordId === "82")?.panelMedian).toBe(50)
+  })
+
   it("penalises unresolved issues and not addressed ones", () => {
     const open: IssueThread = {
       id: "i1",
@@ -254,6 +280,14 @@ describe("sample board", () => {
     expect(ordered.find((row) => row.recordId === "sample-fog")?.fidelity.nodes).toBe(4)
   })
 })
+
+function humanReview(id: string, recordId: string, title: string, overall: number, doi: string): StoredReview {
+  const stored = review({ id, assessorId: "human", overall, doi, recordId, title })
+  stored.origin = "human"
+  stored.report.scale = 100
+  stored.report.overallScore = overall
+  return stored
+}
 
 function scored(
   partial: { id: string; assessorId: string; doi: string; recordId: string; title: string },

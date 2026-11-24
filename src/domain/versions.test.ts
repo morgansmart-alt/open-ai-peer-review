@@ -131,6 +131,23 @@ describe("fluid rounds", () => {
     expect(fluidRoundPastLegacyCap(thread([...full.rounds, round({ id: "check", kind: "recheck", recordVersionChecked: "10.5281/zenodo.2" })]))).toBe(true)
     expect(fluidRoundPastLegacyCap(thread([...full.rounds, round({ id: "again", kind: "rebuttal" })]))).toBe(false)
   })
+
+  it("keeps the first re-check on v2 open when v1 already has several rounds", () => {
+    const v1 = [
+      round({ id: "c", kind: "claim" }),
+      round({ id: "s", kind: "source-check", recordVersionChecked: "v1" }),
+      round({ id: "b", kind: "rebuttal" }),
+      round({ id: "k", kind: "counter" }),
+    ]
+    expect(statusFromCheck("NOT_ADDRESSED", v1, "v1", "10.5281/zenodo.2")).toBe("open")
+    expect(statusFromCheck("ADDRESSED", v1, "v1", "10.5281/zenodo.2")).toBe("fixed-in-new-version")
+    expect(statusFromCheck("PARTIALLY_ADDRESSED", v1, "v1", "10.5281/zenodo.2")).toBe("partially-addressed")
+    const afterFirst = [...v1, round({ id: "r", kind: "recheck", recordVersionChecked: "10.5281/zenodo.2" })]
+    expect(statusFromCheck("NOT_ADDRESSED", afterFirst, "v1", "10.5281/zenodo.2")).toBe("open")
+    const closing = [...afterFirst, round({ id: "reply", kind: "rebuttal" })]
+    expect(statusFromCheck("NOT_ADDRESSED", closing, "v1", "10.5281/zenodo.2")).toBe("unresolved")
+    expect(statusFromCheck("NOT_ADDRESSED", v1, "v1", "v1")).toBe("unresolved")
+  })
 })
 
 describe("newer-version re-check text", () => {

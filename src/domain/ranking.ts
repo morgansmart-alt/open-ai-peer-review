@@ -261,6 +261,12 @@ export function listRankingMethods(profiles: AssessorProfile[]): RankingMethod[]
       hint: "Cautious combined score across assessors, on a 0–100 board",
       value: (row) => row.panelRankScore,
     },
+    {
+      id: "human",
+      label: "Human",
+      hint: "Human review score. Records with no human review sort last.",
+      value: (row) => row.humanMedian,
+    },
     ...SUBSCORE_IDS.map(
       (sub): RankingMethod => ({
         id: sub.id,

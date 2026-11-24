@@ -1,5 +1,5 @@
 import { textFromDocx, textFromZip } from "./zipText.ts"
-import { extensionOf, READABLE_EXTENSIONS } from "./zenodo.ts"
+import { extensionOf, fetchZenodoResponse, READABLE_EXTENSIONS, zenodoHttpMessage, type ZenodoAccess } from "./zenodo.ts"
 import { decodeText, textFromMarkup } from "./textTools.ts"
 
 let pdfjsPromise: Promise<typeof import("pdfjs-dist")> | null = null
@@ -111,16 +111,14 @@ export async function extractDocument(filename: string, data: ArrayBuffer, onPro
   }
 }
 
-export async function downloadArrayBuffer(url: string): Promise<ArrayBuffer> {
+export async function downloadArrayBuffer(url: string, access?: ZenodoAccess | null): Promise<ArrayBuffer> {
   let response: Response
   try {
-    response = await fetch(url)
-  } catch {
-    throw new Error("The file host blocked the browser (CORS). Drop the PDF or text file beside the DOI and the review can still run.")
+    response = await fetchZenodoResponse(url, "bytes", access)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "The file host blocked the browser (CORS). Drop the PDF or text file beside the DOI and the review can still run."
+    throw new Error(message)
   }
-  if (response.status === 401 || response.status === 403) {
-    throw new Error("This file is restricted or embargoed, so AIR cannot read it.")
-  }
-  if (!response.ok) throw new Error(`The file download failed (${response.status}).`)
+  if (!response.ok) throw new Error(zenodoHttpMessage(response.status, access, "file"))
   return response.arrayBuffer()
 }
