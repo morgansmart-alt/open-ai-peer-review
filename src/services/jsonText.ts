@@ -48,10 +48,30 @@ function parseSlice(slice: string): { value: unknown; text: string; repaired: bo
   }
 }
 
+function numericScore(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    if (trimmed.startsWith("<")) return null
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed)
+  }
+  return null
+}
+
 function hasNumericScore(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false
-  const row = value as { overallScore?: unknown; recommendation?: unknown; questionsForAuthors?: unknown }
-  if (typeof row.overallScore !== "number" || !Number.isFinite(row.overallScore)) return false
+  const row = value as { overallScore?: unknown; recommendation?: unknown; questionsForAuthors?: unknown; scores?: unknown }
+  const score = numericScore(row.overallScore)
+  if (score === null) return false
+  row.overallScore = score
+  if (Array.isArray(row.scores)) {
+    for (const item of row.scores) {
+      if (!item || typeof item !== "object") continue
+      const field = item as { score?: unknown }
+      const next = numericScore(field.score)
+      if (next !== null) field.score = next
+    }
+  }
   if (typeof row.recommendation === "string" && (row.recommendation.includes("<") || row.recommendation.includes("|"))) return false
   const questions = row.questionsForAuthors
   if (Array.isArray(questions) && questions.length === 1 && (questions[0] === "string" || questions[0] === "<question>")) return false
@@ -101,12 +121,13 @@ export const FILL_REVIEW_PROMPT =
 export function rubricTemplateProblem(value: unknown): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   const row = value as Record<string, unknown>
-  const scoreIsPlaceholder = typeof row.overallScore === "string"
-  const recommendationIsSchema = typeof row.recommendation === "string" && row.recommendation.includes("|")
-  const strengthsPlaceholder = Array.isArray(row.strengths) && row.strengths.length > 0 && row.strengths.every((item) => item === "string")
+  const scoreText = typeof row.overallScore === "string" ? row.overallScore.trim() : ""
+  const scoreIsPlaceholder = scoreText.length > 0 && !/^-?\d+(\.\d+)?$/.test(scoreText)
+  const recommendationIsSchema = typeof row.recommendation === "string" && (row.recommendation.includes("|") || row.recommendation.includes("<"))
+  const strengthsPlaceholder = Array.isArray(row.strengths) && row.strengths.length > 0 && row.strengths.every((item) => item === "string" || item === "<strength>")
   const scoreFieldsAreStrings =
     Array.isArray(row.scores) &&
-    row.scores.some((item) => item && typeof item === "object" && typeof (item as { score?: unknown }).score === "string")
+    row.scores.some((item) => item && typeof item === "object" && typeof (item as { score?: unknown }).score === "string" && !/^-?\d+(\.\d+)?$/.test(String((item as { score?: unknown }).score).trim()))
   if (scoreIsPlaceholder || recommendationIsSchema || strengthsPlaceholder || scoreFieldsAreStrings) {
     return "The reply repeated the rubric template instead of a completed review."
   }

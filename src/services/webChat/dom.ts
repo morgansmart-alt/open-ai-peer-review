@@ -428,11 +428,7 @@ export function isPromptEcho(text: string, prompt: string): boolean {
   if (sent.endsWith(block) && block.length >= 40) return true
   const head = sent.slice(0, 100)
   if (head.length >= 40 && block.startsWith(head) && block.length <= sent.length + 80) return true
-  if (sent.length >= 80) {
-    const midAt = Math.floor(sent.length / 2)
-    const mid = sent.slice(midAt, midAt + 100)
-    if (block.includes(head) || (mid.length >= 80 && block.includes(mid))) return true
-  }
+  if (sent.length >= 300 && block.includes(sent.slice(0, 300))) return true
   return false
 }
 
@@ -492,6 +488,62 @@ export function chooseReplyBlock(blocks: string[], beforeRegion: string, sentPro
     return extracted[extracted.length - 1] ?? ""
   }
   return longestLast(clean.filter((block) => block.trim().length >= 80 || reviewJsonBlock(block) || hasSentence(block)))
+}
+
+const CHIP_TAGS = new Set(["A", "BUTTON", "SVG", "IMG"])
+
+function skipChip(el: Element): boolean {
+  if (CHIP_TAGS.has(el.tagName)) return true
+  const testid = el.getAttribute("data-testid") ?? ""
+  if (/thought|footer|sources|response-actions|trace-slot/i.test(testid)) return true
+  const label = el.getAttribute("aria-label") ?? ""
+  if (/^(copy|good response|bad response|share|regenerate|edit message|show more|copy message)$/i.test(label.trim())) return true
+  return false
+}
+
+/** Visible reply text with citation anchors and chrome buttons left out. */
+export function textWithoutChips(root: Element): string {
+  const chunks: string[] = []
+  const walk = (node: Node): void => {
+    if (node instanceof Element) {
+      if (skipChip(node)) return
+      for (const child of node.childNodes) walk(child)
+      return
+    }
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent ?? ""
+      if (text.trim()) chunks.push(text)
+    }
+  }
+  walk(root)
+  return chunks.join("").replace(/\u00a0/g, " ").trim()
+}
+
+function grokComTurn(doc: ParentNode, composer: Element | null): { text: string; candidate: string } {
+  const nodes = queryAllDeep(doc, '[data-testid="assistant-message"]').filter((el) => !composer || (el !== composer && !el.contains(composer) && !composer.contains(el)))
+  const last = nodes[nodes.length - 1]
+  if (!last) return { text: "", candidate: "" }
+  const markdown = last.querySelector(".streamdown-chat-md, .response-content-markdown") ?? last
+  return { text: textWithoutChips(markdown), candidate: '[data-testid="assistant-message"]' }
+}
+
+function grokXTurn(doc: ParentNode, composer: Element | null): { text: string; candidate: string } {
+  const turns = queryAllDeep(doc, "div.group").filter((el) => {
+    if (classNameOf(el).includes("group/user")) return false
+    if (composer && (el === composer || el.contains(composer) || composer.contains(el))) return false
+    return true
+  })
+  const last = turns[turns.length - 1]
+  if (!last) return { text: "", candidate: "" }
+  const markdown = last.querySelector(".whitespace-normal") ?? last.querySelector(".wrap-break-word") ?? last
+  return { text: textWithoutChips(markdown), candidate: "div.group" }
+}
+
+/** The latest model turn on grok.com or X, using the live page structure. */
+export function liveTurnText(doc: ParentNode, providerId: string, composer: Element | null): { text: string; candidate: string } {
+  if (providerId === "grok") return grokComTurn(doc, composer)
+  if (providerId === "grok-x") return grokXTurn(doc, composer)
+  return { text: "", candidate: "" }
 }
 
 function walkReplyText(node: Node, composer: Element | null, chunks: string[]): void {

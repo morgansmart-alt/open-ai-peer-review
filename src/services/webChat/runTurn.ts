@@ -20,6 +20,7 @@ import {
   addedText,
   chooseReplyBlock,
   confirmComposerText,
+  liveTurnText,
   messageBlocks,
   replyAfter,
   reviewJsonBlock,
@@ -157,6 +158,7 @@ async function waitForReply(
   attempt = 1,
   beforeRegion = "",
   sentPrompt = "",
+  beforeLive = "",
 ): Promise<string> {
   note(hooks, label, "waiting", `Waiting for the reply: ${label}.`)
   await hooks.keepAwake?.()
@@ -178,10 +180,14 @@ async function waitForReply(
   let selector = ""
   while (Date.now() - start < timeoutMs) {
     if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.")
+    const live = liveTurnText(doc, provider.id, composer)
+    const liveFresh = live.text && live.text !== beforeLive ? live.text : ""
     const snapshot = assistantSnapshot(doc, provider.selectors.assistant, composer)
     const fromSelector = replyAfter(beforeMessages, snapshot.texts)
     const fromRegion = regionReply(doc, composer, beforeRegion, sentPrompt, expect)
-    const picked = preferredReply(fromSelector, snapshot.selector, fromRegion, expect)
+    const picked = liveFresh
+      ? { text: liveFresh, candidate: live.candidate }
+      : preferredReply(fromSelector, snapshot.selector, fromRegion, expect)
     const reply = picked.text
     selector = picked.candidate
     const json = reviewJsonBlock(reply)
@@ -232,7 +238,7 @@ async function waitForReply(
       if (attempt < 2) {
         note(hooks, label, "error", `No reply container yet. Re-polling. ${empty}`)
         await hooks.keepAwake?.()
-        return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion, sentPrompt)
+        return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion, sentPrompt, beforeLive)
       }
       throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} timed out with no reply. ${empty}.`)
     }
@@ -254,7 +260,7 @@ async function waitForReply(
   if (attempt < 2) {
     note(hooks, label, "error", `Reply step (${label}) timed out. Re-polling. ${diagnostic}`)
     await hooks.keepAwake?.()
-    return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion, sentPrompt)
+    return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion, sentPrompt, beforeLive)
   }
   throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} did not finish. ${diagnostic}. ${replyTimeoutReason(seen, expect)}.`)
 }
@@ -364,14 +370,15 @@ async function sendComposerText(
     const rest = pending.slice(chunk.length).trim()
     const beforeMessages = assistantMessages(doc, provider.selectors.assistant, composer)
     const beforeRegion = visibleReplyText(doc, composer)
+    const beforeLive = liveTurnText(doc, provider.id, composer).text
     const beforeAssistant = beforeMessages[beforeMessages.length - 1] ?? ""
     note(hooks, label, "sending", `Sending ${label}${rest ? ` part ${part}` : ""} on ${provider.label}. ${chunk.length} characters verified in the message box.`)
     const method = await commitSend(doc, provider, composer, beforeAssistant, hooks)
     note(hooks, label, "sent", `Send step on ${provider.label}. Method that sent: ${method}.`)
-    if (!rest) return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, 1, beforeRegion, chunk)
+    if (!rest) return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, 1, beforeRegion, chunk, beforeLive)
     part += 1
     pending = rest
-    await waitForReply(doc, provider, beforeMessages, hooks, composer, `${label} part ${part - 1}`, "text", 1, beforeRegion, chunk)
+    await waitForReply(doc, provider, beforeMessages, hooks, composer, `${label} part ${part - 1}`, "text", 1, beforeRegion, chunk, beforeLive)
   }
   throw new TurnError("insert-miss", `The message for ${label} was empty.`)
 }

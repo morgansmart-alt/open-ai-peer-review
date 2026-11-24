@@ -2048,10 +2048,29 @@ ${output}
       }
     }
   }
+  function numericScore(value) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed.startsWith("<")) return null;
+      if (/^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
+    }
+    return null;
+  }
   function hasNumericScore(value) {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
     const row = value;
-    if (typeof row.overallScore !== "number" || !Number.isFinite(row.overallScore)) return false;
+    const score = numericScore(row.overallScore);
+    if (score === null) return false;
+    row.overallScore = score;
+    if (Array.isArray(row.scores)) {
+      for (const item of row.scores) {
+        if (!item || typeof item !== "object") continue;
+        const field = item;
+        const next = numericScore(field.score);
+        if (next !== null) field.score = next;
+      }
+    }
     if (typeof row.recommendation === "string" && (row.recommendation.includes("<") || row.recommendation.includes("|"))) return false;
     const questions = row.questionsForAuthors;
     if (Array.isArray(questions) && questions.length === 1 && (questions[0] === "string" || questions[0] === "<question>")) return false;
@@ -2089,10 +2108,11 @@ ${output}
   function rubricTemplateProblem(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const row = value;
-    const scoreIsPlaceholder = typeof row.overallScore === "string";
-    const recommendationIsSchema = typeof row.recommendation === "string" && row.recommendation.includes("|");
-    const strengthsPlaceholder = Array.isArray(row.strengths) && row.strengths.length > 0 && row.strengths.every((item) => item === "string");
-    const scoreFieldsAreStrings = Array.isArray(row.scores) && row.scores.some((item) => item && typeof item === "object" && typeof item.score === "string");
+    const scoreText = typeof row.overallScore === "string" ? row.overallScore.trim() : "";
+    const scoreIsPlaceholder = scoreText.length > 0 && !/^-?\d+(\.\d+)?$/.test(scoreText);
+    const recommendationIsSchema = typeof row.recommendation === "string" && (row.recommendation.includes("|") || row.recommendation.includes("<"));
+    const strengthsPlaceholder = Array.isArray(row.strengths) && row.strengths.length > 0 && row.strengths.every((item) => item === "string" || item === "<strength>");
+    const scoreFieldsAreStrings = Array.isArray(row.scores) && row.scores.some((item) => item && typeof item === "object" && typeof item.score === "string" && !/^-?\d+(\.\d+)?$/.test(String(item.score).trim()));
     if (scoreIsPlaceholder || recommendationIsSchema || strengthsPlaceholder || scoreFieldsAreStrings) {
       return "The reply repeated the rubric template instead of a completed review.";
     }
@@ -3066,11 +3086,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     if (sent.endsWith(block) && block.length >= 40) return true;
     const head = sent.slice(0, 100);
     if (head.length >= 40 && block.startsWith(head) && block.length <= sent.length + 80) return true;
-    if (sent.length >= 80) {
-      const midAt = Math.floor(sent.length / 2);
-      const mid = sent.slice(midAt, midAt + 100);
-      if (block.includes(head) || mid.length >= 80 && block.includes(mid)) return true;
-    }
+    if (sent.length >= 300 && block.includes(sent.slice(0, 300))) return true;
     return false;
   }
   function isUiLabel(text) {
@@ -3118,6 +3134,54 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       return extracted[extracted.length - 1] ?? "";
     }
     return longestLast(clean.filter((block) => block.trim().length >= 80 || reviewJsonBlock(block) || hasSentence(block)));
+  }
+  var CHIP_TAGS = /* @__PURE__ */ new Set(["A", "BUTTON", "SVG", "IMG"]);
+  function skipChip(el) {
+    if (CHIP_TAGS.has(el.tagName)) return true;
+    const testid = el.getAttribute("data-testid") ?? "";
+    if (/thought|footer|sources|response-actions|trace-slot/i.test(testid)) return true;
+    const label = el.getAttribute("aria-label") ?? "";
+    if (/^(copy|good response|bad response|share|regenerate|edit message|show more|copy message)$/i.test(label.trim())) return true;
+    return false;
+  }
+  function textWithoutChips(root) {
+    const chunks = [];
+    const walk = (node) => {
+      if (node instanceof Element) {
+        if (skipChip(node)) return;
+        for (const child of node.childNodes) walk(child);
+        return;
+      }
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent ?? "";
+        if (text.trim()) chunks.push(text);
+      }
+    };
+    walk(root);
+    return chunks.join("").replace(/\u00a0/g, " ").trim();
+  }
+  function grokComTurn(doc, composer) {
+    const nodes = queryAllDeep(doc, '[data-testid="assistant-message"]').filter((el) => !composer || el !== composer && !el.contains(composer) && !composer.contains(el));
+    const last = nodes[nodes.length - 1];
+    if (!last) return { text: "", candidate: "" };
+    const markdown = last.querySelector(".streamdown-chat-md, .response-content-markdown") ?? last;
+    return { text: textWithoutChips(markdown), candidate: '[data-testid="assistant-message"]' };
+  }
+  function grokXTurn(doc, composer) {
+    const turns = queryAllDeep(doc, "div.group").filter((el) => {
+      if (classNameOf(el).includes("group/user")) return false;
+      if (composer && (el === composer || el.contains(composer) || composer.contains(el))) return false;
+      return true;
+    });
+    const last = turns[turns.length - 1];
+    if (!last) return { text: "", candidate: "" };
+    const markdown = last.querySelector(".whitespace-normal") ?? last.querySelector(".wrap-break-word") ?? last;
+    return { text: textWithoutChips(markdown), candidate: "div.group" };
+  }
+  function liveTurnText(doc, providerId, composer) {
+    if (providerId === "grok") return grokComTurn(doc, composer);
+    if (providerId === "grok-x") return grokXTurn(doc, composer);
+    return { text: "", candidate: "" };
   }
   function walkReplyText(node, composer, chunks) {
     if (node instanceof Element) {
@@ -3547,7 +3611,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     if (expect === "json" && !reviewJsonBlock(reply)) return "reply seen, JSON not parsed";
     return "reply seen";
   }
-  async function waitForReply(doc, provider, beforeMessages, hooks, composer, label = "review", expect = "json", attempt = 1, beforeRegion = "", sentPrompt = "") {
+  async function waitForReply(doc, provider, beforeMessages, hooks, composer, label = "review", expect = "json", attempt = 1, beforeRegion = "", sentPrompt = "", beforeLive = "") {
     note(hooks, label, "waiting", `Waiting for the reply: ${label}.`);
     await hooks.keepAwake?.();
     const pollMs = hooks.pollMs ?? 400;
@@ -3568,10 +3632,12 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     let selector = "";
     while (Date.now() - start < timeoutMs) {
       if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.");
+      const live = liveTurnText(doc, provider.id, composer);
+      const liveFresh = live.text && live.text !== beforeLive ? live.text : "";
       const snapshot2 = assistantSnapshot(doc, provider.selectors.assistant, composer);
       const fromSelector2 = replyAfter(beforeMessages, snapshot2.texts);
       const fromRegion2 = regionReply(doc, composer, beforeRegion, sentPrompt, expect);
-      const picked2 = preferredReply(fromSelector2, snapshot2.selector, fromRegion2, expect);
+      const picked2 = liveFresh ? { text: liveFresh, candidate: live.candidate } : preferredReply(fromSelector2, snapshot2.selector, fromRegion2, expect);
       const reply2 = picked2.text;
       selector = picked2.candidate;
       const json = reviewJsonBlock(reply2);
@@ -3622,7 +3688,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
         if (attempt < 2) {
           note(hooks, label, "error", `No reply container yet. Re-polling. ${empty}`);
           await hooks.keepAwake?.();
-          return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion, sentPrompt);
+          return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion, sentPrompt, beforeLive);
         }
         throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} timed out with no reply. ${empty}.`);
       }
@@ -3644,7 +3710,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     if (attempt < 2) {
       note(hooks, label, "error", `Reply step (${label}) timed out. Re-polling. ${diagnostic}`);
       await hooks.keepAwake?.();
-      return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion, sentPrompt);
+      return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion, sentPrompt, beforeLive);
     }
     throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} did not finish. ${diagnostic}. ${replyTimeoutReason(seen, expect)}.`);
   }
@@ -3741,14 +3807,15 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       const rest = pending.slice(chunk.length).trim();
       const beforeMessages = assistantMessages(doc, provider.selectors.assistant, composer);
       const beforeRegion = visibleReplyText(doc, composer);
+      const beforeLive = liveTurnText(doc, provider.id, composer).text;
       const beforeAssistant = beforeMessages[beforeMessages.length - 1] ?? "";
       note(hooks, label, "sending", `Sending ${label}${rest ? ` part ${part}` : ""} on ${provider.label}. ${chunk.length} characters verified in the message box.`);
       const method = await commitSend(doc, provider, composer, beforeAssistant, hooks);
       note(hooks, label, "sent", `Send step on ${provider.label}. Method that sent: ${method}.`);
-      if (!rest) return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, 1, beforeRegion, chunk);
+      if (!rest) return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, 1, beforeRegion, chunk, beforeLive);
       part += 1;
       pending = rest;
-      await waitForReply(doc, provider, beforeMessages, hooks, composer, `${label} part ${part - 1}`, "text", 1, beforeRegion, chunk);
+      await waitForReply(doc, provider, beforeMessages, hooks, composer, `${label} part ${part - 1}`, "text", 1, beforeRegion, chunk, beforeLive);
     }
     throw new TurnError("insert-miss", `The message for ${label} was empty.`);
   }
