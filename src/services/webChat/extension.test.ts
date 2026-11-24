@@ -5,10 +5,11 @@ import { describe, expect, it } from "vitest"
 import { webChatProvider } from "../../../extension/adapters/index.ts"
 import { CRITERION_PROFILES, readingCriteria } from "../../domain/profiles.ts"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
-import { ackReply, assistantText, attachmentReady, chooseReplyBlock, clickElement, composerTextMatches, confirmComposerText, describeCandidates, diagnose, fillComposer, findComposer, findSubmit, heldPrefix, messageBlocks, placeComposerText, reviewJsonOnPage, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
+import { ackReply, assistantText, attachmentReady, chooseReplyBlock, clickElement, composerTextMatches, confirmComposerText, describeCandidates, diagnose, fillComposer, findComposer, findSubmit, heldPrefix, isPromptEcho, liveTurnText, messageBlocks, placeComposerText, reviewJsonBlock, reviewJsonOnPage, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
 import { buildWebChatPacket } from "./packet.ts"
 import { runTurn, sendFollowUp } from "./runTurn.ts"
 import { acceptWebChatResult } from "./accept.ts"
+import { parseModelJson } from "../jsonText.ts"
 import { extensionEnvelope, relayFromProvider, relayTargets, type RelayJob } from "./relay.ts"
 import type { ZenodoRecord } from "../zenodo.ts"
 
@@ -923,5 +924,51 @@ describe("live chat composers", () => {
     const kept = `${full.slice(0, 180)}…`
     expect(heldPrefix(kept, full)?.startsWith("Answer the criticism")).toBe(true)
     expect(heldPrefix("Thought", full)).toBeNull()
+  })
+
+  it("reads the grok.com markdown and ignores citation chips, the thought toggle, and the footer", () => {
+    document.body.innerHTML = `<div role="log" data-testid="chat-transcript-scroller" aria-label="Conversation">
+      <div id="response-user"><div role="article" data-testid="user-message"><h2 class="sr-only">You</h2><span>Open this public text page and score the paper. Criteria: impact (weight 1.4).</span><button aria-label="Show more">Show more</button></div></div>
+      <div id="response-grok"><div role="article" data-testid="assistant-message">
+        <h2 class="sr-only">Grok</h2>
+        <div data-testid="conversation-trace-slot"><button data-testid="conversation-thought-toggle">Thought for 57s</button></div>
+        <div class="response-content-markdown"><div class="streamdown-chat-md"><p>{"summary":"This is the 2014 CODATA set.","overallScore":84,"questionsForAuthors":["Which constant moved?"],"recommendation":"accept"}</p><a href="http://physics.nist.gov/"><span>http://physics.nist.gov/</span></a></div></div>
+        <div data-testid="response-footer-actions"><button data-testid="conversation-response-sources">29 sources</button><button aria-label="Copy">Copy</button></div>
+      </div></div>
+    </div>`
+    const live = liveTurnText(document, "grok", document.createElement("textarea"))
+    expect(live.candidate).toBe('[data-testid="assistant-message"]')
+    expect(live.text).toContain('"overallScore":84')
+    expect(live.text).not.toContain("Thought for 57s")
+    expect(live.text).not.toContain("29 sources")
+    expect(live.text).not.toContain("physics.nist.gov")
+    expect(live.text.length).toBeGreaterThan(40)
+    expect(reviewJsonBlock(live.text)).toContain("84")
+  })
+
+  it("reads the X grok turn, not the user turn, and accepts a string overallScore", () => {
+    document.body.innerHTML = `<div class="space-y-4">
+      <div class="group/user flex flex-col items-end">
+        <div class="text-primary rounded-chat">Open this public text page https://morgansmart-alt.github.io/open-ai-peer-review/paper-text/22826.txt Criteria: impact (weight 1.4) limitations.</div>
+        <button aria-label="Copy message">Copy</button>
+      </div>
+      <div class="group flex flex-col items-start">
+        <button><span>Thought for 55s</span></button>
+        <div class="wrap-break-word"><div class="space-y-4 whitespace-normal"><p>{"summary":"This is the official 2014 CODATA recommendation.","overallScore":"93","questionsForAuthors":["What changed in 2018?"],"recommendation":"accept"}</p><a href="https://zenodo.org/records/22826"><span>https://zenodo.org/records/22826</span></a></div></div>
+        <button><span class="truncate">15 sources</span></button>
+        <div class="flex items-center"><button aria-label="Copy">Copy</button><button aria-label="Regenerate">Regenerate</button></div>
+      </div>
+    </div>`
+    const prompt = "Open this public text page https://morgansmart-alt.github.io/open-ai-peer-review/paper-text/22826.txt Criteria: impact (weight 1.4) limitations."
+    const live = liveTurnText(document, "grok-x", document.createElement("textarea"))
+    expect(live.candidate).toBe("div.group")
+    expect(live.text).toContain('"overallScore":"93"')
+    expect(live.text).not.toContain("Thought for 55s")
+    expect(live.text).not.toContain("15 sources")
+    expect(live.text).not.toContain("paper-text/22826.txt")
+    expect(isPromptEcho(live.text, prompt)).toBe(false)
+    const parsed = parseModelJson(live.text)
+    expect(parsed.ok).toBe(true)
+    if (parsed.ok) expect(parsed.value).toMatchObject({ overallScore: 93 })
   })
 })

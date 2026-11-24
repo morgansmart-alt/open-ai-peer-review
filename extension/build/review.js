@@ -2102,10 +2102,29 @@ ${output}
       }
     }
   }
+  function numericScore(value) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed.startsWith("<")) return null;
+      if (/^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
+    }
+    return null;
+  }
   function hasNumericScore(value) {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
     const row = value;
-    if (typeof row.overallScore !== "number" || !Number.isFinite(row.overallScore)) return false;
+    const score = numericScore(row.overallScore);
+    if (score === null) return false;
+    row.overallScore = score;
+    if (Array.isArray(row.scores)) {
+      for (const item of row.scores) {
+        if (!item || typeof item !== "object") continue;
+        const field = item;
+        const next = numericScore(field.score);
+        if (next !== null) field.score = next;
+      }
+    }
     if (typeof row.recommendation === "string" && (row.recommendation.includes("<") || row.recommendation.includes("|"))) return false;
     const questions = row.questionsForAuthors;
     if (Array.isArray(questions) && questions.length === 1 && (questions[0] === "string" || questions[0] === "<question>")) return false;
