@@ -9,7 +9,7 @@ import { ackReply, assistantText, attachmentReady, chooseReplyBlock, clickElemen
 import { buildWebChatPacket } from "./packet.ts"
 import { runTurn, sendFollowUp } from "./runTurn.ts"
 import { acceptWebChatResult } from "./accept.ts"
-import { parseModelJson } from "../jsonText.ts"
+import { parseModelJson, settleChatJson } from "../jsonText.ts"
 import { extensionEnvelope, relayFromProvider, relayTargets, type RelayJob } from "./relay.ts"
 import type { ZenodoRecord } from "../zenodo.ts"
 
@@ -318,6 +318,7 @@ describe("live chat composers", () => {
       document.getElementById("reply")!.textContent = text.includes("Do not review yet.")
         ? "RECEIVED 1"
         : '{"summary":"The record is sound.","overallScore":86}'
+      document.getElementById("stop")?.setAttribute("hidden", "")
     })
     const packet = buildWebChatPacket({
       requestId: "grok-json",
@@ -975,5 +976,93 @@ describe("live chat composers", () => {
     const parsed = parseModelJson(live.text)
     expect(parsed.ok).toBe(true)
     if (parsed.ok) expect(parsed.value).toMatchObject({ overallScore: 93 })
+  })
+
+  it("keeps the X summary and impact score when citation anchors sit inside the reply", () => {
+    const summary = "This is the official 2014 CODATA recommendation and it states the uncertainties for the constants."
+    document.body.innerHTML = `<div class="group flex flex-col items-start">
+      <button><span>Thought for 12s</span></button>
+      <div class="wrap-break-word"><div class="space-y-4 whitespace-normal"><p>{"summary":"${summary.slice(0, 48)}<a href="https://physics.nist.gov/cuu/Constants/"><span>NIST CODATA</span></a>${summary.slice(48)}","overallScore":92,"scores":[{"criterionId":"impact","score":90,"rationale":"The table is the reference later papers cite when they need a constant."}]}</p>${'<a href="https://physics.nist.gov/cuu/Constants/"><span>NIST</span></a>'.repeat(40)}</div></div>
+    </div>`
+    const live = liveTurnText(document, "grok-x", document.createElement("textarea"))
+    expect(live.candidate).toBe("div.group")
+    expect(live.text).not.toContain("physics.nist.gov")
+    expect(live.text).not.toContain("Thought for 12s")
+    const parsed = parseModelJson(live.text)
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    const value = parsed.value as { summary?: string; scores?: { criterionId?: string; score?: number }[] }
+    expect(value.summary?.length).toBeGreaterThanOrEqual(40)
+    expect(value.summary).toContain("CODATA recommendation")
+    expect(value.summary).toContain("uncertainties")
+    expect(value.scores?.find((score) => score.criterionId === "impact")?.score).toBe(90)
+  })
+
+  it("waits out a streaming X reply and does not send a correction for the partial JSON", async () => {
+    document.body.innerHTML = `<main>
+      <textarea id="box" aria-label="Ask anything"></textarea>
+      <button id="send" type="button" aria-label="Send">Send</button>
+      <button id="stop" type="button" aria-label="Stop">Stop</button>
+      <div class="group"><div class="whitespace-normal" id="reply"></div></div>
+    </main>`
+    const provider = webChatProvider("grok-x")
+    if (!provider) throw new Error("missing grok-x")
+    const partial = '{"summary":"short","overallScore":92}'
+    const full = '{"summary":"This is the official 2014 CODATA recommendation and it states the uncertainties for the constants.","overallScore":92,"scores":[{"criterionId":"impact","score":90}]}'
+    const reply = document.getElementById("reply")!
+    const stop = document.getElementById("stop")!
+    document.getElementById("send")?.addEventListener("click", () => {
+      ;(document.getElementById("box") as HTMLTextAreaElement).value = ""
+      let ticks = 0
+      reply.textContent = partial
+      const timer = setInterval(() => {
+        ticks += 1
+        if (ticks < 8) {
+          reply.textContent = `${partial}${" Cited source.".repeat(ticks)}`
+          return
+        }
+        reply.textContent = full
+        stop.setAttribute("hidden", "")
+        clearInterval(timer)
+      }, 20)
+    })
+    const lines: string[] = []
+    const returned = await sendFollowUp(
+      document,
+      provider,
+      "Score this paper and return JSON.",
+      {
+        aborted: () => false,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        pollMs: 10,
+        stableMs: 40,
+        stepTimeoutMs: 2_000,
+        replyStartTimeoutMs: 400,
+        submitStableMs: 0,
+        submitReadyMs: 20,
+        sendVerifyMs: 20,
+        onProgress: (message, meta) => lines.push(`${meta?.status ?? ""} ${meta?.detail ?? message}`),
+      },
+      "public text link",
+      "json",
+    )
+    expect(lines.some((line) => line.includes("verified") && line.includes("raw") && line.includes("normalised"))).toBe(true)
+    expect(returned).toContain('"criterionId":"impact"')
+    expect(returned).not.toContain('"summary":"short"')
+    const asks: string[] = []
+    const settled = await settleChatJson(
+      returned,
+      async (prompt) => {
+        asks.push(prompt)
+        return returned
+      },
+      () => undefined,
+      (text) =>
+        text.includes('"summary":"short"') || !text.includes('"criterionId":"impact"')
+          ? { ok: false, errors: ["summary must be at least 40 characters.", "Missing score for impact."] }
+          : { ok: true },
+    )
+    expect(asks).toEqual([])
+    expect(settled.reasked).toBe(false)
   })
 })

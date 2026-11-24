@@ -3637,15 +3637,13 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     note(hooks, label, "waiting", `Waiting for the reply: ${label}.`);
     await hooks.keepAwake?.();
     const pollMs = hooks.pollMs ?? 400;
-    const stableMs = hooks.stableMs ?? 2e3;
+    const stableMs = hooks.stableMs ?? 5e3;
     const timeoutMs = hooks.stepTimeoutMs ?? 9e4;
     const silentMs = hooks.replySilentMs ?? 45e3;
     const startLimit = hooks.replyStartTimeoutMs ?? 2e4;
     const start = Date.now();
     let lastReply = "";
     let stableFor = 0;
-    let lastJson = "";
-    let jsonStable = 0;
     let lastAck = "";
     let ackStable = 0;
     let started = false;
@@ -3666,7 +3664,6 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       const ack = ackReply(doc, composer);
       const streaming = stopControlActive(doc, provider.selectors.stop);
       const sendReady = Boolean(findSubmit(doc, provider.selectors.submit, composer));
-      const idle = sendReady && !streaming;
       if (reply2 || ack) started = true;
       if (reply2 !== lastReply) lastChange = Date.now();
       const diagnostic2 = replyDiagnostic(selector, reply2.length, lastChange);
@@ -3674,17 +3671,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
         note(hooks, label, reply2 ? "reading" : "waiting", `Waiting for the reply: ${label}.`, diagnostic2);
         lastLog = Date.now();
       }
-      if (expect === "json" && json) {
-        if (json === lastJson && jsonStable >= stableMs && (!streaming || sendReady)) return json;
-        if (json !== lastJson) {
-          lastJson = json;
-          jsonStable = 0;
-        } else jsonStable += pollMs;
-      } else {
-        lastJson = "";
-        jsonStable = 0;
-      }
-      if (expect === "text" && ack && !reply2) {
+      if (expect === "text" && ack && !reply2 && !streaming) {
         if (ack === lastAck && ackStable >= stableMs) return ack;
         if (ack !== lastAck) {
           lastAck = ack;
@@ -3702,9 +3689,14 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
           );
         }
       }
-      const settled = Boolean(reply2) && reply2 === lastReply && stableFor >= stableMs;
+      const changed = reply2 !== lastReply;
+      if (changed || streaming) {
+        if (changed) lastReply = reply2;
+        stableFor = 0;
+      } else stableFor += pollMs;
+      const settled = Boolean(reply2) && !changed && !streaming && stableFor >= stableMs;
       if (expect === "text" && settled) return reply2;
-      if (expect === "json" && settled && idle && json) return json;
+      if (expect === "json" && settled && json) return json;
       if (!reply2 && Date.now() - start >= silentMs) {
         const empty = replyDiagnostic(selector, 0, null);
         if (attempt < 2) {
@@ -3713,12 +3705,6 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
           return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion, sentPrompt, beforeLive);
         }
         throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} timed out with no reply. ${empty}.`);
-      }
-      if (reply2 !== lastReply) {
-        lastReply = reply2;
-        stableFor = 0;
-      } else {
-        stableFor += pollMs;
       }
       await hooks.sleep(pollMs);
     }
@@ -3818,12 +3804,8 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       const focused = await focusComposer(composer, hooks);
       note(hooks, label, focused ? "ready" : "waiting", focused ? `Composer focused. Inserting ${pending.length} characters.` : `Composer was not focused. Inserting ${pending.length} characters and re-reading the box.`);
       const placed = await confirmComposerText(composer, pending, { sleep: (ms) => hooks.sleep(ms), pollMs: Math.min(hooks.pollMs ?? 50, 50), timeoutMs: 2e3 });
-      note(
-        hooks,
-        label,
-        placed.ok ? "ready" : "error",
-        `Insert method ${placed.method}. Box holds ${placed.actual.length} raw, ${foldComposerText(placed.actual).length} normalised. Message has ${pending.length} raw, ${foldComposerText(pending).length} normalised.`
-      );
+      const verified = `Insert method ${placed.method}. Box holds ${placed.actual.length} raw, ${foldComposerText(placed.actual).length} normalised. Message has ${pending.length} raw, ${foldComposerText(pending).length} normalised.`;
+      note(hooks, label, placed.ok ? "verified" : "error", verified, verified);
       if (!placed.ok) {
         throw new TurnError(
           "insert-miss",
