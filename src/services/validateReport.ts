@@ -124,7 +124,8 @@ export function validateReport(input: unknown, criteria: CriteriaSet): { ok: tru
     ]
   })
 
-  const v2 = criteria.reportSchema === "0.2" ? readV2(input, errors) : {}
+  const includeValue = criteria.criteria.some((criterion) => criterion.id === "estimated-value")
+  const v2 = criteria.reportSchema === "0.2" ? readV2(input, errors, includeValue) : {}
   if (errors.length || scores.some((score) => score === null)) return { ok: false, errors }
   const ready = scores.filter((score): score is NonNullable<typeof score> => score !== null)
   const overall = weightedMean(ready, criteria)
@@ -172,7 +173,7 @@ function rangeFrom(value: unknown, fallbackUnit: string): ValueRange {
   }
 }
 
-function readV2(input: Record<string, unknown>, errors: string[]): Partial<ReviewReport> {
+function readV2(input: Record<string, unknown>, errors: string[], includeValue: boolean): Partial<ReviewReport> {
   const ontologyClass = clip(input.ontologyClass, 80)
   if (!ontologyClasses.has(ontologyClass)) errors.push("ontologyClass must be one of the four AIR classes.")
   const physicsRaw = isRecord(input.physics) ? input.physics : null
@@ -205,7 +206,7 @@ function readV2(input: Record<string, unknown>, errors: string[]): Partial<Revie
     overallBenefit: rangeFrom(valueRaw?.overallBenefit, "not estimated"),
     disclaimer: "AI estimate. Not a fact and not investment advice.",
   }
-  if (valueEstimate.assumptions.length === 0) errors.push("valueEstimate.assumptions needs at least one assumption.")
+  if (includeValue && valueEstimate.assumptions.length === 0) errors.push("valueEstimate.assumptions needs at least one assumption.")
   const goals: GoalAlignment[] = Array.isArray(input.goals)
     ? input.goals.flatMap((item) => {
         if (!isRecord(item)) return []
@@ -221,7 +222,7 @@ function readV2(input: Record<string, unknown>, errors: string[]): Partial<Revie
     ontologyClass: (ontologyClasses.has(ontologyClass) ? ontologyClass : undefined) as OntologyClass | undefined,
     physics,
     simulation,
-    valueEstimate,
+    ...(includeValue ? { valueEstimate } : {}),
     goals,
   }
 }

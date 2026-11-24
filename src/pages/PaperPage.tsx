@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { Link, useParams } from "react-router-dom"
 import { keySlot } from "../domain/assessors.ts"
-import { canAppendRound, latestAuthorClaim, newerVersion, roleLabel, ROUND_LIMIT, statusFromCheck, statusLabel } from "../domain/issues.ts"
+import { canAppendRound, commentStatus, humanQuoteCheck, latestAuthorClaim, newerVersion, roleLabel, ROUND_LIMIT, statusFromCheck, statusLabel } from "../domain/issues.ts"
 import { buildRanking } from "../domain/ranking.ts"
 import { boardValue } from "../domain/scoring.ts"
 import { samplePaperById, type SamplePaper } from "../domain/samples.ts"
@@ -32,8 +32,11 @@ import {
   fetchRelatedSnippets,
   fetchZenodoRecord,
   formatRecordStamp,
+  formatVersionLabel,
+  isDepositedCodeOrData,
   isTextualFile,
   parseRecordRef,
+  selectionWithCodeData,
   type ZenodoRecord,
   type ZenodoVersion,
 } from "../services/zenodo.ts"
@@ -49,6 +52,7 @@ export function PaperPage() {
   const [versions, setVersions] = useState<ZenodoVersion[]>([])
   const [documents, setDocuments] = useState<{ filename: string; text: string }[]>([])
   const [selectedFiles, setSelectedFiles] = useState<string[]>([])
+  const [includeCodeData, setIncludeCodeData] = useState(true)
   const [loadingText, setLoadingText] = useState(false)
   const [recheckNote, setRecheckNote] = useState<string | null>(null)
   const [recheckBusy, setRecheckBusy] = useState(false)
@@ -68,7 +72,10 @@ export function PaperPage() {
       .then((next) => {
         if (cancelled) return
         setRecord(next)
-        setSelectedFiles(fileSelectionFor(next.id, next.files))
+        const picked = fileSelectionFor(next.id, next.files)
+        setSelectedFiles(picked)
+        const codeFiles = next.files.filter((file) => isDepositedCodeOrData(file))
+        setIncludeCodeData(codeFiles.length === 0 || codeFiles.some((file) => picked.includes(file.key)))
         setDocuments([])
         void fetchRecordVersions(next.conceptId)
           .then((found) => {
@@ -266,7 +273,17 @@ export function PaperPage() {
               files={record.files}
               selected={selectedFiles}
               legend="Files for a re-check of this version"
-              hint="A re-check of this version reads only the files you leave ticked. Another version is never searched with this list. The manuscript is ticked first, then supplements, other PDFs, and text, while they fit. Your last choice for this record is kept on this browser."
+              includeCodeData={includeCodeData}
+              hint="A re-check of this version reads only the files you leave ticked. Another version is never searched with this list. The manuscript is ticked first, then supplements, other PDFs, text, and a zip when it still fits. Text, code, and markdown inside a zip are read. Images are figures not read. Your last choice for this record is kept on this browser."
+              onIncludeCodeData={(next) => {
+                setIncludeCodeData(next)
+                setSelectedFiles((current) => {
+                  const keys = selectionWithCodeData(record.files, current, next)
+                  rememberFileSelection(record.id, keys)
+                  return keys
+                })
+                setDocuments([])
+              }}
               onChange={(keys) => {
                 setSelectedFiles(keys)
                 setDocuments([])
@@ -288,7 +305,14 @@ export function PaperPage() {
           <ReviewWorkspace record={record} documents={documents.length ? documents : [{ filename: "description", text: record.description }]} />
           <section className="mt-8">
             <h2 className="font-serif text-2xl">AI readings</h2>
-            {aiReviews.length === 0 && <p className="mt-2 text-sm text-ink-soft">No AI reading has been published for this version.</p>}
+            {aiReviews.length === 0 && (
+              <div className="mt-2">
+                <p className="text-sm text-ink-soft">No AI reading has been published for this version.</p>
+                <Link className={`${btnPrimary} mt-3`} to={`/review?doi=${encodeURIComponent(record.doi)}&guide=1`}>
+                  Run a free AI review
+                </Link>
+              </div>
+            )}
             <div className="mt-3 space-y-3">
               {aiReviews
                 .slice()
@@ -387,6 +411,7 @@ export function PaperPage() {
                   record={record}
                   later={later}
                   busy={recheckBusy}
+                  publicationText={publicationPlainText(documents, record.description)}
                   onRecheck={(targetId) => void recheckOne(issue, targetId)}
                 />
               ))}
@@ -461,16 +486,20 @@ function IssueCard({
   record,
   later,
   busy,
+  publicationText,
   onRecheck,
 }: {
   issue: IssueThread
   record: ZenodoRecord
   later: ZenodoVersion | null
   busy: boolean
+  publicationText: string
   onRecheck: (targetRecordId: string) => void
 }) {
   const air = useAir()
   const [note, setNote] = useState("")
+  const [quote, setQuote] = useState("")
+  const [quoteResult, setQuoteResult] = useState<"ADDRESSED" | "PARTIALLY_ADDRESSED" | "NOT_ADDRESSED">("ADDRESSED")
   const [chatUrl, setChatUrl] = useState("")
   const [chatNote, setChatNote] = useState("")
   const [message, setMessage] = useState<string | null>(null)
@@ -488,7 +517,7 @@ function IssueCard({
     ? canAppendRound(issue, { kind: "recheck", recordVersionChecked: later.stableId })
     : false
 
-  async function respond(kind: "rebuttal" | "counter") {
+  async function respond(kind: "rebuttal" | "counter" | "comment") {
     if (!note.trim()) return
     if (!canAppendRound(issue)) {
       setMessage(`This version already has ${ROUND_LIMIT} rounds. A re-check on a later version can start again.`)
@@ -539,13 +568,53 @@ function IssueCard({
         privateContextCount: parsed && parsed.ok ? 1 : 0,
         createdAt: new Date().toISOString(),
       },
-      issue.status,
+      kind === "comment" ? commentStatus(issue.status) : issue.status,
     )
-    setMessage(error ?? (archiveNote || (parsed && parsed.ok ? "Response saved. The chat link is not published. A later source check still has to quote the publication." : null)))
-    if (!error) {
+    const savedLocally = Boolean(error?.startsWith("Saved on this browser"))
+    setMessage(
+      error ??
+        (kind === "comment"
+          ? "Comment saved. It does not change the score or the issue status."
+          : archiveNote || (parsed && parsed.ok ? "Response saved. The chat link is not published. A later source check still has to quote the publication." : null)),
+    )
+    if (!error || savedLocally) {
       setNote("")
       setChatUrl("")
       setChatNote("")
+    }
+  }
+
+  async function quoteCheck() {
+    const checked = humanQuoteCheck({ quote, note, result: quoteResult, publicationText })
+    if (!checked.ok) {
+      setMessage(checked.error)
+      return
+    }
+    const kind = issue.rounds.some((round) => round.kind === "source-check" || round.kind === "recheck") ? "recheck" : "source-check"
+    if (!canAppendRound(issue, { kind, recordVersionChecked: onScreenVersion })) {
+      setMessage(`This version already has ${ROUND_LIMIT} rounds. A re-check on a later version can start again.`)
+      return
+    }
+    const status = statusFromCheck(checked.result, issue.rounds, issue.recordVersion, onScreenVersion)
+    const error = await air.addRound(
+      issue.id,
+      {
+        id: uid("round"),
+        kind,
+        authorLabel: air.settings.authorName || air.settings.nodeName || "Reader",
+        authorRole: "human-reviewer",
+        result: checked.result,
+        citations: checked.citations,
+        body: checked.body,
+        recordVersionChecked: onScreenVersion,
+        createdAt: new Date().toISOString(),
+      },
+      status,
+    )
+    setMessage(error ?? `${checked.result.replaceAll("_", " ")}. Quoted from this version. No model was called. Status is now ${statusLabel(status)}.`)
+    if (!error) {
+      setQuote("")
+      setNote("")
     }
   }
 
@@ -553,7 +622,7 @@ function IssueCard({
     <details className="rounded-2xl border border-line bg-white/50 p-3">
       <summary className="cursor-pointer text-sm">
         <span className="text-ink-soft">{statusLabel(issue.status)} · </span>
-        {issue.recordVersion !== record.recordVersion ? `Opened on ${issue.recordVersion} · ` : ""}
+        {issue.recordVersion !== record.recordVersion ? `Opened on ${formatVersionLabel(issue.recordVersion)} · ` : ""}
         {issue.claim}
       </summary>
       <div className="mt-3 space-y-2 text-sm">
@@ -564,7 +633,7 @@ function IssueCard({
               <span className="text-xs text-ink-soft">
                 {round.kind} · {round.authorLabel} · {roleLabel(round.authorRole)}
                 {round.result ? ` · ${round.result}` : ""}
-                {round.recordVersionChecked ? ` · checked ${round.recordVersionChecked}` : ""}
+                {round.recordVersionChecked ? ` · checked ${formatVersionLabel(round.recordVersionChecked)}` : ""}
               </span>
               <p>{round.body}</p>
               {publicContextCount(round.privateContextCount) && (
@@ -633,12 +702,34 @@ function IssueCard({
           </button>
           {receiptResult && <p className="mt-2 whitespace-pre-wrap text-ink-soft">{receiptResult}</p>}
         </details>
+        <div className="rounded-xl border border-line p-2">
+          <p className="text-xs font-medium">Quote-check this version</p>
+          <p className="mt-1 text-xs text-ink-soft">Paste a sentence from the loaded text. AIR checks the quotation itself. No model is called. Load the files above first.</p>
+          <label className="mt-2 block text-xs text-ink-soft" htmlFor={`quote-${issue.id}`}>
+            Quotation from this version
+            <textarea id={`quote-${issue.id}`} className={`${fieldClass} mt-1`} rows={2} value={quote} onChange={(event) => setQuote(event.target.value)} />
+          </label>
+          <label className="mt-2 block text-xs text-ink-soft" htmlFor={`quote-result-${issue.id}`}>
+            What the quotation shows
+            <select id={`quote-result-${issue.id}`} className={`${fieldClass} mt-1`} value={quoteResult} onChange={(event) => setQuoteResult(event.target.value as typeof quoteResult)}>
+              <option value="ADDRESSED">Addressed</option>
+              <option value="PARTIALLY_ADDRESSED">Partially addressed</option>
+              <option value="NOT_ADDRESSED">Not addressed</option>
+            </select>
+          </label>
+          <button type="button" className={`${btnQuiet} mt-2`} onClick={() => void quoteCheck()}>
+            Check this quotation
+          </button>
+        </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" className={btnQuiet} onClick={() => void respond("rebuttal")}>
             Post a response
           </button>
           <button type="button" className={btnQuiet} onClick={() => void respond("counter")}>
             Post a counter
+          </button>
+          <button type="button" className={btnQuiet} onClick={() => void respond("comment")}>
+            Post a comment
           </button>
         </div>
       </div>

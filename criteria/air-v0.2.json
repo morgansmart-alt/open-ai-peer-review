@@ -23,6 +23,11 @@
   },
   "recommendationCategories": [
     {
+      "id": "accept",
+      "label": "Accept / sound",
+      "meaning": "Sound as it stands. A reader can rely on the claims the record actually makes, without treating the work as a funding proposal that still needs a build."
+    },
+    {
       "id": "encourage",
       "label": "Encourage further development",
       "meaning": "The core idea is clear and the support is strong enough to build on, with only modest gaps."

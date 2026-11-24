@@ -183,6 +183,11 @@ export interface StoredReview {
   criteriaId: string
   criteriaVersion: string
   customCriteria: boolean
+  /**
+   * Criterion profile used for this reading. Absent means the device or engineering
+   * default, which is the current AIR v0.2 set. The stored key is the profile id.
+   */
+  criterionProfile?: string
   /** Free screenings stay off the ranked board. In-depth readings are ranked. Community AI never ranks. */
   tier?: "free-screening" | "in-depth" | "demo" | "community-ai"
   report: ReviewReport
@@ -251,7 +256,7 @@ export type IssueStatus =
   | "unresolved"
   | "fixed-in-new-version"
 
-export type RoundKind = "claim" | "source-check" | "rebuttal" | "counter" | "recheck"
+export type RoundKind = "claim" | "source-check" | "rebuttal" | "counter" | "recheck" | "comment"
 
 export type SourceResult = "ADDRESSED" | "PARTIALLY_ADDRESSED" | "NOT_ADDRESSED"
 
@@ -333,6 +338,7 @@ export const STORED_REVIEW_KEYS = [
   "criteriaId",
   "criteriaVersion",
   "customCriteria",
+  "criterionProfile",
   "report",
   "outputHash",
   "createdAt",

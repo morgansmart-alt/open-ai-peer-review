@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { officialCriteria } from "./officialCriteria.ts"
 import { buildHumanReport, emptyHumanDrafts } from "./humanReview.ts"
-import { statusFromCheck } from "./issues.ts"
+import { commentStatus, humanQuoteCheck, issuePenalty, statusFromCheck } from "./issues.ts"
 import { buildRanking } from "./ranking.ts"
 import type { AirDatabase, IssueRound, IssueThread, StoredReview } from "./types.ts"
 import {
@@ -267,5 +267,38 @@ describe("human review draft", () => {
       expect(quoted.report.scale).toBe(100)
       expect(quoted.report.scoringCheck?.mismatch).toBe(false)
     }
+  })
+})
+
+describe("quotes and comments", () => {
+  it("matches a quotation after ligatures, smart quotes, dashes, and whitespace are folded", () => {
+    const text = "The \uFB01nal ﬂow\u00A0is 582 kg/s on pages 3\u20134."
+    expect(quoteInPublication("The final flow is 582 kg/s on pages 3-4.", text)).toBe(true)
+    expect(quoteInPublication("the pump was never built", text)).toBe(false)
+  })
+
+  it("lets a person quote the new version without a model, and a comment leaves status and score alone", () => {
+    const publication = "The revised methods report the weighing protocol in full."
+    const checked = humanQuoteCheck({
+      quote: "report the weighing protocol",
+      note: "The new version states the protocol.",
+      result: "ADDRESSED",
+      publicationText: publication,
+    })
+    expect(checked.ok).toBe(true)
+    if (!checked.ok) return
+    expect(checked.result).toBe("ADDRESSED")
+    expect(checked.citations[0]?.quoteVerified).toBe(true)
+    const missed = humanQuoteCheck({ quote: "this sentence is not in the file", note: "", result: "ADDRESSED", publicationText: publication })
+    expect(missed.ok).toBe(false)
+    const open = thread([round({ id: "c", kind: "claim" })])
+    const commented: IssueThread = {
+      ...open,
+      status: commentStatus(open.status),
+      rounds: [...open.rounds, round({ id: "note", kind: "comment", body: "A reader asked for the table." })],
+    }
+    expect(commented.status).toBe("open")
+    expect(issuePenalty([commented])).toBe(issuePenalty([open]))
+    expect(canAppendRound(open, { kind: "comment" })).toBe(true)
   })
 })

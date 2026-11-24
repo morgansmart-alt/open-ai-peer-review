@@ -1,3 +1,4 @@
+import { altsFromStructTree, captionsFromText, figureBlock } from "./figures.ts"
 import { textFromDocx, textFromZip } from "./zipText.ts"
 import { extensionOf, fetchZenodoResponse, READABLE_EXTENSIONS, zenodoHttpMessage, type ZenodoAccess } from "./zenodo.ts"
 import { decodeText, textFromMarkup } from "./textTools.ts"
@@ -42,11 +43,21 @@ export async function extractPdf(
   data: ArrayBuffer,
   onProgress?: (message: string) => void,
 ): Promise<{ text: string; pages: number; pagesRead: number; note?: string }> {
-  const { getDocument } = await loadPdfjs()
-  const pdf = await getDocument({ data: new Uint8Array(data), useSystemFonts: true }).promise
+  const pdfjs = await loadPdfjs()
+  const pdf = await pdfjs.getDocument({ data: new Uint8Array(data), useSystemFonts: true }).promise
   const pageCount = pdf.numPages
   const limit = pagesToRead(pageCount)
   const parts: string[] = []
+  const alts: string[] = []
+  let sawImage = false
+  const paintOps = new Set(
+    [
+      pdfjs.OPS?.paintImageXObject,
+      pdfjs.OPS?.paintInlineImageXObject,
+      pdfjs.OPS?.paintImageXObjectRepeat,
+      pdfjs.OPS?.paintImageMaskXObject,
+    ].filter((value): value is number => typeof value === "number"),
+  )
   for (let pageNumber = 1; pageNumber <= limit; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber)
     const content = await page.getTextContent()
@@ -56,15 +67,34 @@ export async function extractPdf(
       .replace(/[ \t]{2,}/g, " ")
       .trim()
     if (line) parts.push(line)
+    if (!sawImage && paintOps.size > 0) {
+      try {
+        const operators = await page.getOperatorList()
+        if (operators.fnArray.some((fn) => paintOps.has(fn))) sawImage = true
+      } catch {
+        // A page without an operator list still contributes its text layer.
+      }
+    }
+    const withTree = page as { getStructTree?: () => Promise<unknown> }
+    if (withTree.getStructTree) {
+      try {
+        altsFromStructTree(await withTree.getStructTree(), alts)
+      } catch {
+        // Many PDFs have no structure tree. Captions in the text layer still count.
+      }
+    }
     if (pageNumber % PDF_BATCH === 0) {
       onProgress?.(`Reading page ${pageNumber} of ${pageCount}…`)
       await new Promise((resolve) => setTimeout(resolve, 0))
     }
   }
-  const text = parts.join("\n\n")
+  const body = parts.join("\n\n")
+  const block = figureBlock({ captions: captionsFromText(body), alts, sawImage })
+  const text = block ? `${body}\n\n${block}` : body
   const notes = [
     pageCount > limit ? `Read ${limit} of ${pageCount} pages so the tab stays responsive.` : "",
-    scannedPdfNote(text, limit) ?? "",
+    scannedPdfNote(body, limit) ?? "",
+    block ? "Figures not read." : "",
   ].filter(Boolean)
   return { text, pages: pageCount, pagesRead: limit, note: notes.join(" ") || undefined }
 }

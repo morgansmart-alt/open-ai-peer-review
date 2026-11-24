@@ -1,5 +1,5 @@
 import { keySlot } from "../domain/assessors.ts"
-import type { AssessorProfile, ProviderSettings } from "../domain/types.ts"
+import type { AssessorProfile, ProviderId, ProviderSettings } from "../domain/types.ts"
 
 export interface ChatRequest {
   model: string
@@ -162,4 +162,71 @@ export async function completeChat(profile: AssessorProfile, settings: ProviderS
       ? { "HTTP-Referer": "https://air-peer-review.local", "X-Title": "AIR Peer Review" }
       : {}
   return openAiCompatible(baseUrl, key, ready, headers, profile.provider === "xai" ? OUTPUT_TOKEN_LIMIT : undefined)
+}
+
+export interface KeyCheckTarget {
+  provider: ProviderId
+  baseUrl: string
+  key: string
+}
+
+/**
+ * One cheap authenticated request. Gemini, xAI, OpenAI, and Anthropic use the models list.
+ * OpenRouter's models list is public, so a bad key would look valid. Its key endpoint is the cheap check and does not generate text.
+ */
+export function keyCheckRequest(target: KeyCheckTarget): { url: string; headers: Record<string, string> } {
+  const base = target.baseUrl.replace(/\/$/, "")
+  const key = target.key.trim()
+  if (target.provider === "gemini") return { url: `${base}/models`, headers: { "x-goog-api-key": key } }
+  if (target.provider === "anthropic") {
+    return {
+      url: `${base}/v1/models`,
+      headers: {
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+    }
+  }
+  if (target.provider === "openrouter") {
+    return {
+      url: `${base}/key`,
+      headers: {
+        authorization: `Bearer ${key}`,
+        "HTTP-Referer": "https://air-peer-review.local",
+        "X-Title": "AIR Peer Review",
+      },
+    }
+  }
+  return { url: `${base}/models`, headers: { authorization: `Bearer ${key}` } }
+}
+
+export function plainKeyCheckMessage(status: number, body: string): { ok: true; message: string } | { ok: false; message: string } {
+  if (status >= 200 && status < 300) return { ok: true, message: "Key accepted. It stays in this browser." }
+  const lower = body.toLowerCase()
+  const quota = /quota|resource_exhausted|billing|credit|insufficient|spending limit|exceeded your current quota/.test(lower)
+  const rate = status === 429 || /rate limit|too many requests/.test(lower)
+  const invalid =
+    status === 401 ||
+    /api key not valid|invalid api key|incorrect api key|unauthorized|permission denied/.test(lower) ||
+    (status === 403 && /api key|unauthor|permission|invalid/.test(lower))
+  if (quota) return { ok: false, message: "This key has reached its quota. Try again later, or use the on-device review." }
+  if (rate) return { ok: false, message: "The provider is rate-limiting checks right now. Wait a moment and try again." }
+  if (invalid) return { ok: false, message: "That key was not accepted. Copy it again, with no extra spaces." }
+  return { ok: false, message: "The provider did not accept this check. Wait a moment and try again." }
+}
+
+/** Asks the provider whether this key is accepted. Does not run a model. */
+export async function validateApiKey(target: KeyCheckTarget): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
+  const key = target.key.trim()
+  if (!key) return { ok: false, message: "Paste a key first." }
+  const request = keyCheckRequest({ ...target, key })
+  let response: Response
+  try {
+    response = await fetch(request.url, { method: "GET", headers: request.headers })
+  } catch {
+    return { ok: false, message: "The browser could not reach the provider. Check the connection and try again." }
+  }
+  const body = await response.text()
+  return plainKeyCheckMessage(response.status, body)
 }

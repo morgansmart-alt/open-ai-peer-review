@@ -324,11 +324,18 @@ begin
   if jsonb_typeof(new_round) is distinct from 'object'
      or coalesce(new_round->>'id', '') = ''
      or length(new_round->>'id') > 200
-     or new_round->>'kind' not in ('claim', 'source-check', 'rebuttal', 'counter', 'recheck')
+     or new_round->>'kind' not in ('claim', 'source-check', 'rebuttal', 'counter', 'recheck', 'comment')
      or length(coalesce(new_round->>'body', '')) > 4000
      or length(coalesce(new_round->>'authorLabel', '')) > 200
      or coalesce(jsonb_array_length(new_round->'citations'), 0) > 8 then
     raise exception 'That round is not valid.';
+  end if;
+  if coalesce(new_round->>'kind', '') = 'comment'
+     and (
+       p_payload->>'status' is distinct from current_row.payload->>'status'
+       or coalesce(new_round->>'result', '') <> ''
+     ) then
+    raise exception 'A comment does not change the issue status.';
   end if;
   if new_round ? 'privateContextCount' then
     if (new_round->>'privateContextCount') !~ '^[0-9]+$'

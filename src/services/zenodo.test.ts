@@ -8,9 +8,11 @@ import {
   fetchZenodoRecord,
   filesAreRestricted,
   formatRecordStamp,
+  formatVersionLabel,
   normalizeZenodoRecord,
   parseRecordRef,
   selectedReadableFiles,
+  selectionWithCodeData,
   stripHtml,
   zenodoClientHeaders,
   zenodoHttpMessage,
@@ -147,6 +149,7 @@ describe("defaultFileSelection", () => {
       "README.md",
     ])
     expect(defaultFileSelection(files)).not.toContain("11_SCG_HMH_v8_reproducibility_scripts_and_outputs.zip")
+    expect(defaultFileSelection(files, { includeCodeData: true })).not.toContain("11_SCG_HMH_v8_reproducibility_scripts_and_outputs.zip")
   })
 
   it("keeps other PDFs that fit after the primary manuscript", () => {
@@ -170,16 +173,16 @@ describe("defaultFileSelection", () => {
     ).toEqual(["01_paper.pdf", "03_notes.pdf"])
   })
 
-  it("preselects the same paper as PDF, markdown, and tex, and skips images and zips", () => {
-    expect(
-      defaultFileSelection([
-        file("manuscript.pdf", 250_000),
-        file("manuscript.md", 8_000),
-        file("manuscript.tex", 12_000),
-        file("figure.png", 40_000),
-        file("sources.zip", 30_000),
-      ]),
-    ).toEqual(["manuscript.pdf", "manuscript.md", "manuscript.tex"])
+  it("preselects the same paper as PDF, markdown, and tex, skips images, and adds a zip that still fits", () => {
+    const files = [
+      file("manuscript.pdf", 250_000),
+      file("manuscript.md", 8_000),
+      file("manuscript.tex", 12_000),
+      file("figure.png", 40_000),
+      file("sources.zip", 30_000),
+    ]
+    expect(defaultFileSelection(files)).toEqual(["manuscript.pdf", "manuscript.md", "manuscript.tex", "sources.zip"])
+    expect(defaultFileSelection(files, { includeCodeData: false })).toEqual(["manuscript.pdf", "manuscript.md", "manuscript.tex"])
   })
 
   it("still selects a readable file when the record is only supplements", () => {
@@ -191,9 +194,12 @@ describe("defaultFileSelection", () => {
 })
 
 describe("formatRecordStamp", () => {
-  it("uses the Zenodo version when one is present, otherwise the record id and date", () => {
-    expect(formatRecordStamp({ version: "v8", id: "23773780", publicationDate: "2026-10-29" })).toBe("version v8 · 2026-10-29")
-    expect(formatRecordStamp({ version: "", id: "23773780", publicationDate: "2026-10-29" })).toBe("Record 23773780 · 2026-10-29")
+  it("uses the Zenodo version when one is present, and a friendly date when the stored key is a stamp", () => {
+    expect(formatRecordStamp({ version: "v8", id: "23773780", publicationDate: "2026-10-29" })).toBe("version v8 · 29 Oct 2026")
+    expect(formatRecordStamp({ version: "", id: "23773780", publicationDate: "2026-10-29" })).toBe("Published 29 Oct 2026")
+    expect(formatVersionLabel("22826@2015-08-04")).toBe("Published 4 Aug 2015")
+    expect(formatVersionLabel("v8")).toBe("v8")
+    expect(normalizeZenodoRecord(legacy).recordVersion).toBe("18916931@2026-03-09")
   })
 })
 
@@ -201,7 +207,9 @@ describe("selected files for one version", () => {
   it("ignores keys that are not on this record", () => {
     const files = [file("new.pdf", 1_000), file("notes.md", 100), file("pack.zip", 100), file("fig.png", 100)]
     expect(selectedReadableFiles(files, ["old.pdf", "new.pdf", "fig.png"]).map((item) => item.key)).toEqual(["new.pdf"])
-    expect(defaultFileSelection(files)).toEqual(["new.pdf", "notes.md"])
+    expect(defaultFileSelection(files)).toEqual(["new.pdf", "notes.md", "pack.zip"])
+    expect(selectionWithCodeData(files, ["new.pdf"], false)).toEqual(["new.pdf"])
+    expect(selectionWithCodeData(files, ["new.pdf"], true)).toEqual(["new.pdf", "pack.zip"])
   })
 
   it("remembers a selection for that record and falls back when it does not fit the files", () => {

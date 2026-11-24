@@ -4,6 +4,8 @@ import { PrivateLinksField, emptyLinkDraft, type LinkDraft } from "../components
 import { collectConversationLinks, saveSubmissionLinks } from "../domain/conversationLinks.ts"
 import { publishNotices } from "../content/notices.ts"
 import { keySlot } from "../domain/assessors.ts"
+import { CRITERION_PROFILES, readingCriteria, suggestCriterionProfile, type CriterionProfileId } from "../domain/profiles.ts"
+import { FreeKeyGuide } from "../components/FreeKeyGuide.tsx"
 import { median } from "../domain/ranking.ts"
 import { boardValue } from "../domain/scoring.ts"
 import type { ReviewReport, StoredReview } from "../domain/types.ts"
@@ -22,6 +24,8 @@ import {
   fetchZenodoRecord,
   filesAreRestricted,
   formatRecordStamp,
+  isDepositedCodeOrData,
+  selectionWithCodeData,
   type ZenodoFile,
   type ZenodoRecord,
 } from "../services/zenodo.ts"
@@ -53,11 +57,20 @@ export function ReviewPage() {
   const [downloadNote, setDownloadNote] = useState<string | null>(null)
   const localBytes = useRef(new Map<string, ArrayBuffer>())
   const [published, setPublished] = useState(false)
+  const [criterionProfile, setCriterionProfile] = useState<CriterionProfileId>("device")
+  const [includeCodeData, setIncludeCodeData] = useState(true)
+  const [guideOpen, setGuideOpen] = useState(params.get("guide") === "1")
+  const guideRef = useRef<HTMLDivElement>(null)
   const acknowledged = publishNotices.every((notice) => acks[notice.id])
+  const criteria = readingCriteria(air.criteria, criterionProfile, air.customCriteria)
 
   useEffect(() => {
     const initial = params.get("doi")
     if (initial) setInput(initial)
+    if (params.get("guide") === "1") {
+      setGuideOpen(true)
+      guideRef.current?.scrollIntoView({ block: "start" })
+    }
   }, [params])
 
   function rememberLocal(file: ZenodoFile, bytes: ArrayBuffer) {
@@ -121,7 +134,11 @@ export function ReviewPage() {
     try {
       const next = parsed.kind === "zenodo" ? await fetchZenodoRecord(parsed.recordId) : await resolvePublishedDoi(parsed.doi)
       setRecord(next)
-      setSelected(fileSelectionFor(next.id, next.files))
+      const picked = fileSelectionFor(next.id, next.files)
+      setSelected(picked)
+      const codeFiles = next.files.filter((file) => isDepositedCodeOrData(file))
+      setIncludeCodeData(codeFiles.length === 0 || codeFiles.some((file) => picked.includes(file.key)))
+      setCriterionProfile(suggestCriterionProfile(next))
       setDownloadNote(next.files.length === 0 ? "No open file was linked for this DOI. Drop the PDF below. Publishing still needs the DOI." : null)
       setStatus(null)
     } catch (caught) {
@@ -188,13 +205,13 @@ export function ReviewPage() {
     }
     const report = await runFreeScreening({
         kind,
-        criteria: air.criteria,
+        criteria,
         record,
         documents,
         conversations: collected.links,
         profile,
         ctx: profile
-          ? { profile, settings: air.providerSettings, criteria: air.criteria, record, documents, conversationLinks: collected.links, demo: false, onProgress: setStatus }
+          ? { profile, settings: air.providerSettings, criteria, record, documents, conversationLinks: collected.links, demo: false, onProgress: setStatus }
           : undefined,
         onProgress: setStatus,
       })
@@ -219,9 +236,10 @@ export function ReviewPage() {
             assessorId: profile?.id ?? "free",
             modelId,
             provider: profile?.provider ?? "compatible",
-            criteriaId: air.criteria.id,
-            criteriaVersion: air.criteria.version,
-            customCriteria: false,
+            criteriaId: criteria.id,
+            criteriaVersion: criteria.version,
+            customCriteria: air.customCriteria,
+            criterionProfile: air.customCriteria ? undefined : criterionProfile,
             tier: "free-screening",
             report,
             outputHash: await sha256Hex(`${modelId}\n${JSON.stringify(report)}`),
@@ -279,7 +297,7 @@ export function ReviewPage() {
           const report = await runReview({
             profile,
             settings: air.providerSettings,
-            criteria: air.criteria,
+            criteria,
             record,
             documents,
             conversationLinks: collected.links,
@@ -305,9 +323,10 @@ export function ReviewPage() {
             assessorId: profile.id,
             modelId,
             provider: profile.provider,
-            criteriaId: air.criteria.id,
-            criteriaVersion: air.criteria.version,
+            criteriaId: criteria.id,
+            criteriaVersion: criteria.version,
             customCriteria: air.customCriteria,
+            criterionProfile: air.customCriteria ? undefined : criterionProfile,
             tier: demo ? "demo" : "in-depth",
             report,
             outputHash,
@@ -363,7 +382,7 @@ export function ReviewPage() {
       return [boardValue(result.report.overallScore, result.report, result.stored?.criteriaVersion ?? air.criteria.version)]
     }),
   )
-  const notes = useMemo(() => disagreementNotes(results, air.criteria.criteria.map((item) => item.id)), [air.criteria.criteria, results])
+  const notes = useMemo(() => disagreementNotes(results, criteria.criteria.map((item) => item.id)), [criteria.criteria, results])
   const restricted = record ? filesAreRestricted(record) : false
 
   return (
@@ -373,6 +392,16 @@ export function ReviewPage() {
         Four steps. The work is judged on its own logic and evidence, not on who wrote it.{" "}
         {air.customCriteria ? "Custom criteria stay off the ranked board." : `New readings use AIR ${air.criteria.version}. Older AIR v0.1 readings stay valid and are labelled.`}
       </p>
+      <div ref={guideRef} className="mt-4">
+        <button type="button" className={btnQuiet} aria-expanded={guideOpen} aria-controls="free-key-guide" onClick={() => setGuideOpen((open) => !open)}>
+          Get a free AI key in 2 minutes
+        </button>
+        {guideOpen && (
+          <div className="mt-3">
+            <FreeKeyGuide />
+          </div>
+        )}
+      </div>
       <ol className="mt-6 space-y-4">
         <li data-testid="notices" className="rounded-3xl border border-line bg-white/70 p-4">
           <h2 className="font-serif text-2xl">Step 1 · Read this before anything is published</h2>
@@ -483,7 +512,16 @@ export function ReviewPage() {
               files={record.files}
               selected={selected}
               disabled={restricted}
-              hint="The main manuscript comes first, then supplements, other PDFs, and text sources, while they fit under 12 files and 8 MB. A zip stays unticked. Images are not read as text. A paper that fits the model's context is sent in full."
+              includeCodeData={includeCodeData}
+              hint="The main manuscript comes first, then supplements, other PDFs, and text sources, while they fit under 12 files and 8 MB. A zip is ticked when it still fits, and text, code, and markdown inside it are read. Images are figures not read. A paper that fits the model's context is sent in full."
+              onIncludeCodeData={(next) => {
+                setIncludeCodeData(next)
+                setSelected((current) => {
+                  const keys = selectionWithCodeData(record.files, current, next)
+                  rememberFileSelection(record.id, keys)
+                  return keys
+                })
+              }}
               onChange={(keys) => {
                 setSelected(keys)
                 rememberFileSelection(record.id, keys)
@@ -512,7 +550,36 @@ export function ReviewPage() {
           <div>
             <fieldset className="rounded-3xl border border-line bg-white/60 p-4">
               <legend className="font-serif text-2xl">Step 4 · Assessors</legend>
-              <p className="mt-1 text-xs text-ink-soft">One model, or a panel. Each uses the key for its provider. Demo mode calls none of them.</p>
+              <p className="mt-1 text-xs text-ink-soft">One model, or a panel. Each uses the key for its provider. Demo mode calls none of them. A free Gemini key takes about two minutes and does not need a card.</p>
+              <button
+                type="button"
+                className={`${btnQuiet} mt-3`}
+                onClick={() => {
+                  setGuideOpen(true)
+                  guideRef.current?.scrollIntoView({ block: "start" })
+                }}
+              >
+                Get a free AI key in 2 minutes
+              </button>
+              <label className="mt-4 block text-xs text-ink-soft" htmlFor="criterion-profile">
+                Criterion profile
+                <select
+                  id="criterion-profile"
+                  className={`${fieldClass} mt-1`}
+                  value={criterionProfile}
+                  disabled={air.customCriteria}
+                  onChange={(event) => setCriterionProfile(event.target.value as CriterionProfileId)}
+                >
+                  {CRITERION_PROFILES.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="mt-1 text-xs text-ink-soft">
+                {CRITERION_PROFILES.find((profile) => profile.id === criterionProfile)?.summary} Suggested from the record’s type and keywords. You can change it before the reading. Estimated project value stays hidden unless this is a device or funding proposal.
+              </p>
               <ul className="mt-3 space-y-2">
                 {air.profiles.map((profile) => {
                   const keyed = Boolean(air.providerSettings.keys[keySlot(profile)] || air.providerSettings.keys[profile.provider])
@@ -622,7 +689,7 @@ export function ReviewPage() {
                 <ReportView
                   key={result.assessorId}
                   report={result.report}
-                  criteria={air.criteria}
+                  criteria={criteria}
                   meta={{
                     assessorName: profile?.name ?? result.assessorId,
                     modelId: result.stored?.modelId ?? "",
@@ -630,7 +697,7 @@ export function ReviewPage() {
                     doi: record.doi,
                     recordVersion: record.recordVersion,
                     createdAt: result.stored?.createdAt ?? new Date().toISOString(),
-                    criteriaVersion: air.criteria.version,
+                    criteriaVersion: criteria.version,
                     customCriteria: air.customCriteria,
                     mock: result.stored?.mock ?? true,
                     outputHash: result.stored?.outputHash,

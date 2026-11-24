@@ -34,7 +34,8 @@ export function buildHumanReport(input: {
   const errors: string[] = []
   const summary = input.summary.trim()
   if (summary.length < 40) errors.push("Write a summary of at least 40 characters.")
-  if (!["encourage", "revise", "major-revision", "not-ready"].includes(input.recommendation)) {
+  const allowed = new Set(input.criteria.recommendationCategories.map((item) => item.id))
+  if (!allowed.has(input.recommendation)) {
     errors.push("Choose a recommendation.")
   }
   const scores = input.criteria.criteria.map((criterion) => {

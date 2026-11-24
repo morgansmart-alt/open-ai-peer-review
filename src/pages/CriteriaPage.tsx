@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { parseCriteria } from "../domain/criteria.ts"
+import { applyCriterionProfile, CRITERION_PROFILES, PROFILE_RANKING_NOTE } from "../domain/profiles.ts"
 import { officialCriteria } from "../domain/officialCriteria.ts"
 import { useAir } from "../context/AirContext.tsx"
 import { Banner, btnPrimary, btnQuiet } from "../components/ui.tsx"
@@ -54,6 +55,23 @@ export function CriteriaPage() {
             {officialCriteria.ideaCriterionIds.includes(criterion.id) && <p className="mt-2 text-xs text-teal">Counts toward the idea ranking.</p>}
           </li>
         ))}
+      </ul>
+      <h2 className="mt-8 font-serif text-2xl">Profiles</h2>
+      <p className="mt-2 text-sm text-ink-soft">{PROFILE_RANKING_NOTE}</p>
+      <ul className="mt-3 space-y-3">
+        {CRITERION_PROFILES.map((profile) => {
+          const applied = applyCriterionProfile(officialCriteria, profile.id)
+          return (
+            <li key={profile.id} className="rounded-2xl border border-line bg-white/60 p-4">
+              <h3 className="font-medium">{profile.label}</h3>
+              <p className="mt-1 text-sm">{profile.summary}</p>
+              <p className="mt-2 text-xs text-ink-soft">
+                {profile.proposal ? "Includes estimated project value." : "Estimated project value is hidden."} Weights:{" "}
+                {applied.criteria.map((criterion) => `${criterion.name} ${criterion.weight}`).join(" · ")}
+              </p>
+            </li>
+          )
+        })}
       </ul>
       <h2 className="mt-8 font-serif text-2xl">Use a different criteria file</h2>
       <p className="mt-2 text-sm text-ink-soft">Paste JSON for this session only. It is checked before it is used. Clearing it returns you to AIR {officialCriteria.version}.</p>

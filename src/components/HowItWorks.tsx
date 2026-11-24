@@ -1,3 +1,5 @@
+import { FreeKeyGuide } from "./FreeKeyGuide.tsx"
+
 const steps = [
   {
     title: "Paste a Zenodo DOI",
@@ -50,6 +52,9 @@ export function HowItWorks() {
           </li>
         ))}
       </ol>
+      <div className="mt-3">
+        <FreeKeyGuide id="how-free-key" />
+      </div>
       <details className="mt-3 rounded-2xl border border-line bg-white/40 px-3 py-2">
         <summary className="cursor-pointer text-sm font-medium">Questions people ask</summary>
         <dl className="mt-3 space-y-3">

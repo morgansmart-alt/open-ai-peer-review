@@ -1,3 +1,4 @@
+import { normaliseQuoteText } from "./quotes.ts"
 import type { IssueRound, IssueStatus, IssueThread, RoundKind, SourceResult, StoredReview } from "./types.ts"
 
 export const ROUND_LIMIT = 6
@@ -104,10 +105,9 @@ export const LOCAL_FLUID_ROUND_NOTE =
   "Saved on this browser. The shared board still stops at six rounds until its database is updated."
 
 export function quoteInPublication(quote: string, text: string): boolean {
-  const needle = quote.trim().toLowerCase().replace(/\s+/g, " ")
+  const needle = normaliseQuoteText(quote)
   if (needle.length < 12) return false
-  const haystack = text.toLowerCase().replace(/\s+/g, " ")
-  return haystack.includes(needle)
+  return normaliseQuoteText(text).includes(needle)
 }
 
 export function publicationPlainText(documents: { text: string }[], description = ""): string {

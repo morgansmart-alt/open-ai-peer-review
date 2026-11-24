@@ -6,11 +6,12 @@ import { Banner, btnPrimary, btnQuiet, fieldClass } from "./ui.tsx"
 import { publishNotices } from "../content/notices.ts"
 import { keySlot } from "../domain/assessors.ts"
 import { collectConversationLinks, saveSubmissionLinks } from "../domain/conversationLinks.ts"
-import { weightedMean } from "../domain/criteria.ts"
+import { recommendationFor, weightedMean } from "../domain/criteria.ts"
+import { CRITERION_PROFILES, readingCriteria, suggestCriterionProfile, type CriterionProfileId } from "../domain/profiles.ts"
 import { buildHumanReport, emptyHumanDrafts, type HumanCriterionDraft } from "../domain/humanReview.ts"
 import { latestAuthorClaim } from "../domain/issues.ts"
-import { describeScoring, expectedVerdict } from "../domain/scoring.ts"
-import type { MajorIssue, ReviewReport, StoredReview } from "../domain/types.ts"
+import { describeScoring } from "../domain/scoring.ts"
+import type { CriteriaSet, MajorIssue, ReviewReport, StoredReview } from "../domain/types.ts"
 import { useAir } from "../context/AirContext.tsx"
 import { sha256Hex, uid } from "../services/hash.ts"
 import { resolvedModel } from "../services/providers.ts"
@@ -19,26 +20,65 @@ import { publicationPlainText } from "../domain/versions.ts"
 import type { ZenodoRecord } from "../services/zenodo.ts"
 
 export function ReviewWorkspace({ record, documents }: { record: ZenodoRecord; documents: { filename: string; text: string }[] }) {
+  const air = useAir()
   const text = publicationPlainText(documents, record.description)
+  const suggestedProfile = suggestCriterionProfile(record)
+  const [profileChoice, setProfileChoice] = useState<{ recordId: string; profileId: CriterionProfileId } | null>(null)
+  const profileId = profileChoice?.recordId === record.id ? profileChoice.profileId : suggestedProfile
+  const criteria = readingCriteria(air.criteria, profileId, air.customCriteria)
   return (
     <section className="mt-8" aria-labelledby="review-workspace-heading">
       <h2 id="review-workspace-heading" className="font-serif text-2xl">
         Review this version
       </h2>
       <p className="mt-1 max-w-3xl text-sm text-ink-soft">
-        Score every AIR criterion from 0 to 100. AIR weights those scores itself. If the overall score or the recommendation disagrees with them, the reading is flagged and left out of the median. Mark a claim possible or proven. Possible is not proven, and proven needs a quotation from this version. A human review sits beside the AI scores and is not mixed into them.
+        Score every criterion in this profile from 0 to 100. AIR weights those scores itself. Human and AI readings use that same scale. If the overall score or the recommendation disagrees with them, the reading is flagged and left out of the median. Mark a claim possible or proven. Possible is not proven, and proven needs a quotation from this version. A human review sits beside the AI scores and is not mixed into them.
+      </p>
+      <label className="mt-3 block max-w-md text-xs text-ink-soft" htmlFor="workspace-profile">
+        Criterion profile
+        <select
+          id="workspace-profile"
+          className={`${fieldClass} mt-1`}
+          value={profileId}
+          disabled={air.customCriteria}
+          onChange={(event) => setProfileChoice({ recordId: record.id, profileId: event.target.value as CriterionProfileId })}
+        >
+          {CRITERION_PROFILES.map((profile) => (
+            <option key={profile.id} value={profile.id}>
+              {profile.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="mt-1 max-w-3xl text-xs text-ink-soft">
+        {CRITERION_PROFILES.find((profile) => profile.id === profileId)?.summary} Suggested from this record. A reviewer can change it. Estimated project value is only for a device or funding proposal.
       </p>
       <div className="mt-4 grid gap-4 xl:grid-cols-2">
-        <HumanReviewForm record={record} publicationText={text} />
-        <AiReviewPanel record={record} documents={documents} />
+        <HumanReviewForm record={record} publicationText={text} criteria={criteria} profileId={air.customCriteria ? undefined : profileId} />
+        <AiReviewPanel record={record} documents={documents} criteria={criteria} profileId={air.customCriteria ? undefined : profileId} />
       </div>
     </section>
   )
 }
 
-function HumanReviewForm({ record, publicationText }: { record: ZenodoRecord; publicationText: string }) {
+function HumanReviewForm({
+  record,
+  publicationText,
+  criteria,
+  profileId,
+}: {
+  record: ZenodoRecord
+  publicationText: string
+  criteria: CriteriaSet
+  profileId?: string
+}) {
   const air = useAir()
-  const [drafts, setDrafts] = useState<HumanCriterionDraft[]>(() => emptyHumanDrafts(air.criteria))
+  const profileSignature = criteria.criteria.map((criterion) => `${criterion.id}:${criterion.weight}`).join("|")
+  const [draftState, setDraftState] = useState<{ signature: string; drafts: HumanCriterionDraft[] }>(() => ({
+    signature: profileSignature,
+    drafts: emptyHumanDrafts(criteria),
+  }))
+  const drafts = draftState.signature === profileSignature ? draftState.drafts : emptyHumanDrafts(criteria)
   const [summary, setSummary] = useState("")
   const [strengths, setStrengths] = useState("")
   const [stated, setStated] = useState<number | null>(null)
@@ -47,22 +87,25 @@ function HumanReviewForm({ record, publicationText }: { record: ZenodoRecord; pu
   const [ack, setAck] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
-  const weighted = weightedMean(drafts, air.criteria)
+  const weighted = weightedMean(drafts, criteria)
   const shownOverall = stated ?? weighted ?? 0
-  const suggested = expectedVerdict(weighted ?? shownOverall)
+  const suggested = recommendationFor(weighted ?? shownOverall, criteria)
   const shownRecommendation = recommendation ?? suggested
   const scoring = describeScoring({
     scores: drafts,
     statedOverall: shownOverall,
     recommendation: shownRecommendation,
-    criteria: air.criteria,
+    criteria,
   })
   const orcid = air.settings.orcid.replace(/^https?:\/\/orcid\.org\//i, "").trim()
   const listed = Boolean(orcid) && record.creators.some((creator) => creator.orcid === orcid)
   const claim = latestAuthorClaim(air.db.claims, record.doi)
 
   function updateDraft(criterionId: string, patch: Partial<HumanCriterionDraft>) {
-    setDrafts((current) => current.map((draft) => (draft.criterionId === criterionId ? { ...draft, ...patch } : draft)))
+    setDraftState({
+      signature: profileSignature,
+      drafts: drafts.map((draft) => (draft.criterionId === criterionId ? { ...draft, ...patch } : draft)),
+    })
     setSaved(false)
   }
 
@@ -73,7 +116,7 @@ function HumanReviewForm({ record, publicationText }: { record: ZenodoRecord; pu
       return
     }
     const built = buildHumanReport({
-      criteria: air.criteria,
+      criteria,
       summary,
       recommendation: shownRecommendation,
       statedOverall: shownOverall,
@@ -102,9 +145,10 @@ function HumanReviewForm({ record, publicationText }: { record: ZenodoRecord; pu
       assessorId: "human",
       modelId: "human-reviewer",
       provider: "compatible",
-      criteriaId: air.criteria.id,
-      criteriaVersion: air.criteria.version,
+      criteriaId: criteria.id,
+      criteriaVersion: criteria.version,
       customCriteria: air.customCriteria,
+      criterionProfile: profileId,
       origin: "human",
       report: built.report,
       outputHash: await sha256Hex(`human\n${JSON.stringify(built.report)}`),
@@ -133,7 +177,7 @@ function HumanReviewForm({ record, publicationText }: { record: ZenodoRecord; pu
       </p>
       {scoring.scoringCheck.mismatch && scoring.scoringCheck.reason && <p className="mt-1 text-xs text-gold">{scoring.scoringCheck.reason}</p>}
       <ul className="mt-3 max-h-[36rem] space-y-3 overflow-auto pr-1">
-        {air.criteria.criteria.map((criterion) => {
+        {criteria.criteria.map((criterion) => {
           const draft = drafts.find((item) => item.criterionId === criterion.id)
           if (!draft) return null
           return (
@@ -145,8 +189,8 @@ function HumanReviewForm({ record, publicationText }: { record: ZenodoRecord; pu
                   <input
                     className={`${fieldClass} ml-2 w-20`}
                     type="number"
-                    min={air.criteria.scale.min}
-                    max={air.criteria.scale.max}
+                    min={criteria.scale.min}
+                    max={criteria.scale.max}
                     value={draft.score}
                     aria-label={`${criterion.name} score`}
                     onChange={(event) => updateDraft(criterion.id, { score: Number(event.target.value) })}
@@ -198,7 +242,7 @@ function HumanReviewForm({ record, publicationText }: { record: ZenodoRecord; pu
         <label className="text-xs text-ink-soft">
           Recommendation
           <select className={`${fieldClass} mt-1`} value={shownRecommendation} onChange={(event) => setRecommendation(event.target.value)}>
-            {air.criteria.recommendationCategories.map((category) => (
+            {criteria.recommendationCategories.map((category) => (
               <option key={category.id} value={category.id}>
                 {category.label}
               </option>
@@ -206,7 +250,7 @@ function HumanReviewForm({ record, publicationText }: { record: ZenodoRecord; pu
           </select>
         </label>
       </div>
-      <FailureDrafts criteriaIds={air.criteria.criteria.map((criterion) => criterion.id)} issues={issues} onChange={setIssues} />
+      <FailureDrafts criteriaIds={criteria.criteria.map((criterion) => criterion.id)} issues={issues} onChange={setIssues} />
       <label className="mt-3 flex items-start gap-2 text-sm">
         <input type="checkbox" checked={ack} onChange={(event) => setAck(event.target.checked)} />
         <span>Publish this human review beside the AI scores. It does not enter the AI median. A private link is not part of this form and cannot close an issue.</span>
@@ -290,7 +334,17 @@ function FailureDrafts({
   )
 }
 
-function AiReviewPanel({ record, documents }: { record: ZenodoRecord; documents: { filename: string; text: string }[] }) {
+function AiReviewPanel({
+  record,
+  documents,
+  criteria,
+  profileId,
+}: {
+  record: ZenodoRecord
+  documents: { filename: string; text: string }[]
+  criteria: CriteriaSet
+  profileId?: string
+}) {
   const air = useAir()
   const [chosen, setChosen] = useState<string[]>(() => air.profiles.slice(0, 1).map((profile) => profile.id))
   const [links, setLinks] = useState<LinkDraft[]>([emptyLinkDraft()])
@@ -333,7 +387,7 @@ function AiReviewPanel({ record, documents }: { record: ZenodoRecord; documents:
         const report = await runReview({
           profile,
           settings: air.providerSettings,
-          criteria: air.criteria,
+          criteria,
           record,
           documents: documents.length ? documents : [{ filename: "description", text: record.description }],
           conversationLinks: collected.links,
@@ -356,9 +410,10 @@ function AiReviewPanel({ record, documents }: { record: ZenodoRecord; documents:
           assessorId: profile.id,
           modelId,
           provider: profile.provider,
-          criteriaId: air.criteria.id,
-          criteriaVersion: air.criteria.version,
+          criteriaId: criteria.id,
+          criteriaVersion: criteria.version,
           customCriteria: air.customCriteria,
+          criterionProfile: profileId,
           origin: "ai",
           tier: air.settings.demoMode ? "demo" : "in-depth",
           report,
@@ -435,7 +490,7 @@ function AiReviewPanel({ record, documents }: { record: ZenodoRecord; documents:
           <div key={result.assessorId} className="mt-3">
             <ReportView
               report={result.report}
-              criteria={air.criteria}
+              criteria={criteria}
               meta={{
                 assessorName: profile?.name ?? result.assessorId,
                 modelId: result.stored?.modelId ?? "",
@@ -443,7 +498,7 @@ function AiReviewPanel({ record, documents }: { record: ZenodoRecord; documents:
                 doi: record.doi,
                 recordVersion: record.recordVersion,
                 createdAt: result.stored?.createdAt ?? new Date().toISOString(),
-                criteriaVersion: air.criteria.version,
+                criteriaVersion: criteria.version,
                 customCriteria: air.customCriteria,
                 mock: result.stored?.mock ?? true,
                 outputHash: result.stored?.outputHash,
