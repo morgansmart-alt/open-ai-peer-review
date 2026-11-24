@@ -1015,7 +1015,10 @@
       if (!wanted.has(criterion.id)) continue;
       if (!ids && isBonusCriterion(criterion.id)) continue;
       const found = scores.find((item) => item.criterionId === criterion.id);
-      if (!found) return null;
+      if (!found) {
+        if (isBonusCriterion(criterion.id)) continue;
+        return null;
+      }
       weight += criterion.weight;
       total += criterion.weight * found.score;
     }
@@ -2092,17 +2095,77 @@ ${output}
     }
     return last;
   }
+  var SCORE_KEY_SKIP = /* @__PURE__ */ new Set([
+    "summary",
+    "overallscore",
+    "recommendation",
+    "strengths",
+    "scores",
+    "questions",
+    "questionsforauthors",
+    "suggestednextsteps",
+    "nextsteps",
+    "minorissues",
+    "majorissues",
+    "ontologyclass",
+    "valueestimate",
+    "goals",
+    "air_feedback",
+    "airfeedback",
+    "reading",
+    "scale",
+    "ideascore",
+    "statedoverall",
+    "scoringcheck",
+    "confidence"
+  ]);
+  function scoreEntry(key, field) {
+    if (SCORE_KEY_SKIP.has(key.toLowerCase().replace(/[_-]/g, ""))) return null;
+    if (typeof field === "number" && Number.isFinite(field)) return { criterionId: key, score: field };
+    if (field && typeof field === "object" && !Array.isArray(field) && "score" in field) return { criterionId: key, ...field };
+    return null;
+  }
+  function normaliseScoreShape(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const row = { ...value };
+    if (row.scores && typeof row.scores === "object" && !Array.isArray(row.scores)) {
+      row.scores = Object.entries(row.scores).flatMap(([key, field]) => {
+        const entry = scoreEntry(key, field) ?? (typeof field === "number" ? { criterionId: key, score: field } : null);
+        return entry ? [entry] : [];
+      });
+    }
+    if (!Array.isArray(row.scores)) {
+      const lifted = Object.entries(row).flatMap(([key, field]) => {
+        const entry = scoreEntry(key, field);
+        return entry ? [entry] : [];
+      });
+      if (lifted.length > 0) row.scores = lifted;
+    }
+    return row;
+  }
   function parseModelJson(raw) {
     const scored = lastScoreJson(raw);
-    if (scored) return { ok: true, value: scored.value, text: scored.text, repaired: scored.repaired };
+    if (scored) return { ok: true, value: normaliseScoreShape(scored.value), text: scored.text, repaired: scored.repaired };
     const slice = fenced(raw);
     const parsed = slice.includes("{") ? parseSlice(slice) : null;
-    if (parsed) return { ok: true, ...parsed };
+    if (parsed) return { ok: true, value: normaliseScoreShape(parsed.value), text: parsed.text, repaired: parsed.repaired };
     return { ok: false, error: "No JSON object found in the model output." };
   }
-  function reaskJsonPrompt(problem) {
+  function reaskJsonPrompt(problem, criterionIds = []) {
     const detail = problem.replace(/\s+/g, " ").trim().slice(0, 500);
-    return `Your JSON did not validate (${detail}). Reply again with only the corrected JSON object.`;
+    const ids = criterionIds.length > 0 ? criterionIds.join(", ") : "every criterion id from the rubric";
+    const exampleId = criterionIds[0] ?? "impact";
+    return [
+      `Your JSON did not validate (${detail}).`,
+      "Reply with one JSON object and nothing else.",
+      "summary must be a string of at least 40 characters.",
+      "scores must be an array with one object for each criterion id.",
+      "Each scores object needs criterionId, score (integer 0-100), rationale (at least 20 characters), citations (an array of {quote, location}), and confidence (low, medium, or high).",
+      `Criterion ids: ${ids}.`,
+      "Also include overallScore (number 0-100), recommendation (accept, encourage, revise, major-revision, or not-ready), strengths (array of strings), questionsForAuthors (array of strings), and suggestedNextSteps (array of strings).",
+      `Example: {"summary":"The paper states its claim and the limit of that claim in the text.","scores":[{"criterionId":"${exampleId}","score":70,"rationale":"The text states this in a sentence a reader can find.","citations":[{"quote":"a sentence from the paper","location":"abstract"}],"confidence":"medium"}],"overallScore":70,"recommendation":"revise","strengths":["The files are public."],"questionsForAuthors":["Which table changed?"],"suggestedNextSteps":["Publish the table beside the text."]}.`,
+      "Repeat the scores object for every criterion id. global-goals may be omitted."
+    ].join(" ");
   }
   var FILL_REVIEW_PROMPT = "Fill in the review now. Return one completed JSON object for this paper. Do not repeat the rubric template or the instructions.";
   function rubricTemplateProblem(value) {
@@ -2118,7 +2181,11 @@ ${output}
     }
     return null;
   }
-  async function settleChatJson(raw, ask, log, validate) {
+  function rejectionNote(problem, raw) {
+    const chosen = raw.replace(/\s+/g, " ").trim().slice(0, 200);
+    return `Rejected the reply. ${problem} Chosen JSON: ${chosen}`;
+  }
+  async function settleChatJson(raw, ask, log, validate, criterionIds = []) {
     const ready = (parsed) => {
       if (!validate) return { ok: true };
       return validate(parsed.text);
@@ -2132,14 +2199,14 @@ ${output}
         return { text: first.repaired ? first.text : raw, repaired: first.repaired, reasked: false };
       }
       const problem = checked.errors.join(" ");
-      log(template ? `Asked once to fill in the review. ${problem}` : `Asked once for corrected JSON. ${problem}`);
-      const follow2 = await ask(template ? FILL_REVIEW_PROMPT : reaskJsonPrompt(problem));
+      log(rejectionNote(problem, first.text));
+      const follow2 = await ask(template ? FILL_REVIEW_PROMPT : reaskJsonPrompt(problem, criterionIds));
       const second2 = parseModelJson(follow2);
       if (second2.ok && second2.repaired) log("Repaired the corrected JSON.");
       return { text: second2.ok ? second2.repaired ? second2.text : follow2 : follow2, repaired: Boolean(second2.ok && second2.repaired), reasked: true };
     }
-    log(`Asked once for corrected JSON. ${first.error}`);
-    const follow = await ask(reaskJsonPrompt(first.error));
+    log(rejectionNote(first.error, raw));
+    const follow = await ask(reaskJsonPrompt(first.error, criterionIds));
     const second = parseModelJson(follow);
     if (second.ok && second.repaired) log("Repaired the corrected JSON.");
     return { text: second.ok ? second.repaired ? second.text : follow : follow, repaired: Boolean(second.ok && second.repaired), reasked: true };
@@ -2214,24 +2281,27 @@ ${output}
     if (summary.length < 40) errors.push("summary must be at least 40 characters.");
     const scoresRaw = Array.isArray(input.scores) ? input.scores : [];
     const scores = criteria.criteria.map((criterion) => {
+      const bonus = isBonusCriterion(criterion.id);
       const found = scoresRaw.find((item) => isRecord2(item) && criterionKey(clip2(item.criterionId ?? item.id, 80), criteria) === criterion.id);
       if (!isRecord2(found)) {
-        errors.push(`Missing score for ${criterion.id}.`);
+        if (!bonus) errors.push(`Missing score for ${criterion.id}.`);
         return null;
       }
       const score = Number(found.score);
       if (!Number.isInteger(score) || score < criteria.scale.min || score > criteria.scale.max) {
+        if (bonus) return null;
         errors.push(`${criterion.id} score must be an integer from ${criteria.scale.min} to ${criteria.scale.max}.`);
       }
       const rationale = clip2(found.rationale ?? found.reason, 2e3);
-      if (rationale.length < 20) errors.push(`${criterion.id} rationale is too short.`);
-      const citations = citationsFrom(found.citations ?? found.quotes, errors, criterion.id);
-      if (citations.length === 0) errors.push(`${criterion.id} needs at least one citation.`);
+      if (!bonus && rationale.length < 20) errors.push(`${criterion.id} rationale is too short.`);
+      const citations = citationsFrom(found.citations ?? found.quotes, bonus ? [] : errors, criterion.id);
+      if (!bonus && citations.length === 0) errors.push(`${criterion.id} needs at least one citation.`);
       const confidenceRaw = clip2(found.confidence, 16).toLowerCase();
       const confidence = confidenceRaw === "low" || confidenceRaw === "med" || confidenceRaw === "medium" || confidenceRaw === "high" ? confidenceRaw : "";
-      if (criteria.reportSchema === "0.2" && !confidence) errors.push(`${criterion.id} needs a confidence of low, medium, or high.`);
+      if (!bonus && criteria.reportSchema === "0.2" && !confidence) errors.push(`${criterion.id} needs a confidence of low, medium, or high.`);
       const normalizedConfidence = confidence === "high" ? "high" : confidence === "medium" || confidence === "med" ? "medium" : confidence === "low" ? "low" : void 0;
-      return { criterionId: criterion.id, score, rationale, citations, confidence: normalizedConfidence };
+      if (bonus && (!Number.isInteger(score) || score < criteria.scale.min || score > criteria.scale.max)) return null;
+      return { criterionId: criterion.id, score, rationale: rationale || (bonus ? "Bonus score. Not counted in the overall." : ""), citations, confidence: normalizedConfidence };
     });
     const recommendation = recommendationId(clip2(input.recommendation, 160), criteria);
     if (!recommendation) errors.push(`recommendation must be one of: ${criteria.recommendationCategories.map((item) => item.id).join(", ")}.`);
@@ -2264,7 +2334,8 @@ ${output}
     });
     const includeValue = criteria.criteria.some((criterion) => criterion.id === "estimated-value");
     const v2 = criteria.reportSchema === "0.2" ? readV2(input, errors, includeValue) : {};
-    if (errors.length || scores.some((score) => score === null)) return { ok: false, errors };
+    const blocked = scores.some((score, index) => score === null && !isBonusCriterion(criteria.criteria[index]?.id ?? ""));
+    if (errors.length || blocked) return { ok: false, errors };
     const ready = scores.filter((score) => score !== null);
     const overall = weightedMean(ready, criteria);
     const idea = weightedMean(ready, criteria, criteria.ideaCriterionIds);
@@ -3596,9 +3667,11 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
   function note(hooks, step, status, detail, diagnostic = "") {
     hooks.onProgress?.(detail, { step, status, ...diagnostic ? { detail: diagnostic } : {} });
   }
-  function replyDiagnostic(candidate, length, lastChange) {
+  function replyDiagnostic(candidate, length, lastChange, stableFor = 0, stableMs = 5e3, streaming = false) {
     const when = lastChange === null ? "none" : `${Math.max(0, Math.round((Date.now() - lastChange) / 1e3))}s ago`;
-    return `candidate ${candidate || "none"}, ${length} characters, last change ${when}`;
+    const unchanged = Math.max(0, Math.round(stableFor / 1e3));
+    const need = Math.max(1, Math.round(stableMs / 1e3));
+    return `candidate ${candidate || "none"}, ${length} characters, last change ${when}, unchanged ${unchanged}s of ${need}s, stop control ${streaming ? "showing" : "gone"}`;
   }
   function preferredReply(fromSelector, selectorName, fromRegion, expect) {
     if (expect === "json") {
@@ -3657,7 +3730,9 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       const snapshot2 = assistantSnapshot(doc, provider.selectors.assistant, composer);
       const fromSelector2 = replyAfter(beforeMessages, snapshot2.texts);
       const fromRegion2 = regionReply(doc, composer, beforeRegion, sentPrompt, expect);
-      const picked2 = liveFresh ? { text: liveFresh, candidate: live.candidate } : preferredReply(fromSelector2, snapshot2.selector, fromRegion2, expect);
+      const liveKnown = provider.id === "grok" || provider.id === "grok-x";
+      const holdForNewTurn = liveKnown && beforeLive.length > 0 && !liveFresh;
+      const picked2 = liveFresh ? { text: liveFresh, candidate: live.candidate } : holdForNewTurn ? { text: "", candidate: live.candidate || "assistant-message" } : preferredReply(fromSelector2, snapshot2.selector, fromRegion2, expect);
       const reply2 = picked2.text;
       selector = picked2.candidate;
       const json = reviewJsonBlock(reply2);
@@ -3665,9 +3740,14 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       const streaming = stopControlActive(doc, provider.selectors.stop);
       const sendReady = Boolean(findSubmit(doc, provider.selectors.submit, composer));
       if (reply2 || ack) started = true;
-      if (reply2 !== lastReply) lastChange = Date.now();
-      const diagnostic2 = replyDiagnostic(selector, reply2.length, lastChange);
-      if (reply2 !== lastReply || Date.now() - lastLog >= 3e3) {
+      const changed = reply2 !== lastReply;
+      if (changed) lastChange = Date.now();
+      if (changed || streaming) {
+        if (changed) lastReply = reply2;
+        stableFor = 0;
+      } else stableFor += pollMs;
+      const diagnostic2 = replyDiagnostic(selector, reply2.length, lastChange, changed ? 0 : stableFor, stableMs, streaming);
+      if (changed || Date.now() - lastLog >= 3e3) {
         note(hooks, label, reply2 ? "reading" : "waiting", `Waiting for the reply: ${label}.`, diagnostic2);
         lastLog = Date.now();
       }
@@ -3689,18 +3769,13 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
           );
         }
       }
-      const changed = reply2 !== lastReply;
-      if (changed || streaming) {
-        if (changed) lastReply = reply2;
-        stableFor = 0;
-      } else stableFor += pollMs;
       const settled = Boolean(reply2) && !changed && !streaming && stableFor >= stableMs;
       if (expect === "text" && settled) return reply2;
       if (expect === "json" && settled && json) return json;
       if (!reply2 && Date.now() - start >= silentMs) {
-        const empty = replyDiagnostic(selector, 0, null);
+        const empty = replyDiagnostic(selector, 0, null, 0, stableMs, streaming);
         if (attempt < 2) {
-          note(hooks, label, "error", `No reply container yet. Re-polling. ${empty}`);
+          note(hooks, label, "waiting", `Still waiting for a stable reply: ${label}. ${empty}`, empty);
           await hooks.keepAwake?.();
           return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion, sentPrompt, beforeLive);
         }
@@ -3716,7 +3791,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     const seen = fromSelector || fromRegion.text || reply;
     const diagnostic = replyDiagnostic(picked.candidate || (fromSelector ? snapshot.selector : ""), reply.length || seen.length, lastChange);
     if (attempt < 2) {
-      note(hooks, label, "error", `Reply step (${label}) timed out. Re-polling. ${diagnostic}`);
+      note(hooks, label, "waiting", `Still waiting for a stable reply: ${label}. ${diagnostic}`, diagnostic);
       await hooks.keepAwake?.();
       return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion, sentPrompt, beforeLive);
     }
@@ -4064,14 +4139,17 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
         return;
       }
       const criteria = readingCriteria(officialCriteria, message.packet.criterionProfile, false);
+      const scoreIds = criteria.criteria.map((criterion) => criterion.id);
+      const logScore = (text) => hooks.onProgress?.(text, { step: "Score JSON", status: text.startsWith("Rejected") ? "rejected" : "sending", detail: text });
       const settled = await settleChatJson(
         result.text,
         (prompt) => sendFollowUp(document, provider, prompt, hooks, "corrected JSON"),
-        (text) => hooks.onProgress?.(text, { step: "Corrected JSON", status: "sending" }),
+        logScore,
         (text) => {
           const accepted2 = acceptWebChatResult(text, criteria);
           return accepted2.ok ? { ok: true } : { ok: false, errors: accepted2.errors };
-        }
+        },
+        scoreIds
       );
       const rounds = Math.min(3, Math.max(0, Math.round(Number(message.defenceRounds) || 0)));
       const notice = result.notice;
@@ -4103,11 +4181,12 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
             const settledDefence = await settleChatJson(
               defendedText,
               (prompt) => sendFollowUp(document, provider, prompt, hooks, "corrected score after defence", "json"),
-              (text) => hooks.onProgress?.(text, { step: "Score after author defence", status: "sending" }),
+              logScore,
               (text) => {
                 const checked = acceptWebChatResult(text, criteria);
                 return checked.ok ? { ok: true } : { ok: false, errors: checked.errors };
-              }
+              },
+              scoreIds
             );
             defendedText = chooseDefendedText(defendedText, settledDefence.text, criteria);
           } catch {

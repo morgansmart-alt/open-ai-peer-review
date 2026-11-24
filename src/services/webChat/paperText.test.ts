@@ -158,8 +158,10 @@ describe("json repair and the text page check", () => {
       (note) => notes.push(note),
     )
     expect(asked).toHaveLength(1)
-    expect(asked[0]).toContain("Reply again with only the corrected JSON object.")
-    expect(notes.join(" ")).toContain("Asked once for corrected JSON.")
+    expect(asked[0]).toContain("scores must be an array")
+    expect(asked[0]).toContain("at least 40 characters")
+    expect(notes.join(" ")).toContain("Rejected the reply.")
+    expect(notes.join(" ")).toContain("Chosen JSON:")
     expect(settled.reasked).toBe(true)
     expect(settled.text).toContain("84")
     const schemaNotes: string[] = []
@@ -174,10 +176,11 @@ describe("json repair and the text page check", () => {
       () => ({ ok: false, errors: ["recommendation must be one of: accept, encourage, revise, major-revision, not-ready.", "Add at least one strength."] }),
     )
     expect(schemaAsked).toHaveLength(1)
-    expect(schemaAsked[0]).toContain("Reply again with only the corrected JSON object.")
+    expect(schemaAsked[0]).toContain("scores must be an array")
     expect(schemaAsked[0]).toContain("Add at least one strength.")
     expect(schemaAsked[0]).not.toContain("criteria category ids")
-    expect(schemaNotes.join(" ")).toContain("Asked once for corrected JSON.")
+    expect(schemaNotes.join(" ")).toContain("Rejected the reply.")
+    expect(schemaNotes.join(" ")).toContain("Chosen JSON:")
     const templateAsked: string[] = []
     const template = await settleChatJson(
       '{"overallScore":"number","recommendation":"accept | encourage | revise","strengths":["string"],"scores":[{"criterionId":"clarity","score":"number"}]}',

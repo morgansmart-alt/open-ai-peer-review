@@ -144,10 +144,13 @@ export function weightedMean(
   let total = 0
   for (const criterion of criteria.criteria) {
     if (!wanted.has(criterion.id)) continue
-    // The overall average skips the bonus. An explicit list, such as the idea score, may still include it.
+    // The overall average skips the bonus. A missing bonus never blocks an explicit list either.
     if (!ids && isBonusCriterion(criterion.id)) continue
     const found = scores.find((item) => item.criterionId === criterion.id)
-    if (!found) return null
+    if (!found) {
+      if (isBonusCriterion(criterion.id)) continue
+      return null
+    }
     weight += criterion.weight
     total += criterion.weight * found.score
   }

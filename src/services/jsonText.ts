@@ -99,19 +99,83 @@ export function lastScoreJson(raw: string): { value: unknown; text: string; repa
   return last
 }
 
+const SCORE_KEY_SKIP = new Set([
+  "summary",
+  "overallscore",
+  "recommendation",
+  "strengths",
+  "scores",
+  "questions",
+  "questionsforauthors",
+  "suggestednextsteps",
+  "nextsteps",
+  "minorissues",
+  "majorissues",
+  "ontologyclass",
+  "valueestimate",
+  "goals",
+  "air_feedback",
+  "airfeedback",
+  "reading",
+  "scale",
+  "ideascore",
+  "statedoverall",
+  "scoringcheck",
+  "confidence",
+])
+
+function scoreEntry(key: string, field: unknown): Record<string, unknown> | null {
+  if (SCORE_KEY_SKIP.has(key.toLowerCase().replace(/[_-]/g, ""))) return null
+  if (typeof field === "number" && Number.isFinite(field)) return { criterionId: key, score: field }
+  if (field && typeof field === "object" && !Array.isArray(field) && "score" in field) return { criterionId: key, ...(field as Record<string, unknown>) }
+  return null
+}
+
+/** Turn a scores object, or top-level criterion fields, into the scores array the validator expects. */
+export function normaliseScoreShape(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value
+  const row = { ...(value as Record<string, unknown>) }
+  if (row.scores && typeof row.scores === "object" && !Array.isArray(row.scores)) {
+    row.scores = Object.entries(row.scores as Record<string, unknown>).flatMap(([key, field]) => {
+      const entry = scoreEntry(key, field) ?? (typeof field === "number" ? { criterionId: key, score: field } : null)
+      return entry ? [entry] : []
+    })
+  }
+  if (!Array.isArray(row.scores)) {
+    const lifted = Object.entries(row).flatMap(([key, field]) => {
+      const entry = scoreEntry(key, field)
+      return entry ? [entry] : []
+    })
+    if (lifted.length > 0) row.scores = lifted
+  }
+  return row
+}
+
 /** Strict JSON first. A repair pass covers trailing commas, missing commas, and similar damage. */
 export function parseModelJson(raw: string): ParsedModelJson | { ok: false; error: string } {
   const scored = lastScoreJson(raw)
-  if (scored) return { ok: true, value: scored.value, text: scored.text, repaired: scored.repaired }
+  if (scored) return { ok: true, value: normaliseScoreShape(scored.value), text: scored.text, repaired: scored.repaired }
   const slice = fenced(raw)
   const parsed = slice.includes("{") ? parseSlice(slice) : null
-  if (parsed) return { ok: true, ...parsed }
+  if (parsed) return { ok: true, value: normaliseScoreShape(parsed.value), text: parsed.text, repaired: parsed.repaired }
   return { ok: false, error: "No JSON object found in the model output." }
 }
 
-export function reaskJsonPrompt(problem: string): string {
+export function reaskJsonPrompt(problem: string, criterionIds: readonly string[] = []): string {
   const detail = problem.replace(/\s+/g, " ").trim().slice(0, 500)
-  return `Your JSON did not validate (${detail}). Reply again with only the corrected JSON object.`
+  const ids = criterionIds.length > 0 ? criterionIds.join(", ") : "every criterion id from the rubric"
+  const exampleId = criterionIds[0] ?? "impact"
+  return [
+    `Your JSON did not validate (${detail}).`,
+    "Reply with one JSON object and nothing else.",
+    "summary must be a string of at least 40 characters.",
+    "scores must be an array with one object for each criterion id.",
+    "Each scores object needs criterionId, score (integer 0-100), rationale (at least 20 characters), citations (an array of {quote, location}), and confidence (low, medium, or high).",
+    `Criterion ids: ${ids}.`,
+    "Also include overallScore (number 0-100), recommendation (accept, encourage, revise, major-revision, or not-ready), strengths (array of strings), questionsForAuthors (array of strings), and suggestedNextSteps (array of strings).",
+    `Example: {"summary":"The paper states its claim and the limit of that claim in the text.","scores":[{"criterionId":"${exampleId}","score":70,"rationale":"The text states this in a sentence a reader can find.","citations":[{"quote":"a sentence from the paper","location":"abstract"}],"confidence":"medium"}],"overallScore":70,"recommendation":"revise","strengths":["The files are public."],"questionsForAuthors":["Which table changed?"],"suggestedNextSteps":["Publish the table beside the text."]}.`,
+    "Repeat the scores object for every criterion id. global-goals may be omitted.",
+  ].join(" ")
 }
 
 export const FILL_REVIEW_PROMPT =
@@ -135,11 +199,17 @@ export function rubricTemplateProblem(value: unknown): string | null {
 }
 
 /** Repair when possible. A parse or schema failure asks the chat once, naming the problem. */
+function rejectionNote(problem: string, raw: string): string {
+  const chosen = raw.replace(/\s+/g, " ").trim().slice(0, 200)
+  return `Rejected the reply. ${problem} Chosen JSON: ${chosen}`
+}
+
 export async function settleChatJson(
   raw: string,
   ask: (prompt: string) => Promise<string>,
   log: (message: string) => void,
   validate?: (text: string) => { ok: true } | { ok: false; errors: string[] },
+  criterionIds: readonly string[] = [],
 ): Promise<{ text: string; repaired: boolean; reasked: boolean }> {
   const ready = (parsed: ParsedModelJson) => {
     if (!validate) return { ok: true as const }
@@ -154,14 +224,14 @@ export async function settleChatJson(
       return { text: first.repaired ? first.text : raw, repaired: first.repaired, reasked: false }
     }
     const problem = checked.errors.join(" ")
-    log(template ? `Asked once to fill in the review. ${problem}` : `Asked once for corrected JSON. ${problem}`)
-    const follow = await ask(template ? FILL_REVIEW_PROMPT : reaskJsonPrompt(problem))
+    log(rejectionNote(problem, first.text))
+    const follow = await ask(template ? FILL_REVIEW_PROMPT : reaskJsonPrompt(problem, criterionIds))
     const second = parseModelJson(follow)
     if (second.ok && second.repaired) log("Repaired the corrected JSON.")
     return { text: second.ok ? (second.repaired ? second.text : follow) : follow, repaired: Boolean(second.ok && second.repaired), reasked: true }
   }
-  log(`Asked once for corrected JSON. ${first.error}`)
-  const follow = await ask(reaskJsonPrompt(first.error))
+  log(rejectionNote(first.error, raw))
+  const follow = await ask(reaskJsonPrompt(first.error, criterionIds))
   const second = parseModelJson(follow)
   if (second.ok && second.repaired) log("Repaired the corrected JSON.")
   return { text: second.ok ? (second.repaired ? second.text : follow) : follow, repaired: Boolean(second.ok && second.repaired), reasked: true }

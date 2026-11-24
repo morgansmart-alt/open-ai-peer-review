@@ -822,7 +822,7 @@ describe("live chat composers", () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     const log = notes.join("\n")
-    expect(log).toContain("Re-polling")
+    expect(log).toContain("Still waiting for a stable reply")
     expect(log).toContain("candidate none")
     expect(log).toContain("0 characters")
     expect(log).toContain("last change none")
@@ -996,6 +996,45 @@ describe("live chat composers", () => {
     expect(value.summary).toContain("CODATA recommendation")
     expect(value.summary).toContain("uncertainties")
     expect(value.scores?.find((score) => score.criterionId === "impact")?.score).toBe(90)
+  })
+
+  it("reads the newest grok.com assistant message after a correction, not the earlier one", async () => {
+    document.body.innerHTML = `<main>
+      <textarea id="box" aria-label="Message Grok"></textarea>
+      <button id="send" type="button" aria-label="Send">Send</button>
+      <div data-testid="assistant-message" id="old">{"overallScore":80,"summary":"The first reply is long enough to stay on screen and must not be scored again as the correction."}</div>
+    </main>`
+    const provider = webChatProvider("grok")
+    if (!provider) throw new Error("missing grok")
+    document.getElementById("send")?.addEventListener("click", () => {
+      ;(document.getElementById("box") as HTMLTextAreaElement).value = ""
+      setTimeout(() => {
+        const next = document.createElement("div")
+        next.setAttribute("data-testid", "assistant-message")
+        next.textContent = '{"overallScore":91,"summary":"The corrected reply states the claim and its limit in the text.","strengths":["Public files."]}'
+        document.querySelector("main")?.append(next)
+      }, 40)
+    })
+    const returned = await sendFollowUp(
+      document,
+      provider,
+      "Reply again with the corrected JSON object.",
+      {
+        aborted: () => false,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        pollMs: 10,
+        stableMs: 20,
+        stepTimeoutMs: 2_000,
+        replyStartTimeoutMs: 400,
+        submitStableMs: 0,
+        submitReadyMs: 20,
+        sendVerifyMs: 20,
+      },
+      "corrected JSON",
+      "json",
+    )
+    expect(returned).toContain('"overallScore":91')
+    expect(returned).not.toContain("must not be scored again")
   })
 
   it("waits out a streaming X reply and does not send a correction for the partial JSON", async () => {

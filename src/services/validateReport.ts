@@ -1,4 +1,4 @@
-import { categoryLabel, clamp, weightedMean } from "../domain/criteria.ts"
+import { categoryLabel, clamp, isBonusCriterion, weightedMean } from "../domain/criteria.ts"
 import { describeScoring } from "../domain/scoring.ts"
 import { parseAirFeedback } from "./airFeedback.ts"
 import { parseModelJson } from "./jsonText.ts"
@@ -96,25 +96,28 @@ export function validateReport(input: unknown, criteria: CriteriaSet): { ok: tru
 
   const scoresRaw = Array.isArray(input.scores) ? input.scores : []
   const scores = criteria.criteria.map((criterion) => {
+    const bonus = isBonusCriterion(criterion.id)
     const found = scoresRaw.find((item) => isRecord(item) && criterionKey(clip(item.criterionId ?? item.id, 80), criteria) === criterion.id)
     if (!isRecord(found)) {
-      errors.push(`Missing score for ${criterion.id}.`)
+      if (!bonus) errors.push(`Missing score for ${criterion.id}.`)
       return null
     }
     const score = Number(found.score)
     if (!Number.isInteger(score) || score < criteria.scale.min || score > criteria.scale.max) {
+      if (bonus) return null
       errors.push(`${criterion.id} score must be an integer from ${criteria.scale.min} to ${criteria.scale.max}.`)
     }
     const rationale = clip(found.rationale ?? found.reason, 2000)
-    if (rationale.length < 20) errors.push(`${criterion.id} rationale is too short.`)
-    const citations = citationsFrom(found.citations ?? found.quotes, errors, criterion.id)
-    if (citations.length === 0) errors.push(`${criterion.id} needs at least one citation.`)
+    if (!bonus && rationale.length < 20) errors.push(`${criterion.id} rationale is too short.`)
+    const citations = citationsFrom(found.citations ?? found.quotes, bonus ? [] : errors, criterion.id)
+    if (!bonus && citations.length === 0) errors.push(`${criterion.id} needs at least one citation.`)
     const confidenceRaw = clip(found.confidence, 16).toLowerCase()
     const confidence = confidenceRaw === "low" || confidenceRaw === "med" || confidenceRaw === "medium" || confidenceRaw === "high" ? confidenceRaw : ""
-    if (criteria.reportSchema === "0.2" && !confidence) errors.push(`${criterion.id} needs a confidence of low, medium, or high.`)
+    if (!bonus && criteria.reportSchema === "0.2" && !confidence) errors.push(`${criterion.id} needs a confidence of low, medium, or high.`)
     const normalizedConfidence: Confidence | undefined =
       confidence === "high" ? "high" : confidence === "medium" || confidence === "med" ? "medium" : confidence === "low" ? "low" : undefined
-    return { criterionId: criterion.id, score, rationale, citations, confidence: normalizedConfidence }
+    if (bonus && (!Number.isInteger(score) || score < criteria.scale.min || score > criteria.scale.max)) return null
+    return { criterionId: criterion.id, score, rationale: rationale || (bonus ? "Bonus score. Not counted in the overall." : ""), citations, confidence: normalizedConfidence }
   })
 
   const recommendation = recommendationId(clip(input.recommendation, 160), criteria)
@@ -151,7 +154,8 @@ export function validateReport(input: unknown, criteria: CriteriaSet): { ok: tru
 
   const includeValue = criteria.criteria.some((criterion) => criterion.id === "estimated-value")
   const v2 = criteria.reportSchema === "0.2" ? readV2(input, errors, includeValue) : {}
-  if (errors.length || scores.some((score) => score === null)) return { ok: false, errors }
+  const blocked = scores.some((score, index) => score === null && !isBonusCriterion(criteria.criteria[index]?.id ?? ""))
+  if (errors.length || blocked) return { ok: false, errors }
   const ready = scores.filter((score): score is NonNullable<typeof score> => score !== null)
   const overall = weightedMean(ready, criteria)
   const idea = weightedMean(ready, criteria, criteria.ideaCriterionIds)

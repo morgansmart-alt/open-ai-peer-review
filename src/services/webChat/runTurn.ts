@@ -106,9 +106,11 @@ function note(hooks: TurnHooks, step: string, status: string, detail: string, di
   hooks.onProgress?.(detail, { step, status, ...(diagnostic ? { detail: diagnostic } : {}) })
 }
 
-function replyDiagnostic(candidate: string, length: number, lastChange: number | null): string {
+function replyDiagnostic(candidate: string, length: number, lastChange: number | null, stableFor = 0, stableMs = 5_000, streaming = false): string {
   const when = lastChange === null ? "none" : `${Math.max(0, Math.round((Date.now() - lastChange) / 1000))}s ago`
-  return `candidate ${candidate || "none"}, ${length} characters, last change ${when}`
+  const unchanged = Math.max(0, Math.round(stableFor / 1000))
+  const need = Math.max(1, Math.round(stableMs / 1000))
+  return `candidate ${candidate || "none"}, ${length} characters, last change ${when}, unchanged ${unchanged}s of ${need}s, stop control ${streaming ? "showing" : "gone"}`
 }
 
 function preferredReply(fromSelector: string, selectorName: string, fromRegion: { text: string; candidate: string }, expect: ReplyExpect): { text: string; candidate: string } {
@@ -184,9 +186,13 @@ async function waitForReply(
     const snapshot = assistantSnapshot(doc, provider.selectors.assistant, composer)
     const fromSelector = replyAfter(beforeMessages, snapshot.texts)
     const fromRegion = regionReply(doc, composer, beforeRegion, sentPrompt, expect)
+    const liveKnown = provider.id === "grok" || provider.id === "grok-x"
+    const holdForNewTurn = liveKnown && beforeLive.length > 0 && !liveFresh
     const picked = liveFresh
       ? { text: liveFresh, candidate: live.candidate }
-      : preferredReply(fromSelector, snapshot.selector, fromRegion, expect)
+      : holdForNewTurn
+        ? { text: "", candidate: live.candidate || "assistant-message" }
+        : preferredReply(fromSelector, snapshot.selector, fromRegion, expect)
     const reply = picked.text
     selector = picked.candidate
     const json = reviewJsonBlock(reply)
@@ -194,9 +200,14 @@ async function waitForReply(
     const streaming = stopControlActive(doc, provider.selectors.stop)
     const sendReady = Boolean(findSubmit(doc, provider.selectors.submit, composer))
     if (reply || ack) started = true
-    if (reply !== lastReply) lastChange = Date.now()
-    const diagnostic = replyDiagnostic(selector, reply.length, lastChange)
-    if (reply !== lastReply || Date.now() - lastLog >= 3_000) {
+    const changed = reply !== lastReply
+    if (changed) lastChange = Date.now()
+    if (changed || streaming) {
+      if (changed) lastReply = reply
+      stableFor = 0
+    } else stableFor += pollMs
+    const diagnostic = replyDiagnostic(selector, reply.length, lastChange, changed ? 0 : stableFor, stableMs, streaming)
+    if (changed || Date.now() - lastLog >= 3_000) {
       note(hooks, label, reply ? "reading" : "waiting", `Waiting for the reply: ${label}.`, diagnostic)
       lastLog = Date.now()
     }
@@ -218,18 +229,13 @@ async function waitForReply(
         )
       }
     }
-    const changed = reply !== lastReply
-    if (changed || streaming) {
-      if (changed) lastReply = reply
-      stableFor = 0
-    } else stableFor += pollMs
     const settled = Boolean(reply) && !changed && !streaming && stableFor >= stableMs
     if (expect === "text" && settled) return reply
     if (expect === "json" && settled && json) return json
     if (!reply && Date.now() - start >= silentMs) {
-      const empty = replyDiagnostic(selector, 0, null)
+      const empty = replyDiagnostic(selector, 0, null, 0, stableMs, streaming)
       if (attempt < 2) {
-        note(hooks, label, "error", `No reply container yet. Re-polling. ${empty}`)
+        note(hooks, label, "waiting", `Still waiting for a stable reply: ${label}. ${empty}`, empty)
         await hooks.keepAwake?.()
         return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion, sentPrompt, beforeLive)
       }
@@ -245,7 +251,7 @@ async function waitForReply(
   const seen = fromSelector || fromRegion.text || reply
   const diagnostic = replyDiagnostic(picked.candidate || (fromSelector ? snapshot.selector : ""), reply.length || seen.length, lastChange)
   if (attempt < 2) {
-    note(hooks, label, "error", `Reply step (${label}) timed out. Re-polling. ${diagnostic}`)
+    note(hooks, label, "waiting", `Still waiting for a stable reply: ${label}. ${diagnostic}`, diagnostic)
     await hooks.keepAwake?.()
     return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion, sentPrompt, beforeLive)
   }

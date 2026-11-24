@@ -92,14 +92,18 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
       return
     }
     const criteria = readingCriteria(officialCriteria, message.packet.criterionProfile, false)
+    const scoreIds = criteria.criteria.map((criterion) => criterion.id)
+    const logScore = (text: string) =>
+      hooks.onProgress?.(text, { step: "Score JSON", status: text.startsWith("Rejected") ? "rejected" : "sending", detail: text })
     const settled = await settleChatJson(
       result.text,
       (prompt) => sendFollowUp(document, provider, prompt, hooks, "corrected JSON"),
-      (text) => hooks.onProgress?.(text, { step: "Corrected JSON", status: "sending" }),
+      logScore,
       (text) => {
         const accepted = acceptWebChatResult(text, criteria)
         return accepted.ok ? { ok: true } : { ok: false, errors: accepted.errors }
       },
+      scoreIds,
     )
     const rounds = Math.min(3, Math.max(0, Math.round(Number(message.defenceRounds) || 0)))
     const notice = result.notice
@@ -131,11 +135,12 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
           const settledDefence = await settleChatJson(
             defendedText,
             (prompt) => sendFollowUp(document, provider, prompt, hooks, "corrected score after defence", "json"),
-            (text) => hooks.onProgress?.(text, { step: "Score after author defence", status: "sending" }),
+            logScore,
             (text) => {
               const checked = acceptWebChatResult(text, criteria)
               return checked.ok ? { ok: true } : { ok: false, errors: checked.errors }
             },
+            scoreIds,
           )
           defendedText = chooseDefendedText(defendedText, settledDefence.text, criteria)
         } catch {
