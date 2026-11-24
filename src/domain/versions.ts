@@ -55,8 +55,12 @@ type RoundSlice = Pick<IssueRound, "kind" | "recordVersionChecked">
  * A source check or re-check names its window through `recordVersionChecked`.
  * A claim stays on the version that opened the thread.
  * A rebuttal or counter stays in the window of the latest check, or the opening version.
- * Each window holds at most six rounds. A later version starts a fresh window.
+ * A comment stays in the window for display but does not use a slot.
+ * Each window holds at most six rounds that are not comments. A later version starts a fresh window.
  */
+export function roundCountsTowardCap(kind: string | undefined): boolean {
+  return kind !== "comment"
+}
 export function roundWindowVersion(issueVersion: string, rounds: readonly RoundSlice[], index: number): string {
   let active = issueVersion
   for (let walk = 0; walk <= index; walk += 1) {
@@ -74,7 +78,7 @@ export function roundWindowVersion(issueVersion: string, rounds: readonly RoundS
 }
 
 function windowCount(issueVersion: string, rounds: readonly RoundSlice[], version: string): number {
-  return rounds.filter((_, index) => roundWindowVersion(issueVersion, rounds, index) === version).length
+  return rounds.filter((item, index) => roundCountsTowardCap(item.kind) && roundWindowVersion(issueVersion, rounds, index) === version).length
 }
 
 export function canAppendRound(issue: IssueThread, proposal?: RoundProposal): boolean {

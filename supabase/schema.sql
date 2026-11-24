@@ -345,10 +345,12 @@ begin
   end if;
 
   window_version := air_round_window_version(current_row.record_version, new_rounds, old_len);
-  window_count := 1;
+  -- A comment is discussion. It does not count toward the six-round cap.
+  window_count := case when coalesce(new_round->>'kind', '') = 'comment' then 0 else 1 end;
   if old_len > 0 then
     for walk in 0..old_len - 1 loop
-      if air_round_window_version(current_row.record_version, new_rounds, walk) = window_version then
+      if coalesce(new_rounds->walk->>'kind', '') is distinct from 'comment'
+         and air_round_window_version(current_row.record_version, new_rounds, walk) = window_version then
         window_count := window_count + 1;
       end if;
     end loop;
@@ -628,3 +630,67 @@ revoke insert, update, delete on air_moltbook_posts from public, anon, authentic
 revoke insert, update, delete on air_moltbook_comments from public, anon, authenticated;
 grant select on air_moltbook_posts to anon, authenticated;
 grant select on air_moltbook_comments to anon, authenticated;
+
+-- Human profile retag. Same statements as supabase/migrations/20261124150000_recheck_profile_and_comment_cap.sql.
+alter table air_reviews add column if not exists owner_hash text;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'air_reviews_owner_hash') then
+    alter table air_reviews add constraint air_reviews_owner_hash
+      check (owner_hash is null or owner_hash ~ '^[0-9a-f]{64}$');
+  end if;
+end $$;
+
+create or replace function air_retag_human_profile(p_review_id text, p_profile text, p_secret text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  current_row air_reviews%rowtype;
+  expected text;
+  next_payload jsonb;
+begin
+  if p_review_id is null or length(p_review_id) > 200 then
+    raise exception 'That review update is not valid.';
+  end if;
+  if p_profile not in ('device', 'theory', 'data', 'roadmap', 'empirical') then
+    raise exception 'That criterion profile is not valid.';
+  end if;
+  if p_secret is null or char_length(p_secret) < 16 or char_length(p_secret) > 200 then
+    raise exception 'Only the reviewer who published this reading can change its profile.';
+  end if;
+
+  select * into current_row from air_reviews where id = p_review_id for update;
+  if not found then
+    raise exception 'That review is not on the shared board.';
+  end if;
+  if coalesce(current_row.payload->>'origin', '') is distinct from 'human'
+     and current_row.assessor_id is distinct from 'human' then
+    raise exception 'Only a human review can change its criterion profile.';
+  end if;
+  if current_row.owner_hash is null or current_row.owner_hash !~ '^[0-9a-f]{64}$' then
+    raise exception 'This review has no owner receipt. It was published before profiles could be retagged.';
+  end if;
+  expected := encode(extensions.digest(convert_to(p_secret, 'utf8'), 'sha256'), 'hex');
+  if expected is distinct from current_row.owner_hash then
+    raise exception 'Only the reviewer who published this reading can change its profile.';
+  end if;
+
+  next_payload := jsonb_set(current_row.payload, '{criterionProfile}', to_jsonb(p_profile), true);
+  if (current_row.payload - 'criterionProfile') is distinct from (next_payload - 'criterionProfile') then
+    raise exception 'Only the criterion profile can change.';
+  end if;
+
+  update air_reviews
+    set payload = next_payload
+    where id = p_review_id;
+
+  return next_payload;
+end;
+$$;
+
+revoke all on function air_retag_human_profile(text, text, text) from public;
+grant execute on function air_retag_human_profile(text, text, text) to anon, authenticated;

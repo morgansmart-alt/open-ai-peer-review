@@ -15,6 +15,7 @@ import {
   sourceCheckPrompt,
   summarySystemPrompt,
 } from "./prompts.ts"
+import { DIGEST_BUDGET, summaryBatches } from "./reviewCalls.ts"
 import { bundleItems, quoteMatchesCorpus, readingCoverage } from "./textTools.ts"
 import { extractJsonValue, validateReport } from "./validateReport.ts"
 import type { RelatedSnippet, ZenodoRecord } from "./zenodo.ts"
@@ -91,18 +92,19 @@ function verifyQuotes(report: ReviewReport, corpus: string): ReviewReport {
   return { ...report, scores, majorIssues, unverifiedQuotes }
 }
 
-const DIGEST_BUDGET = 28_000
-
 async function summariseSections(ctx: RunContext): Promise<string[] | null> {
   if (!shouldSummarize(ctx.documents, ctx.profile.provider)) return null
   const sections = chunksFor(ctx.documents)
-  let summaries = []
-  for (let index = 0; index < sections.length; index += 1) {
-    const section = sections[index]
-    if (!section) continue
-    ctx.onProgress?.(`Summarising section ${index + 1} of ${sections.length}…`)
-    const summary = await completeText(ctx, summarySystemPrompt(), `Section ${index + 1} of ${sections.length} (${section.label}).\n\n${section.text}`, false)
-    summaries.push(`${section.label}: ${summary.content}`)
+  const batches = summaryBatches(sections)
+  let summaries: string[] = []
+  for (let index = 0; index < batches.length; index += 1) {
+    const batch = batches[index]
+    if (!batch || batch.length === 0) continue
+    const label = batch.length === 1 ? (batch[0]?.label ?? "section") : `${batch.length} sections`
+    ctx.onProgress?.(`Summarising batch ${index + 1} of ${batches.length} (${label})…`)
+    const body = batch.map((section) => `## ${section.label}\n${section.text}`).join("\n\n")
+    const summary = await completeText(ctx, summarySystemPrompt(), body, false)
+    summaries.push(summary.content)
   }
   let round = 0
   while (summaries.join("\n\n").length > DIGEST_BUDGET && summaries.length > 1 && round < 4) {
@@ -155,6 +157,27 @@ export interface SourceCheckDraft {
   citations: { quote: string; location: string }[]
 }
 
+export function parseSourceCheck(raw: unknown): SourceCheckDraft {
+  const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {}
+  const result = record.result
+  if (result !== "ADDRESSED" && result !== "PARTIALLY_ADDRESSED" && result !== "NOT_ADDRESSED") {
+    throw new Error("The source check did not return ADDRESSED, PARTIALLY_ADDRESSED, or NOT_ADDRESSED.")
+  }
+  const citations = Array.isArray(record.citations)
+    ? record.citations.flatMap((item) => {
+        if (typeof item !== "object" || item === null) return []
+        const quote = "quote" in item && typeof item.quote === "string" ? item.quote : ""
+        const location = "location" in item && typeof item.location === "string" ? item.location : "Record"
+        return quote ? [{ quote: quote.slice(0, 500), location }] : []
+      })
+    : []
+  return {
+    result,
+    explanation: typeof record.explanation === "string" ? record.explanation.slice(0, 2000) : "",
+    citations,
+  }
+}
+
 export async function runSourceCheck(options: {
   ctx: RunContext
   claim: string
@@ -178,24 +201,7 @@ export async function runSourceCheck(options: {
       options.ctx.conversationLinks ?? [],
     ),
   )
-  const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {}
-  const result = record.result
-  if (result !== "ADDRESSED" && result !== "PARTIALLY_ADDRESSED" && result !== "NOT_ADDRESSED") {
-    throw new Error("The source check did not return ADDRESSED, PARTIALLY_ADDRESSED, or NOT_ADDRESSED.")
-  }
-  const citations = Array.isArray(record.citations)
-    ? record.citations.flatMap((item) => {
-        if (typeof item !== "object" || item === null) return []
-        const quote = "quote" in item && typeof item.quote === "string" ? item.quote : ""
-        const location = "location" in item && typeof item.location === "string" ? item.location : "Record"
-        return quote ? [{ quote: quote.slice(0, 500), location }] : []
-      })
-    : []
-  return {
-    result,
-    explanation: typeof record.explanation === "string" ? record.explanation.slice(0, 2000) : "",
-    citations,
-  }
+  return parseSourceCheck(raw)
 }
 
 export interface VerdictDraft {

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react"
 import { canAppendRound, statusLabel } from "../domain/issues.ts"
 import { stableVersionId } from "../domain/versions.ts"
 import type { IssueThread } from "../domain/types.ts"
@@ -17,7 +18,7 @@ export function WorkList({
   outstanding: IssueThread[]
   closed: IssueThread[]
   busy: boolean
-  note: string | null
+  note: ReactNode
   onRecheck: (issue: IssueThread) => void
   onRecheckAll: () => void
 }) {

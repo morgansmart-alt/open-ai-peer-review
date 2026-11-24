@@ -1,5 +1,6 @@
 import previousMigration from "../../supabase/migrations/20261123120000_fluid_version_rounds.sql?raw"
 import nextMigration from "../../supabase/migrations/20261124120000_comment_rounds.sql?raw"
+import profileMigration from "../../supabase/migrations/20261124150000_recheck_profile_and_comment_cap.sql?raw"
 import { describe, expect, it } from "vitest"
 import { recommendationFor, weightedMean } from "./criteria.ts"
 import { officialCriteria } from "./officialCriteria.ts"
@@ -7,6 +8,8 @@ import {
   applyCriterionProfile,
   PROFILE_RANKING_NOTE,
   showsProjectValue,
+  LEGACY_DEVICE_PROFILE_LABEL,
+  storedProfileLabel,
   suggestCriterionProfile,
 } from "./profiles.ts"
 import { buildRanking } from "./ranking.ts"
@@ -75,6 +78,66 @@ describe("criterion profiles", () => {
     expect(suggestCriterionProfile({ resourceType: "Publication", keywords: [] })).toBe("device")
   })
 
+  it("uses the title and description, including the live-test papers", () => {
+    expect(
+      suggestCriterionProfile({
+        resourceType: "Other",
+        title: "Codata Recommended Values Of The Fundamental Physical Constants: 2014",
+        keywords: ["CODATA", "Fundamental Physical Constants", "Planck constant", "Avogadro constant"],
+        description:
+          "This document gives the 2014 self-consistent set of values of the constants and conversion factors of physics and chemistry recommended by the Committee on Data for Science and Technology (CODATA).",
+      }),
+    ).toBe("data")
+    expect(
+      suggestCriterionProfile({
+        resourceType: "Working paper",
+        title: "SCG-HMH Generator and TITAN Star-ship Design consolidated concepts",
+        keywords: [],
+        description:
+          "This master publication consolidates the SCG-HMH generator into a ready-for-prototyping reference, with a vertical rotor, ReBCO stators, and TITAN spherical starship integration.",
+      }),
+    ).toBe("device")
+    expect(
+      suggestCriterionProfile({
+        resourceType: "Preprint",
+        title: "Gravitational Wave Echoes Detected? Quantum Mesh Gravity Templates Match Real LIGO Data in GW150914 and GW170104",
+        keywords: [],
+        description:
+          "We report the first detection of gravitational wave echoes using a template applied to real LIGO data. The matched filter analysis reveals a peak signal-to-noise ratio at the same echo delay, supporting an observational signal.",
+      }),
+    ).toBe("empirical")
+    expect(
+      suggestCriterionProfile({
+        resourceType: "Report",
+        title: "CERN Quantum Technology Initiative Strategy and Roadmap",
+        keywords: ["Quantum Technologies", "Quantum Computing", "High Energy Physics"],
+        description: "The Quantum Technology Initiative sets out how CERN can engage with quantum technologies over the next five to ten years.",
+      }),
+    ).toBe("roadmap")
+    expect(
+      suggestCriterionProfile({
+        resourceType: "Journal article",
+        title: "Universe as Quantum Discrete Cellular Automaton: Axiomatic Characterization",
+        keywords: ["physics", "mathematics", "theoretical physics", "general relativity"],
+        description:
+          "Within Quantum Cellular Automata we construct an axiomatic system. We prove that under these axioms the event set constitutes a locally finite partial order.",
+      }),
+    ).toBe("theory")
+    expect(
+      suggestCriterionProfile({
+        resourceType: "Publication",
+        title: "SCG-HMH Hybrid Heat-Engine / Induction / MHD Generator: Whole-System Lowering of the Ionisation Threshold",
+        keywords: [],
+        description:
+          "SCG-HMH is a hybrid generator. One free heat input drives a heat engine, induction in the ReBCO stators, and MHD in the rotor gap. The bench validates the sustain rates.",
+      }),
+    ).toBe("device")
+    expect(storedProfileLabel(undefined)).toBe(LEGACY_DEVICE_PROFILE_LABEL)
+    expect(storedProfileLabel(null)).toBe("device (legacy v0.2)")
+    expect(storedProfileLabel("device")).toBe("Device or engineering")
+    expect(storedProfileLabel("theory")).toBe("Theory")
+  })
+
   it("keeps the current weights when no profile is stored, hides project value otherwise, and stays on one 0–100 scale", () => {
     const device = applyCriterionProfile(officialCriteria, undefined)
     expect(device.criteria.map((criterion) => [criterion.id, criterion.weight])).toEqual(
@@ -118,5 +181,9 @@ describe("comment rounds need a migration", () => {
     expect(next).toContain("'comment'")
     expect(next).toContain("A comment does not change the issue status.")
     expect(next).toMatch(/create or replace function air_append_issue_round/i)
+    expect(profileMigration).toContain("is distinct from 'comment'")
+    expect(profileMigration).toContain("air_retag_human_profile")
+    expect(profileMigration).toContain("owner_hash")
+    expect(profileMigration).toContain("Only the criterion profile can change.")
   })
 })

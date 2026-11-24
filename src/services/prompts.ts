@@ -141,7 +141,7 @@ export function chunksFor(documents: { filename: string; text: string }[]): { la
 }
 
 export function summarySystemPrompt(): string {
-  return "Summarise this section for a later peer review. Preserve numbers, units, equations, named claims, limitations, and open questions, plus one or two short verbatim quotes. Note where this section sits in the document. Plain text, under 350 words."
+  return "Summarise the section or sections below for a later peer review. One reply covers every section you are given. Preserve numbers, units, equations, named claims, limitations, and open questions, plus one or two short verbatim quotes from each section. Note where each section sits in the document. Plain text, under 500 words."
 }
 
 export function reduceSystemPrompt(): string {

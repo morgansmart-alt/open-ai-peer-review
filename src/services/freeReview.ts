@@ -46,6 +46,40 @@ function gpuMessage(status: "missing" | "unavailable"): string {
     : `WebGPU is present but no GPU adapter was granted, so the free on-device model cannot start. Try another browser, or use a free key.`
 }
 
+/** One on-device completion. Used for a source check when WebGPU is the provider the reader can actually use. */
+export async function runBrowserPrompt(system: string, user: string, onProgress?: (message: string) => void): Promise<string> {
+  const status = await webGpuStatus()
+  if (status !== "ready") throw new FreeReviewUnavailable(gpuMessage(status))
+  onProgress?.(`Loading ${FREE_BROWSER_MODEL} (${FREE_BROWSER_SIZE}). The first visit downloads the weights into this browser.`)
+  const webllm = (await import("@mlc-ai/web-llm")) as {
+    CreateMLCEngine: (
+      model: string,
+      config: { initProgressCallback?: (report: { text?: string }) => void },
+    ) => Promise<{
+      chat: {
+        completions: {
+          create: (body: { messages: { role: string; content: string }[]; temperature?: number }) => Promise<{
+            choices?: { message?: { content?: string | null } }[]
+          }>
+        }
+      }
+    }>
+  }
+  const engine = await webllm.CreateMLCEngine(FREE_BROWSER_MODEL, {
+    initProgressCallback: (report) => onProgress?.(report.text || "Loading the on-device model…"),
+  })
+  const completion = await engine.chat.completions.create({
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+    temperature: 0.2,
+  })
+  const raw = completion.choices?.[0]?.message?.content
+  if (!raw) throw new FreeReviewUnavailable("The on-device model returned an empty answer.")
+  return raw
+}
+
 export async function runFreeScreening(options: {
   kind: "browser" | "openrouter" | "gemini"
   criteria: CriteriaSet

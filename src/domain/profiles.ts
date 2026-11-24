@@ -150,22 +150,52 @@ export function profileLabel(profileId: string | null | undefined): string {
   return profileById(profileId).label
 }
 
+/** A stored reading with no profile id still uses the device weights. The card says so. */
+export const LEGACY_DEVICE_PROFILE_LABEL = "device (legacy v0.2)"
+
+export function storedProfileLabel(profileId: string | null | undefined): string {
+  if (!profileId?.trim() || !isCriterionProfileId(profileId)) return LEGACY_DEVICE_PROFILE_LABEL
+  return profileLabel(profileId)
+}
+
+const PROFILE_SIGNALS: Record<CriterionProfileId, RegExp> = {
+  data: /\b(datasets?|databases?|corp(?:us|ora)|catalogues?|catalogs?|reference data|data papers?|recommended values|conversion factors|fundamental physical constants|codata|reference values)\b/i,
+  theory: /\b(theor(?:y|etical)|theorems?|proofs?|lemma|derivation|axiomatic|axioms?|philosoph(?:y|ical)|formalism)\b/i,
+  roadmap: /\b(roadmaps?|white papers?|whitepapers?|surveys?|scoping reviews?|policy briefs?|technical reports?)\b/i,
+  empirical: /\b(empirical|experiments?|experimental|measurements?|trials?|clinical|observational|field stud(?:y|ies)|gravitational[- ]wave echoes|ligo)\b/i,
+  device: /\b(devices?|prototypes?|prototyping|hardware|apparatus|instruments?|engineering|funding|proposals?|inventions?|technology readiness|generators?|star-?ships?|rotors?|stators?|heat-?engines?|nozzles?)\b/i,
+}
+
+function signalHit(id: CriterionProfileId, text: string): boolean {
+  return PROFILE_SIGNALS[id].test(text)
+}
+
 /**
- * Suggest a profile from Zenodo resource type and keywords.
+ * Suggest a profile from the title, description, keywords, and resource type.
+ * The title outweighs a weak resource-type hint such as "working paper".
  * No signal stays on device or engineering, the historical default.
  */
-export function suggestCriterionProfile(input: { resourceType?: string; keywords?: readonly string[] }): CriterionProfileId {
+export function suggestCriterionProfile(input: {
+  resourceType?: string
+  keywords?: readonly string[]
+  title?: string
+  description?: string
+}): CriterionProfileId {
   const resource = (input.resourceType ?? "").toLowerCase()
-  const text = [resource, ...(input.keywords ?? [])].join(" ").toLowerCase()
+  const title = input.title ?? ""
+  const description = input.description ?? ""
+  const keywords = (input.keywords ?? []).join(" ")
   const scores: Record<CriterionProfileId, number> = { device: 0, theory: 0, data: 0, roadmap: 0, empirical: 0 }
-  if (/dataset|data paper|datapaper|software/.test(resource)) scores.data += 3
-  if (/report|technical note|working paper/.test(resource)) scores.roadmap += 3
-  if (/proposal/.test(resource)) scores.device += 3
-  if (/\b(theor(?:y|etical)|theorem|proof|lemma|derivation|axiomatic|philosoph(?:y|ical)|formalism)\b/.test(text)) scores.theory += 2
-  if (/\b(dataset|database|corpus|catalogue|catalog|reference data|data paper)\b/.test(text)) scores.data += 2
-  if (/\b(roadmap|white paper|whitepaper|survey|scoping review|policy brief|technical report)\b/.test(text)) scores.roadmap += 2
-  if (/\b(empirical|experiments?|experimental|measurement|trial|clinical|observational|field study)\b/.test(text)) scores.empirical += 2
-  if (/\b(device|prototype|hardware|apparatus|instrument|engineering|funding|proposal|invention|technology readiness)\b/.test(text)) scores.device += 2
+  if (/dataset|data paper|datapaper|software/.test(resource)) scores.data += 5
+  if (/\breport\b/.test(resource)) scores.roadmap += 3
+  if (/\bproposal\b/.test(resource)) scores.device += 3
+  if (/working paper|technical note/.test(resource)) scores.roadmap += 1
+  for (const id of CRITERION_PROFILE_IDS) {
+    if (signalHit(id, title)) scores[id] += 4
+    if (signalHit(id, keywords)) scores[id] += 3
+    if (signalHit(id, description)) scores[id] += 2
+    if (signalHit(id, resource)) scores[id] += 2
+  }
   let best: CriterionProfileId = "device"
   let bestScore = 0
   for (const id of ["empirical", "data", "theory", "roadmap", "device"] as const) {
