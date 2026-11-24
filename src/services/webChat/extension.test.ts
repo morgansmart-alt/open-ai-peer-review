@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 import { webChatProvider } from "../../../extension/adapters/index.ts"
 import { CRITERION_PROFILES, readingCriteria } from "../../domain/profiles.ts"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
-import { ackReply, assistantText, attachmentReady, clickElement, composerTextMatches, confirmComposerText, describeCandidates, diagnose, fillComposer, findComposer, findSubmit, placeComposerText, reviewJsonOnPage, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
+import { ackReply, assistantText, attachmentReady, chooseReplyBlock, clickElement, composerTextMatches, confirmComposerText, describeCandidates, diagnose, fillComposer, findComposer, findSubmit, heldPrefix, placeComposerText, reviewJsonOnPage, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
 import { buildWebChatPacket } from "./packet.ts"
 import { runTurn, sendFollowUp } from "./runTurn.ts"
 import { acceptWebChatResult } from "./accept.ts"
@@ -758,7 +758,7 @@ describe("live chat composers", () => {
     const notes: string[] = []
     document.getElementById("send")?.addEventListener("click", () => {
       document.getElementById("box")!.textContent = ""
-      document.getElementById("next")!.textContent = "The record is public and the reply is finished."
+      document.getElementById("next")!.textContent = 'The record is public and the reply is finished. {"overallScore":70,"summary":"done"}'
     })
     const reply = await sendFollowUp(
       document,
@@ -779,9 +779,9 @@ describe("live chat composers", () => {
       "review",
       "json",
     )
-    expect(reply).toContain("The record is public")
+    expect(reply).toContain('"overallScore":70')
     expect(reply).not.toContain('"overallScore":86')
-    expect(notes.join("\n")).toContain("candidate [data-testid=\"grokResponse\"]")
+    expect(notes.join("\n")).toMatch(/candidate (message-block|\[data-testid="grokResponse"\])/)
     expect(notes.join("\n")).toContain("characters")
     expect(notes.join("\n")).toContain("last change")
   })
@@ -865,5 +865,24 @@ describe("live chat composers", () => {
     const log = notes.join("\n")
     expect(log).toMatch(/candidate (conversation-region|message-block)/)
     expect(log).toContain("characters")
+  })
+
+  it("keeps looking until the score JSON, and ignores the prompt echo and a short chip", () => {
+    const prompt = "Score the paper again with the same AIR v0.2 rubric. Return one JSON object and nothing else."
+    const chip = "Thought for 4s"
+    const echo = prompt.slice(0, 120)
+    const score = '{"overallScore":88,"recommendation":"accept","summary":"The defended score is ready for the card and cites the record."}'
+    const before = "The first review is already on screen and should stay out of the new reply."
+    expect(chooseReplyBlock([chip, echo], before, prompt, "json")).toBe("")
+    expect(chooseReplyBlock([chip, echo, score], before, prompt, "json")).toBe(score)
+    const longer = `${score} ${"The pathway is written down. ".repeat(8)}`
+    expect(chooseReplyBlock([score, chip, longer], before, prompt, "json")).toBe(longer)
+  })
+
+  it("sends the prefix a composer kept instead of abandoning a cut-off defence", () => {
+    const full = `${"Answer the criticism about the Boltzmann constant and the tabulated uncertainty. ".repeat(12)}`
+    const kept = `${full.slice(0, 180)}…`
+    expect(heldPrefix(kept, full)?.startsWith("Answer the criticism")).toBe(true)
+    expect(heldPrefix("Thought", full)).toBeNull()
   })
 })

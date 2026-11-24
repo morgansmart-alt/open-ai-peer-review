@@ -2,7 +2,7 @@ import { webChatProvider } from "./adapters/index.ts"
 import { officialCriteria } from "../src/domain/officialCriteria.ts"
 import { readingCriteria } from "../src/domain/profiles.ts"
 import { acceptWebChatResult } from "../src/services/webChat/accept.ts"
-import { critiquesFromReport, DEFENCE_PAUSE_MS, runDefenceLoop } from "../src/services/webChat/defence.ts"
+import { critiquesFromReport, defenceFailureNotice, DEFENCE_PAUSE_MS, runDefenceLoop } from "../src/services/webChat/defence.ts"
 import { sendFollowUp, runTurn, type TurnHooks } from "../src/services/webChat/runTurn.ts"
 import { detectChatModel } from "../src/services/webChat/chatModel.ts"
 import { settleChatJson } from "../src/services/jsonText.ts"
@@ -137,13 +137,14 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
         notice,
       })
     } catch (error) {
+      const reason = error instanceof Error ? error.message : "The defence stopped early."
       report({
         type: "air-web-chat-done",
         requestId: message.requestId,
         ok: true,
         text: settled.text,
-        notice,
-        message: error instanceof Error ? error.message : "The defence stopped early.",
+        notice: [notice, defenceFailureNotice(reason)].filter(Boolean).join(" "),
+        message: reason,
         chatModel: observedModel(),
       })
     }

@@ -448,6 +448,7 @@ describe("extension panel", () => {
         stepLog: [
           { at: "5:21:03 PM", step: "defence round 1 of 2", status: "waiting" },
           { at: "5:21:04 PM", step: "Stop", status: "idle" },
+          { at: "5:21:05 PM", step: "defence round 1 of 2", status: "error", detail: "Defence step failed: the composer cut the message. Blind score saved." },
         ],
       }),
       actions(),

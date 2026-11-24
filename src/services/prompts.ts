@@ -78,6 +78,13 @@ export function sourceRecordBlock(record: ZenodoRecord): string {
   return lines.join("\n")
 }
 
+function compactAnchors(bands: { min: number; max: number; label: string }[] | undefined): string {
+  if (!bands || bands.length === 0) return ""
+  const picks = [bands[0], bands[Math.floor(bands.length / 2)], bands[bands.length - 1]].filter((band): band is { min: number; max: number; label: string } => Boolean(band))
+  const unique = picks.filter((band, index) => picks.findIndex((item) => item.min === band.min) === index)
+  return `Anchors: ${unique.map((band) => `${band.min}–${band.max} ${band.label}`).join("; ")}.`
+}
+
 export function reviewUserPrompt(
   record: ZenodoRecord,
   criteria: CriteriaSet,
@@ -134,7 +141,7 @@ export function reviewUserPrompt(
   }
   const guide = criteria.criteria
     .map((criterion) => {
-      const bands = options?.compact ? "" : (criterion.bands?.map((band) => `${band.min}-${band.max}: ${band.label}`).join(" ") ?? "")
+      const bands = options?.compact ? compactAnchors(criterion.bands) : (criterion.bands?.map((band) => `${band.min}-${band.max}: ${band.label}`).join(" ") ?? "")
       const weightNote = criterion.id === "global-goals" ? ", bonus, not in the overall" : ""
       return `${criterion.id} (weight ${criterion.weight}${weightNote}): ${criterion.name}. ${options?.compact ? "" : `${criterion.description} `}Guidance: ${criterion.guidance} ${bands}`.trim()
     })
@@ -142,7 +149,7 @@ export function reviewUserPrompt(
   const goalsGuide =
     criteria.reportSchema === "0.2"
       ? options?.compact
-        ? "global-goals is optional recognition. Score it, and leave it out of overallScore. Use only goal ids from criteria/global-goals.json."
+        ? "global-goals is optional recognition. Score it, and leave it out of overallScore. Use the anchors: a 90 is rare. Do not treat a missing market figure, prototype, or estimated value as a fail on a reference, dataset, or standards paper. limitations scores whether the text says how the work can fail."
         : ["Documented goals you may score against. Do not add goals that are not in this list.", ...globalGoals.goals.map((goal) => `- ${goal.id}: ${goal.statement} (${goal.sourceUrl})`)].join("\n")
       : ""
   return [

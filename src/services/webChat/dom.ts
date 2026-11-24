@@ -409,19 +409,62 @@ export function messageBlocks(root: ParentNode, composer: Element | null): strin
   const usable = nodes.filter((el) => {
     if (isIgnoredRegion(el)) return false
     if (composer && (el === composer || composer.contains(el) || el.contains(composer))) return false
-    return elementText(el).length >= 40
+    return elementText(el).length >= 20
   })
-  const leaves = usable.filter((el) => !usable.some((other) => other !== el && el.contains(other)))
-  return leaves.map((el) => elementText(el))
+  return usable.map((el) => elementText(el))
 }
 
-/** The last block whose opening is not already in the pre-send snapshot. */
-export function blockAfterPrompt(blocks: string[], beforeRegion: string): string {
+function hasSentence(text: string): boolean {
+  return /[.!?](?:\s|$)/.test(text)
+}
+
+/** The sent prompt, a prefix of it, or a suffix of it. Not a model reply. */
+export function isPromptEcho(text: string, prompt: string): boolean {
+  const block = normaliseComposerText(text)
+  const sent = normaliseComposerText(prompt)
+  if (!sent || !block) return false
+  if (block === sent) return true
+  if (sent.startsWith(block) && block.length >= 40) return true
+  if (sent.endsWith(block) && block.length >= 40) return true
+  const head = sent.slice(0, 80)
+  if (head.length >= 40 && block.startsWith(head) && block.length <= sent.length + 40) return true
+  return false
+}
+
+/** A chip or "Thought for Ns" label. A short block with a sentence or JSON stays. */
+export function isUiLabel(text: string): boolean {
+  const trimmed = text.replace(/\s+/g, " ").trim()
+  if (trimmed.length >= 80) return false
+  if (reviewJsonBlock(text)) return false
+  if (hasSentence(trimmed)) return false
+  return true
+}
+
+function longestLast(blocks: string[]): string {
+  if (blocks.length === 0) return ""
+  const longest = Math.max(...blocks.map((block) => block.length))
+  const tied = blocks.filter((block) => block.length === longest)
+  return tied[tied.length - 1] ?? ""
+}
+
+/**
+ * Pick the reply again from the blocks visible now.
+ * The sent prompt and short UI labels are ignored. Score steps prefer parseable JSON.
+ * The winner is the longest remaining block, and the later one when lengths tie.
+ */
+export function chooseReplyBlock(blocks: string[], beforeRegion: string, sentPrompt: string, expect: "json" | "text" = "text"): string {
   const fresh = blocks.filter((block) => {
-    const probe = block.replace(/\s+/g, " ").trim().slice(0, 80)
-    return probe.length >= 40 && !beforeRegion.includes(probe)
+    const trimmed = block.replace(/\s+/g, " ").trim()
+    if (!trimmed || isUiLabel(block) || isPromptEcho(block, sentPrompt)) return false
+    const probe = trimmed.slice(0, 80)
+    return !(probe.length >= 40 && beforeRegion.includes(probe))
   })
-  return fresh[fresh.length - 1] ?? ""
+  if (expect === "json") {
+    const withJson = fresh.filter((block) => reviewJsonBlock(block))
+    if (withJson.length > 0) return longestLast(withJson)
+    return ""
+  }
+  return longestLast(fresh.filter((block) => block.trim().length >= 80 || reviewJsonBlock(block) || hasSentence(block)))
 }
 
 function walkReplyText(node: Node, composer: Element | null, chunks: string[]): void {
@@ -636,10 +679,20 @@ export async function confirmComposerText(
   }
   actual = composerText(el)
   if (messageMatches(actual, text)) return { ok: true, chunk: text, method: placed.method, actual }
-  if (placed.truncated && placed.actual.trim().length >= 20 && messageMatches(placed.actual, text.slice(0, placed.actual.length))) {
-    return { ok: true, chunk: text.slice(0, placed.actual.length), method: placed.method, actual: placed.actual }
-  }
+  const prefix = heldPrefix(actual, text)
+  if (prefix) return { ok: true, chunk: prefix, method: placed.method, actual }
   return { ok: false, actual, method: placed.method }
+}
+
+/** The editor kept the start of the message and stopped. A trailing ellipsis is not part of the text. */
+export function heldPrefix(actual: string, intended: string): string | null {
+  const cleaned = actual.replace(/[…\u2026]+$/g, "").replace(/\.{3}$/g, "").trimEnd()
+  if (cleaned.length < 80) return null
+  if (intended.startsWith(cleaned)) return cleaned
+  const normActual = normaliseComposerText(cleaned)
+  const normIntended = normaliseComposerText(intended)
+  if (normActual.length >= 80 && normIntended.startsWith(normActual)) return cleaned
+  return null
 }
 
 /** One click, then ignore a second call on the same element until the turn yields. */

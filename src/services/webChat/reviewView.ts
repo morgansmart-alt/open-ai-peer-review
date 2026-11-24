@@ -263,8 +263,9 @@ export function renderReviewApp(root: HTMLElement, model: ReviewModel, actions: 
       el(card, "p", `${model.result.defendedLabel || "after author defence"} ${Math.round(model.result.defendedOverall)} out of 100`, "score")
     }
     if (model.result.notice) {
-      const note = el(card, "p", model.result.notice, "mismatch")
-      note.id = "text-page-note"
+      const defenceFailed = model.result.notice.includes("Defence step failed:")
+      const note = el(card, "p", defenceFailed ? model.result.notice.slice(model.result.notice.indexOf("Defence step failed:")) : model.result.notice, defenceFailed ? "warn" : "mismatch")
+      note.id = defenceFailed ? "defence-notice" : "text-page-note"
     }
     if (model.result.verdictNote) {
       const note = el(card, "p", model.result.verdictNote, "note")

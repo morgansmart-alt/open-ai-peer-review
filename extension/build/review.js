@@ -2782,6 +2782,12 @@ ${output}
     if (lines.length === 1) return "";
     return lines.join("\n");
   }
+  function compactAnchors(bands) {
+    if (!bands || bands.length === 0) return "";
+    const picks = [bands[0], bands[Math.floor(bands.length / 2)], bands[bands.length - 1]].filter((band) => Boolean(band));
+    const unique = picks.filter((band, index) => picks.findIndex((item) => item.min === band.min) === index);
+    return `Anchors: ${unique.map((band) => `${band.min}\u2013${band.max} ${band.label}`).join("; ")}.`;
+  }
   function reviewUserPrompt(record, criteria, packet, conversations = [], options) {
     const schema = {
       summary: "string, 80-180 words",
@@ -2825,11 +2831,11 @@ ${output}
       }
     };
     const guide = criteria.criteria.map((criterion) => {
-      const bands = options?.compact ? "" : criterion.bands?.map((band) => `${band.min}-${band.max}: ${band.label}`).join(" ") ?? "";
+      const bands = options?.compact ? compactAnchors(criterion.bands) : criterion.bands?.map((band) => `${band.min}-${band.max}: ${band.label}`).join(" ") ?? "";
       const weightNote = criterion.id === "global-goals" ? ", bonus, not in the overall" : "";
       return `${criterion.id} (weight ${criterion.weight}${weightNote}): ${criterion.name}. ${options?.compact ? "" : `${criterion.description} `}Guidance: ${criterion.guidance} ${bands}`.trim();
     }).join("\n");
-    const goalsGuide = criteria.reportSchema === "0.2" ? options?.compact ? "global-goals is optional recognition. Score it, and leave it out of overallScore. Use only goal ids from criteria/global-goals.json." : ["Documented goals you may score against. Do not add goals that are not in this list.", ...globalGoals.goals.map((goal) => `- ${goal.id}: ${goal.statement} (${goal.sourceUrl})`)].join("\n") : "";
+    const goalsGuide = criteria.reportSchema === "0.2" ? options?.compact ? "global-goals is optional recognition. Score it, and leave it out of overallScore. Use the anchors: a 90 is rare. Do not treat a missing market figure, prototype, or estimated value as a fail on a reference, dataset, or standards paper. limitations scores whether the text says how the work can fail." : ["Documented goals you may score against. Do not add goals that are not in this list.", ...globalGoals.goals.map((goal) => `- ${goal.id}: ${goal.statement} (${goal.sourceUrl})`)].join("\n") : "";
     return [
       `Record: ${record.title}`,
       `DOI: ${record.doi}`,
@@ -3090,8 +3096,9 @@ ${output}
         el(card, "p", `${model.result.defendedLabel || "after author defence"} ${Math.round(model.result.defendedOverall)} out of 100`, "score");
       }
       if (model.result.notice) {
-        const note = el(card, "p", model.result.notice, "mismatch");
-        note.id = "text-page-note";
+        const defenceFailed = model.result.notice.includes("Defence step failed:");
+        const note = el(card, "p", defenceFailed ? model.result.notice.slice(model.result.notice.indexOf("Defence step failed:")) : model.result.notice, defenceFailed ? "warn" : "mismatch");
+        note.id = defenceFailed ? "defence-notice" : "text-page-note";
       }
       if (model.result.verdictNote) {
         const note = el(card, "p", model.result.verdictNote, "note");
@@ -3916,11 +3923,12 @@ ${JSON.stringify(report)}`),
     if (defended?.ok) stored.defended = defended.defended;
     const provider = webChatProvider(providerId);
     stored.modelId = webChatModelId(provider?.modelLabel ?? providerId, chatModel);
+    const failure = notice?.includes("Defence step failed:") ? notice.slice(notice.indexOf("Defence step failed:")) : "";
     if (notice?.trim()) stored.sourceNote = notice.trim();
     reviews = appendResult(reviews, stored);
     await storageSet(RESULT_STORAGE_KEY, reviews);
     busy = false;
-    status = stopped ? "Stopped. The blind score is kept. The chat tab stays open." : defended?.ok ? "Done. The blind score and the score after author defence are below." : "Done. The blind score is below.";
+    status = failure ? failure : stopped ? "Stopped. The blind score is kept. The chat tab stays open." : defended?.ok ? "Done. The blind score and the score after author defence are below." : "Done. The blind score is below.";
     error = "";
     paint();
   }

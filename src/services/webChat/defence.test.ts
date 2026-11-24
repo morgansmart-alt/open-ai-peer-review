@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
-import { critiquesFromReport, rebuttalPrompt, rescorePrompt, runDefenceLoop, defendedFromReply, DEFENCE_PAUSE_MS } from "./defence.ts"
+import { critiquesFromReport, defenceFailureNotice, rebuttalPrompt, rescorePrompt, runDefenceLoop, defendedFromReply, DEFENCE_PAUSE_MS } from "./defence.ts"
 import { validateWebChatSubmission, WEB_CHAT_SUBMIT_URL } from "./submission.ts"
 import { WEB_CHAT_SOURCE, UNCALIBRATED_WEB_CHAT_TIER } from "./protocol.ts"
 
@@ -41,6 +41,17 @@ describe("defend my paper", () => {
       majorIssues: [{ criterionId: "testability", claim: "The stopping rule is missing.", quotedPassage: "Net B collected 1.8 litres.", reason: "The check cannot be repeated." }],
     })
     const prompt = rebuttalPrompt({ round: 1, rounds: 2, critiques, paperText: "Section 2. Net B collected 1.8 litres." })
+    const long = rebuttalPrompt({
+      round: 1,
+      rounds: 1,
+      critiques: [{ criterionId: "limitations", claim: `Boltzmann ${"uncertainty ".repeat(80)}`, reason: "x".repeat(500), quotedPassage: "y".repeat(400) }],
+      paperText: "",
+      includeExcerpt: false,
+    })
+    expect(long.length).toBeLessThan(2500)
+    expect(long).toContain("Boltzmann")
+    expect(long).not.toContain("uncertainty ".repeat(40))
+    expect(defenceFailureNotice("The message box cut the text off.")).toBe("Defence step failed: The message box cut the text off. Blind score saved.")
     expect(prompt).toContain("Do not invent data")
     expect(prompt).toContain("Section 2")
     const linked = rebuttalPrompt({ round: 1, rounds: 2, critiques, paperText: "UNIQUEPDF excerpt that must stay out.", includeExcerpt: false })
