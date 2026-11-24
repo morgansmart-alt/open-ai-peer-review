@@ -142,22 +142,36 @@
     modelLabel: "Grok on x.com",
     startUrl: "https://x.com/i/grok",
     origins: ["https://x.com/i/grok*"],
-    pasteLimit: 32e3,
+    pasteLimit: 1e5,
     fileCharLimit: 4e5,
     maxFiles: 4,
     comfortableTurns: 6,
     fileUpload: true,
-    limits: "Grok on X is at x.com/i/grok. AIR tries a file up to about 400,000 characters, then pastes 32,000 characters at a time. X rate-limits long threads. That limit was not measured here.",
+    limits: "Grok on X is at x.com/i/grok. AIR sends one message when the paper and the instructions fit in about 100,000 characters, attaches a file when the site accepts one, and otherwise pastes in parts. X rate-limits long threads. That limit was not measured here.",
     selectors: {
       composer: [
+        'textarea[aria-label="Ask anything"]',
+        'textarea[placeholder="Ask anything"]',
+        '[contenteditable="true"][aria-label="Ask anything"]',
+        '[contenteditable="true"][placeholder="Ask anything"]',
+        '[role="textbox"][aria-label*="Ask"]',
+        '[role="textbox"][placeholder*="Ask"]',
         'textarea[aria-label="Ask Grok"]',
         'textarea[aria-label*="Ask Grok"]',
+        'textarea[aria-label*="Ask"]',
+        'textarea[placeholder*="Ask"]',
         'div[data-testid="grokComposer"] textarea',
         'div[contenteditable="true"][role="textbox"]'
       ],
-      submit: ['button[aria-label="Send"]', 'button[data-testid="grok-send"]', 'button[aria-label*="Send"]'],
-      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]'],
-      assistant: ['[data-testid="assistant-message"]', '[data-testid="grok-message"]'],
+      submit: [
+        'button[aria-label="Send"]',
+        'button[aria-label*="Send"]',
+        'button[aria-label*="Submit"]',
+        'button[aria-label*="Grok"]',
+        'button[data-testid="grok-send"]'
+      ],
+      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]', 'button[aria-label*="Stop generating"]'],
+      assistant: ['[data-testid="assistant-message"]', '[data-testid="grok-message"]', '[class*="assistant-message"]', '[data-message-author="assistant"]'],
       fileInput: ['input[type="file"]'],
       login: ['a[href*="/login"]', 'a[href*="/i/flow/login"]', 'a[data-testid="login"]']
     }
@@ -180,14 +194,26 @@
     limits: "AIR attaches a paper up to about 1.2 million characters, or pastes 48,000 characters at a time. Grok's free web chat rate-limits long threads. The exact cap is set by xAI and was not measured here.",
     selectors: {
       composer: [
+        'textarea[aria-label="Message Grok"]',
+        'textarea[aria-label*="Message Grok"]',
+        '[contenteditable="true"][aria-label="Message Grok"]',
+        '[contenteditable="true"][aria-label*="Message Grok"]',
+        '[role="textbox"][aria-label="Message Grok"]',
+        '[role="textbox"][aria-label*="Message Grok"]',
         'textarea[aria-label="Ask Grok anything"]',
         'textarea[aria-label*="Ask Grok"]',
+        'textarea[placeholder*="What do you want to know"]',
+        'textarea[aria-label*="What do you want to know"]',
+        'textarea[placeholder*="Ask anything"]',
+        'textarea[aria-label*="Ask anything"]',
         'textarea[placeholder*="Ask"]',
+        '[contenteditable="true"][placeholder*="Ask"]',
+        '[contenteditable="true"][aria-label*="Ask"]',
         'div[contenteditable="true"][role="textbox"]'
       ],
-      submit: ['button[aria-label="Submit"]', 'button[aria-label*="Send"]', 'button[type="submit"]'],
-      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]'],
-      assistant: ['[data-testid="assistant-message"]', '[data-message-author="assistant"]'],
+      submit: ['button[aria-label="Submit"]', 'button[aria-label*="Send"]', 'button[aria-label*="Submit"]', 'button[type="submit"]'],
+      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]', 'button[aria-label*="Stop generating"]'],
+      assistant: ['[data-testid="assistant-message"]', '[data-message-author="assistant"]', '[class*="assistant-message"]'],
       fileInput: ['input[type="file"]'],
       login: ['a[href*="accounts.x.com"]', 'a[href*="/login"]', 'button[data-testid="login"]']
     }
@@ -326,7 +352,8 @@
         system: packet.system,
         instructions: packet.instructions,
         files,
-        ...typeof packet.criterionProfile === "string" && packet.criterionProfile.trim() ? { criterionProfile: packet.criterionProfile.trim() } : {}
+        ...typeof packet.criterionProfile === "string" && packet.criterionProfile.trim() ? { criterionProfile: packet.criterionProfile.trim() } : {},
+        ...typeof packet.textUrl === "string" && packet.textUrl.trim() ? { textUrl: packet.textUrl.trim() } : {}
       }
     };
   }
@@ -351,7 +378,9 @@
           text: message.text,
           defendedText: message.defendedText ?? null,
           transcript: message.transcript ?? [],
-          stopped: Boolean(message.stopped)
+          stopped: Boolean(message.stopped),
+          chatModel: typeof message.chatModel === "string" && message.chatModel.trim() ? message.chatModel.trim() : "unknown (site default)",
+          notice: typeof message.notice === "string" ? message.notice : ""
         };
       }
       return { kind: "error", requestId: job.requestId, airTabId: job.airTabId, message: message.message || "The chat did not return a review." };
@@ -371,7 +400,9 @@
         text: decision.text,
         defendedText: decision.defendedText,
         transcript: decision.transcript,
-        stopped: decision.stopped
+        stopped: decision.stopped,
+        chatModel: decision.chatModel,
+        notice: decision.notice
       };
     }
     return { source: EXTENSION_SOURCE, version: PROTOCOL_VERSION, type: "air-web-chat-error", requestId: decision.requestId, message: decision.message };
@@ -392,6 +423,10 @@
   function requestAllowed(sender) {
     return fromExtensionPage(sender) || originAllowed(senderOrigin(sender));
   }
+  function keepAirPanel() {
+    if (!chrome.sidePanel?.setOptions) return;
+    void chrome.sidePanel.setOptions({ path: "review.html", enabled: true }).catch(() => void 0);
+  }
   function emit(message, airTabId) {
     chrome.runtime.sendMessage(message, () => {
       void chrome.runtime.lastError;
@@ -403,6 +438,7 @@
     if (decision.kind === "ignore") return;
     const envelope = extensionEnvelope(decision);
     const targets = { panel: true, airTabId: decision.airTabId > 0 ? decision.airTabId : 0 };
+    if (decision.kind === "result" || decision.kind === "error") keepAirPanel();
     emit(envelope, targets.airTabId);
   }
   function waitForLoad(tabId) {

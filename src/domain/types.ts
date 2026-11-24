@@ -126,6 +126,21 @@ export interface MajorIssue {
   quoteVerified?: boolean
 }
 
+export interface AirFeedback {
+  /** A criterion or its wording was unclear or did not fit this paper. */
+  criteria?: string
+  /** The paper-type profile misfit the work. */
+  profile?: string
+  /** A file or piece of context needed to score was missing. */
+  missingContext?: string
+  /** The instructions were ambiguous. */
+  prompt?: string
+  /** A concrete change to the rubric. */
+  rubric?: string
+  /** A correction to how the model scored. It does not change the stored scores. */
+  scoringProcess?: string
+}
+
 export interface ReviewReport {
   summary: string
   scores: CriterionScore[]
@@ -155,12 +170,21 @@ export interface ReviewReport {
   simulation?: SimulationEvidence
   valueEstimate?: ValueEstimate
   goals?: GoalAlignment[]
+  /**
+   * Optional notes about AIR itself. Never part of the score.
+   * Absent when the model had nothing to say or the field was unusable.
+   */
+  airFeedback?: AirFeedback
   /** How much of the selected files this reading actually covered. */
   reading?: {
     pagesRead: number
     pagesTotal: number
     chunksSummarised: number
     coverage: "full" | "partial"
+    /** Zero when the files had no extractable words. Absent on older readings. */
+    extractableWords?: number
+    /** Set when the files were not read, for example a scanned PDF. Absent means use `coverage`. */
+    coverageLabel?: string
   }
 }
 
@@ -195,6 +219,8 @@ export interface StoredReview {
   tier?: "free-screening" | "free-web-chat" | "uncalibrated web-chat" | "in-depth" | "demo" | "community-ai"
   /** Set when the reading was sent from the browser extension or published as a web-chat score. */
   source?: "web-chat extension"
+  /** Shown on the score card when the text page was down and the first reply used another source. */
+  sourceNote?: string
   /** Public paper address. Private chat links are never stored here. */
   paperUrl?: string
   /** Second score after Defend my paper. The blind overallScore stays the displayed score. */

@@ -2,6 +2,7 @@ import { webChatProvider } from "./adapters/index.ts"
 import { officialCriteria } from "../src/domain/officialCriteria.ts"
 import { readingCriteria } from "../src/domain/profiles.ts"
 import { acceptWebChatResult } from "../src/services/webChat/accept.ts"
+import { webChatModelId } from "../src/services/webChat/chatModel.ts"
 import { WEB_CHAT_PDF_PAGES } from "../src/services/webChat/packet.ts"
 import { EXTENSION_SOURCE, PAGE_SOURCE, PROTOCOL_VERSION } from "../src/services/webChat/protocol.ts"
 import { renderReviewApp, type ReviewModel } from "../src/services/webChat/reviewView.ts"
@@ -241,6 +242,7 @@ async function run(): Promise<void> {
       criterionProfile: profileId,
       filename: paper.filename,
       text: paper.text,
+      source: publication?.source ?? null,
     })
     status = paper.note ? `${paper.note} Opening ${provider.label}. Stay on that tab.` : `Opening ${provider.label}. Stay on that tab.`
     paint()
@@ -254,7 +256,7 @@ async function run(): Promise<void> {
   }
 }
 
-chrome.runtime.onMessage.addListener((message: { source?: string; type?: string; requestId?: string; text?: string; message?: string; defendedText?: string | null; transcript?: { round: number; kind: string; text: string }[]; stopped?: boolean }) => {
+chrome.runtime.onMessage.addListener((message: { source?: string; type?: string; requestId?: string; text?: string; message?: string; defendedText?: string | null; transcript?: { round: number; kind: string; text: string }[]; stopped?: boolean; chatModel?: string; notice?: string }) => {
   if (!message || message.source !== EXTENSION_SOURCE || message.requestId !== requestId) return
   if (message.type === "air-web-chat-progress" && message.message) {
     status = message.message
@@ -269,11 +271,11 @@ chrome.runtime.onMessage.addListener((message: { source?: string; type?: string;
     return
   }
   if (message.type === "air-web-chat-result") {
-    void finish(message.text ?? "", message.defendedText ?? null, message.transcript ?? [], Boolean(message.stopped))
+    void finish(message.text ?? "", message.defendedText ?? null, message.transcript ?? [], Boolean(message.stopped), message.chatModel, message.notice)
   }
 })
 
-async function finish(raw: string, defendedRaw: string | null, transcript: { round: number; kind: string; text: string }[], stopped: boolean): Promise<void> {
+async function finish(raw: string, defendedRaw: string | null, transcript: { round: number; kind: string; text: string }[], stopped: boolean, chatModel?: string, notice?: string): Promise<void> {
   const accepted = acceptWebChatResult(raw, readingCriteria(officialCriteria, profileId, false))
   if (!accepted.ok) {
     busy = false
@@ -295,6 +297,9 @@ async function finish(raw: string, defendedRaw: string | null, transcript: { rou
   })
   stored.defenceTranscript = transcript
   if (defended?.ok) stored.defended = defended.defended
+  const provider = webChatProvider(providerId)
+  stored.modelId = webChatModelId(provider?.modelLabel ?? providerId, chatModel)
+  if (notice?.trim()) stored.sourceNote = notice.trim()
   reviews = appendResult(reviews, stored)
   await storageSet(RESULT_STORAGE_KEY, reviews)
   busy = false
@@ -336,10 +341,18 @@ async function sendScores(ids: string[]): Promise<void> {
   paint()
 }
 
-void storageGet(ONBOARD_STORAGE_KEY).then((seen) => {
-  showOnboarding = seen !== true
-  return storageGet(RESULT_STORAGE_KEY)
-}).then((saved) => {
-  reviews = Array.isArray(saved) ? (saved as StoredReview[]) : []
-  paint()
+function restoreSaved(): Promise<void> {
+  return storageGet(ONBOARD_STORAGE_KEY).then((seen) => {
+    showOnboarding = seen !== true
+    return storageGet(RESULT_STORAGE_KEY)
+  }).then((saved) => {
+    reviews = Array.isArray(saved) ? (saved as StoredReview[]) : []
+    paint()
+  })
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") void restoreSaved()
 })
+
+void restoreSaved()

@@ -1,5 +1,5 @@
 import { categoryLabel } from "../domain/criteria.ts"
-import { profileLabel } from "../domain/profiles.ts"
+import { storedProfileLabel } from "../domain/profiles.ts"
 import { boardValue } from "../domain/scoring.ts"
 import { DISCLAIMER, type CriteriaSet, type StoredReview } from "../domain/types.ts"
 import { formatVersionLabel } from "./zenodo.ts"
@@ -14,7 +14,7 @@ export function reportToMarkdown(review: StoredReview, criteria: CriteriaSet, as
     "",
     `- DOI: ${review.doi}`,
     `- Record version: ${formatVersionLabel(review.recordVersion)}`,
-    review.criterionProfile ? `- Criterion profile: ${profileLabel(review.criterionProfile)}` : "",
+    `- Criterion profile: ${storedProfileLabel(review.criterionProfile)}`,
     `- Assessor: ${assessorName}`,
     `- Model: ${review.modelId}`,
     `- Provider: ${review.provider}`,

@@ -63,6 +63,12 @@ describe("web-chat submission", () => {
     if (!limited.ok) expect(limited.status).toBe(429)
     const otherSite = decideWebChatSubmission({ ...body, site: "Claude" }, { recentCount: 0, existingIds: [first.row.id] })
     expect(otherSite.ok && otherSite.duplicate).toBe(false)
+    const otherModel = decideWebChatSubmission(
+      { ...body, model: "Grok on grok.com · Expert (web chat, uncalibrated)" },
+      { recentCount: 0, existingIds: [first.row.id] },
+    )
+    expect(otherModel.ok && otherModel.duplicate).toBe(false)
+    if (otherModel.ok && first.ok) expect(otherModel.row.id).not.toBe(first.row.id)
   })
 
   it("keeps a sent score off the calibrated board and the two-family count", () => {

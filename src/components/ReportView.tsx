@@ -2,15 +2,43 @@ import type { ReactNode } from "react"
 import { GoalsHeatmap, PhysicsGauge, QuadrantChart, RadarChart, RangeBars } from "./charts.tsx"
 import { publicContextCount } from "../domain/conversationLinks.ts"
 import { categoryLabel, impactFeasibilityQuadrant } from "../domain/criteria.ts"
-import { profileLabel, showsProjectValue } from "../domain/profiles.ts"
+import { showsProjectValue, storedProfileLabel } from "../domain/profiles.ts"
+import { coveragePhrase, OCR_OR_TEXT_SUGGESTION } from "../services/textTools.ts"
 import { scoringMismatch, storedScale, toBoard } from "../domain/scoring.ts"
 import { globalGoals } from "../domain/goals.ts"
-import { DISCLAIMER, type CriteriaSet, type ReviewReport, type StoredReview } from "../domain/types.ts"
+import { DISCLAIMER, type AirFeedback, type CriteriaSet, type ReviewReport, type StoredReview } from "../domain/types.ts"
+import { hasAirFeedback } from "../services/airFeedback.ts"
 import { WEB_CHAT_LABEL, isUncalibratedWebChat } from "../services/webChat/protocol.ts"
 import { downloadText, reportToMarkdown } from "../services/markdown.ts"
 import { formatVersionLabel } from "../services/zenodo.ts"
 import { btnQuiet } from "./ui.tsx"
 import { formatWhen } from "./ui.tsx"
+
+const FEEDBACK_LABELS: { key: keyof AirFeedback; label: string }[] = [
+  { key: "criteria", label: "Criteria" },
+  { key: "profile", label: "Profile" },
+  { key: "missingContext", label: "Missing context or files" },
+  { key: "prompt", label: "Prompt" },
+  { key: "rubric", label: "Rubric" },
+  { key: "scoringProcess", label: "Scoring process" },
+]
+
+function AirFeedbackPanel({ feedback }: { feedback: AirFeedback }) {
+  return (
+    <details data-testid="air-feedback" className="mt-4 rounded-2xl border border-line bg-paper/40 p-3">
+      <summary className="cursor-pointer text-sm font-medium">Feedback on AIR</summary>
+      <p className="mt-2 text-xs text-ink-soft">About the review process, not the paper. It is not part of the score.</p>
+      <dl className="mt-2 space-y-2 text-sm">
+        {FEEDBACK_LABELS.map((item) => (
+          <div key={item.key}>
+            <dt className="text-xs text-ink-soft">{item.label}</dt>
+            <dd>{feedback[item.key]?.trim() || "none"}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  )
+}
 
 export function ReportView({
   report,
@@ -75,10 +103,17 @@ export function ReportView({
         </p>
         {report.reading && (
           <p className="mt-1 text-sm text-ink">
-            {report.reading.pagesRead} / {report.reading.pagesTotal} pages · coverage {report.reading.coverage}
-            {report.reading.chunksSummarised > 0 ? ` · ${report.reading.chunksSummarised} sections summarised` : " · full text sent"}
+            {report.reading.pagesRead} / {report.reading.pagesTotal} pages · coverage {coveragePhrase(report.reading)}
+            {report.reading.coverageLabel
+              ? ""
+              : report.reading.chunksSummarised > 0
+                ? ` · ${report.reading.chunksSummarised} sections summarised`
+                : report.reading.coverage === "full"
+                  ? " · full text sent"
+                  : ""}
           </p>
         )}
+        {report.reading?.coverageLabel && <p className="mt-1 text-sm text-ink-soft">{OCR_OR_TEXT_SUGGESTION}</p>}
         {report.unverifiedQuotes ? <p className="mt-1 text-xs text-ink-soft">{report.unverifiedQuotes} unverified quote{report.unverifiedQuotes === 1 ? "" : "s"}</p> : null}
         {check.mismatch && (
           <p className="mt-2 text-sm text-bad">
@@ -88,7 +123,7 @@ export function ReportView({
         <dl className="mt-3 grid gap-1 text-xs text-ink-soft sm:grid-cols-2">
           <div>Model: {meta.modelId}</div>
           <div>Provider: {meta.provider}</div>
-          <div>Criteria: {meta.criteriaVersion}{meta.customCriteria ? " · custom, unranked" : ""}{meta.stored?.criterionProfile ? ` · ${profileLabel(meta.stored.criterionProfile)}` : ""}</div>
+          <div>Criteria: {meta.criteriaVersion}{meta.customCriteria ? " · custom, unranked" : ""}{meta.stored ? ` · ${storedProfileLabel(meta.stored.criterionProfile)}` : ""}</div>
           <div>DOI: {meta.doi}</div>
           <div title={meta.recordVersion}>Record version: {formatVersionLabel(meta.recordVersion)}</div>
           <div>Generated: {formatWhen(meta.createdAt)}</div>
@@ -103,8 +138,10 @@ export function ReportView({
         {meta.stored?.tier === "free-screening" && (
           <p className="mt-3 text-sm text-gold">Free quick review: a smaller model, lower fidelity, screening only. It is not ranked and cannot verify the work.</p>
         )}
+        {meta.stored?.sourceNote ? <p className="mt-3 text-sm text-gold" data-testid="text-page-note">{meta.stored.sourceNote}</p> : null}
         {meta.mock && <p className="mt-3 text-sm text-gold">Demo reading. No model was called. The notes are a local stand-in so the report can be tried.</p>}
         <p className="mt-3 text-sm">{DISCLAIMER}</p>
+        {hasAirFeedback(report.airFeedback) && <AirFeedbackPanel feedback={report.airFeedback} />}
       </header>
       <div className="no-print mt-4 flex flex-wrap gap-2">
         <button

@@ -887,7 +887,7 @@ function expectedVerdict(board) {
   return "not-ready";
 }
 function recommendationMatchesBand(recommendation, board) {
-  const expected = expectedVerdict(board);
+  const expected = expectedVerdict(Math.round(board));
   if (recommendation === expected) return true;
   return recommendation === "accept" && expected === "encourage";
 }
@@ -913,6 +913,42 @@ function describeScoring(input) {
       reason: reasons.join(" ") || null
     }
   };
+}
+
+// src/services/airFeedback.ts
+var ALIASES = {
+  criteria: "criteria",
+  criterion: "criteria",
+  profile: "profile",
+  missingContext: "missingContext",
+  missing_context: "missingContext",
+  missing: "missingContext",
+  files: "missingContext",
+  prompt: "prompt",
+  rubric: "rubric",
+  scoringProcess: "scoringProcess",
+  scoring_process: "scoringProcess",
+  scoring: "scoringProcess"
+};
+function clip(value) {
+  if (typeof value !== "string") return "";
+  return value.trim().replace(/https?:\/\/(?:www\.)?(?:share\.google\/aimode|chatgpt\.com\/share|chat\.openai\.com\/share|claude\.ai\/share|grok\.com\/share)\/\S+/gi, "[private link]").slice(0, 1e3);
+}
+function parseAirFeedback(input) {
+  if (input == null || input === "") return void 0;
+  if (typeof input === "string") {
+    const note = clip(input);
+    return note ? { scoringProcess: note } : void 0;
+  }
+  if (typeof input !== "object" || Array.isArray(input)) return void 0;
+  const feedback = {};
+  for (const [key, value] of Object.entries(input)) {
+    const field = ALIASES[key];
+    const text = clip(value);
+    if (!field || !text) continue;
+    feedback[field] = text;
+  }
+  return Object.keys(feedback).length > 0 ? feedback : void 0;
 }
 
 // src/services/webChat/protocol.ts
@@ -1105,7 +1141,7 @@ var SUBMIT_LIMIT = 12;
 var SUBMIT_WINDOW_MS = 10 * 60 * 1e3;
 var AIR_SITE_URL = "https://morgansmart-alt.github.io/open-ai-peer-review/";
 var WEB_CHAT_SUBMIT_URL = "https://lotswxboafsenmszijpf.supabase.co/functions/v1/submit-web-chat";
-var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended"]);
+var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback"]);
 var DEFENDED_KEYS = /* @__PURE__ */ new Set(["label", "overallScore", "recommendation", "summary", "scores"]);
 var PAPER_KEYS = /* @__PURE__ */ new Set(["title", "doi", "url"]);
 function isRecord3(value) {
@@ -1126,7 +1162,7 @@ function submissionId(doiOrUrl, site, model) {
   const key = dedupeKey(doiOrUrl, site, model);
   return `webchat_${stableHash(key)}${stableHash(`${key}|air`)}`;
 }
-function clip(value, max) {
+function clip2(value, max) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 function submissionFromReview(review, site) {
@@ -1157,7 +1193,8 @@ function submissionFromReview(review, site) {
     overallScore: review.report.overallScore,
     recommendation: review.report.recommendation,
     createdAt: review.createdAt,
-    ...review.defended ? { defended: review.defended } : {}
+    ...review.defended ? { defended: review.defended } : {},
+    ...review.report.airFeedback ? { airFeedback: review.report.airFeedback } : {}
   };
   const checked = validateWebChatSubmission(submission, criteria);
   if (checked.ok) return { ok: true, submission: checked.submission };
@@ -1181,22 +1218,22 @@ function validateWebChatSubmission(input, criteria = officialCriteria) {
   for (const key of Object.keys(input.paper)) {
     if (!PAPER_KEYS.has(key)) return { ok: false, error: "The paper field included extra text." };
   }
-  const title = clip(input.paper.title, 300);
-  const doi = clip(input.paper.doi, 300);
-  const url = clip(input.paper.url, 500);
+  const title = clip2(input.paper.title, 300);
+  const doi = clip2(input.paper.doi, 300);
+  const url = clip2(input.paper.url, 500);
   if (!title) return { ok: false, error: "The paper needs a title." };
   if (!doi && !url) return { ok: false, error: "The paper needs a DOI or a link." };
-  const site = clip(input.site, 80);
-  const model = clip(input.model, 160);
+  const site = clip2(input.site, 80);
+  const model = clip2(input.model, 160);
   if (!site || !model) return { ok: false, error: "The chat site and model name are missing." };
-  const criteriaVersion = clip(input.criteriaVersion, 40);
+  const criteriaVersion = clip2(input.criteriaVersion, 40);
   if (!criteriaVersion.startsWith("0.2")) return { ok: false, error: "The board accepts AIR v0.2 scores." };
-  const criterionProfile = clip(input.criterionProfile, 40);
+  const criterionProfile = clip2(input.criterionProfile, 40);
   if (!Array.isArray(input.scores)) return { ok: false, error: "The criterion scores are missing." };
   const scores = input.scores.map((item) => {
     if (!isRecord3(item)) return null;
     if (Object.keys(item).some((key) => key !== "criterionId" && key !== "score")) return null;
-    const criterionId = clip(item.criterionId, 80);
+    const criterionId = clip2(item.criterionId, 80);
     const score = Number(item.score);
     return { criterionId, score };
   });
@@ -1206,22 +1243,23 @@ function validateWebChatSubmission(input, criteria = officialCriteria) {
   if (ready.length !== wanted.size || ready.some((item) => !wanted.has(item.criterionId) || !Number.isInteger(item.score))) {
     return { ok: false, error: "Every criterion in this profile needs an integer score." };
   }
-  const summary = stripChatShareLinks(clip(input.summary, 4e3));
+  const summary = stripChatShareLinks(clip2(input.summary, 4e3));
   if (summary.length < 40) return { ok: false, error: "The summary is too short." };
   if (/https?:\/\/(?:share\.google|chatgpt\.com\/share|claude\.ai\/share|grok\.com\/share)/i.test(summary)) {
     return { ok: false, error: "A private chat link was still in the summary." };
   }
   const overallScore = Number(input.overallScore);
   if (!Number.isInteger(overallScore)) return { ok: false, error: "The overall score must be an integer." };
-  const recommendation = clip(input.recommendation, 80);
+  const recommendation = clip2(input.recommendation, 80);
   const described = describeScoring({ scores: ready, statedOverall: overallScore, recommendation, criteria });
   if (described.scoringCheck.mismatch) {
     return { ok: false, error: "Scoring mismatch, needs re-check. This score was not sent." };
   }
-  const createdAt = clip(input.createdAt, 40);
+  const createdAt = clip2(input.createdAt, 40);
   if (!Number.isFinite(Date.parse(createdAt))) return { ok: false, error: "The score needs a timestamp." };
   const defended = readDefended(input.defended, criteria);
   if (!defended.ok) return defended;
+  const airFeedback = parseAirFeedback(input.airFeedback);
   return {
     ok: true,
     submission: {
@@ -1237,7 +1275,8 @@ function validateWebChatSubmission(input, criteria = officialCriteria) {
       overallScore,
       recommendation,
       createdAt,
-      ...defended.score ? { defended: defended.score } : {}
+      ...defended.score ? { defended: defended.score } : {},
+      ...airFeedback ? { airFeedback } : {}
     }
   };
 }
@@ -1251,7 +1290,7 @@ function readDefended(input, criteria) {
   if (!Array.isArray(input.scores)) return { ok: false, error: "The defended score is missing its criterion scores." };
   const scores = input.scores.flatMap((item) => {
     if (!isRecord3(item) || Object.keys(item).some((key) => key !== "criterionId" && key !== "score")) return [];
-    const criterionId = clip(item.criterionId, 80);
+    const criterionId = clip2(item.criterionId, 80);
     const score = Number(item.score);
     return Number.isInteger(score) && criterionId ? [{ criterionId, score }] : [];
   });
@@ -1259,14 +1298,14 @@ function readDefended(input, criteria) {
   if (scores.length !== wanted.size || scores.some((item) => !wanted.has(item.criterionId))) {
     return { ok: false, error: "The defended score needs every criterion in this profile." };
   }
-  const summary = stripChatShareLinks(clip(input.summary, 4e3));
+  const summary = stripChatShareLinks(clip2(input.summary, 4e3));
   if (summary.length < 40) return { ok: false, error: "The defended summary is too short." };
   if (/https?:\/\/(?:share\.google|chatgpt\.com\/share|claude\.ai\/share|grok\.com\/share)/i.test(summary)) {
     return { ok: false, error: "A private chat link was still in the defended summary." };
   }
   const overallScore = Number(input.overallScore);
   if (!Number.isInteger(overallScore)) return { ok: false, error: "The defended score must be an integer." };
-  const recommendation = clip(input.recommendation, 80);
+  const recommendation = clip2(input.recommendation, 80);
   const described = describeScoring({ scores, statedOverall: overallScore, recommendation, criteria });
   if (described.scoringCheck.mismatch) return { ok: false, error: "The defended score clashes with its own weighted total, so it was not sent." };
   return { ok: true, score: { label: "after author defence", overallScore, recommendation, summary, scores } };
@@ -1332,7 +1371,8 @@ function submissionToStored(payload) {
       majorIssues: [],
       minorIssues: [],
       questionsForAuthors: [],
-      suggestedNextSteps: []
+      suggestedNextSteps: [],
+      ...payload.airFeedback ? { airFeedback: payload.airFeedback } : {}
     },
     outputHash: "",
     createdAt: payload.createdAt,

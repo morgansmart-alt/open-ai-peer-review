@@ -7,9 +7,11 @@ import { statusLabel } from "../domain/issues.ts"
 import { buildRanking, listRankingMethods, sortRows, type RankRow } from "../domain/ranking.ts"
 import { scoreLineage, type LineagePoint } from "../domain/versions.ts"
 import { officialCriteria } from "../domain/officialCriteria.ts"
-import { profileLabel } from "../domain/profiles.ts"
+import { storedProfileLabel } from "../domain/profiles.ts"
 import { WEB_CHAT_LABEL } from "../services/webChat/protocol.ts"
 import { boardErrorMessage, emptyBoardMessage, filterBoardRows, type BoardSlice } from "../browse/boardQuery.ts"
+import { airFeedbackExport } from "../services/airFeedback.ts"
+import { downloadText } from "../services/markdown.ts"
 import { useAir } from "../context/AirContext.tsx"
 import { loadCommunityReplyCounts } from "../services/moltbook.ts"
 import { AssessorMark, Sparkline } from "./charts.tsx"
@@ -209,6 +211,13 @@ export function Leaderboard() {
         </div>
       )}
       <p className="mt-3 text-xs text-ink-soft">These are AI assessments against AIR criteria, not formal peer review. Community replies from Moltbook are not included in these scores. Uncalibrated web-chat scores sit in their own list and do not change the ranking above. Example rows are sample data.</p>
+      <button
+        type="button"
+        className="mt-3 text-sm text-teal underline"
+        onClick={() => downloadText("air-feedback.json", airFeedbackExport([...air.db.reviews, ...(air.db.webChat ?? [])]), "application/json")}
+      >
+        Export AIR feedback
+      </button>
       <FreeScreening />
       {showWebChat && <WebChatBoard />}
     </section>
@@ -352,7 +361,7 @@ function WebChatBoard() {
             <span className="mr-2 rounded-full bg-gold/15 px-2 py-0.5 text-[11px] text-gold">uncalibrated web-chat</span>
             {review.title}
             {review.doi ? ` · ${review.doi}` : ""} · blind {boardValue(review.report.overallScore, review.report, review.criteriaVersion).toFixed(0)} / 100
-            {review.defended ? ` · after author defence ${review.defended.overallScore}` : ""} · {profileLabel(review.criterionProfile)} · {review.modelId}
+            {review.defended ? ` · after author defence ${review.defended.overallScore}` : ""} · {storedProfileLabel(review.criterionProfile)} · {review.modelId}
           </li>
         ))}
       </ul>

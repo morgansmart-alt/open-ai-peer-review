@@ -17,6 +17,7 @@ import { sha256Hex, uid } from "../services/hash.ts"
 import { resolvedModel } from "../services/providers.ts"
 import { runReview } from "../services/review.ts"
 import { publicationPlainText } from "../domain/versions.ts"
+import { estimateReviewCalls, reviewCallEstimateMessage } from "../services/reviewCalls.ts"
 import type { ZenodoRecord } from "../services/zenodo.ts"
 
 export function ReviewWorkspace({ record, documents }: { record: ZenodoRecord; documents: { filename: string; text: string }[] }) {
@@ -51,7 +52,7 @@ export function ReviewWorkspace({ record, documents }: { record: ZenodoRecord; d
         </select>
       </label>
       <p className="mt-1 max-w-3xl text-xs text-ink-soft">
-        {CRITERION_PROFILES.find((profile) => profile.id === profileId)?.summary} Suggested from this record. A reviewer can change it. Estimated project value is only for a device or funding proposal.
+        {CRITERION_PROFILES.find((profile) => profile.id === profileId)?.summary} Suggested from the title, description, keywords, and resource type. A reviewer can change it. Estimated project value is only for a device or funding proposal.
       </p>
       <div className="mt-4 grid gap-4 xl:grid-cols-2">
         <HumanReviewForm record={record} publicationText={text} criteria={criteria} profileId={air.customCriteria ? undefined : profileId} />
@@ -355,6 +356,21 @@ function AiReviewPanel({
   const [results, setResults] = useState<{ assessorId: string; report?: ReviewReport; stored?: StoredReview; error?: string }[]>([])
   const acknowledged = publishNotices.every((notice) => acks[notice.id])
   const ready = useMemo(() => results.flatMap((result) => (result.stored ? [result.stored] : [])), [results])
+  const [quotaAck, setQuotaAck] = useState(false)
+  const callEstimate = useMemo(() => {
+    if (air.settings.demoMode) return null
+    const source = documents.length ? documents : record.description.trim() ? [{ filename: "description", text: record.description }] : []
+    if (source.length === 0) return null
+    let worst: { level: "info" | "warn"; text: string } | null = null
+    for (const assessorId of chosen) {
+      const profile = air.profiles.find((item) => item.id === assessorId)
+      if (!profile) continue
+      const message = reviewCallEstimateMessage(estimateReviewCalls(source, profile.provider).calls)
+      if (message.level === "none") continue
+      if (!worst || message.level === "warn") worst = { level: message.level, text: message.text }
+    }
+    return worst
+  }, [air.profiles, air.settings.demoMode, chosen, documents, record.description])
 
   async function run() {
     if (documents.length === 0 && !record.description.trim()) {
@@ -370,6 +386,13 @@ function AiReviewPanel({
       setMessage(collected.error)
       return
     }
+    if (!air.settings.demoMode && callEstimate?.level === "warn" && !quotaAck) {
+      setQuotaAck(true)
+      setMessage(`${callEstimate.text} Press the reading button again to run it anyway.`)
+      return
+    }
+    const remembered = chosen[0]
+    if (!air.settings.demoMode && remembered) air.setLastRoute({ kind: "assessor", id: remembered })
     const missing = air.profiles.filter((profile) => chosen.includes(profile.id) && !air.settings.demoMode && !air.providerSettings.keys[keySlot(profile)] && !air.providerSettings.keys[profile.provider])
     if (missing.length) {
       setMessage(`Add a key for ${missing.map((profile) => profile.name).join(", ")}, or turn on demo mode.`)
@@ -472,6 +495,12 @@ function AiReviewPanel({
         ))}
       </ul>
       <PrivateLinksField rows={links} onChange={setLinks} />
+      {callEstimate && (
+        <p className={`mt-3 text-xs ${callEstimate.level === "warn" ? "text-gold" : "text-ink-soft"}`}>
+          {callEstimate.text}
+          {quotaAck && callEstimate.level === "warn" ? " Press the reading button again to run it anyway." : ""}
+        </p>
+      )}
       <button type="button" className={`${btnPrimary} mt-3`} disabled={busy} onClick={() => void run()}>
         {busy ? "Reading…" : "Run a fresh reading of this version"}
       </button>

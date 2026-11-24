@@ -1,5 +1,5 @@
 import type { AuthorClaim, AuthorRole, Citation, IssueRound, IssueStatus, IssueThread, MajorIssue, NodeSubmission, SourceResult, StoredReview } from "./types.ts"
-import { canAppendRound, quoteInPublication, ROUND_LIMIT, roundWindowVersion, samePublication, settleCheckResult } from "./versions.ts"
+import { canAppendRound, quoteInPublication, ROUND_LIMIT, roundCountsTowardCap, roundWindowVersion, samePublication, settleCheckResult } from "./versions.ts"
 
 export { canAppendRound, ROUND_LIMIT }
 
@@ -16,8 +16,9 @@ type RoundWindowSlice = Pick<IssueRound, "kind" | "recordVersionChecked">
  * a source check or re-check names its window, and a later version starts again.
  */
 export function roundsInVersionWindow(issueVersion: string, rounds: readonly RoundWindowSlice[], checkedVersion: string): number {
-  if (!checkedVersion) return rounds.length
-  return rounds.filter((_, index) => roundWindowVersion(issueVersion, rounds, index) === checkedVersion).length
+  const inWindow = rounds.filter((item, index) => roundCountsTowardCap(item.kind) && roundWindowVersion(issueVersion, rounds, index) === checkedVersion)
+  if (!checkedVersion) return rounds.filter((item) => roundCountsTowardCap(item.kind)).length
+  return inWindow.length
 }
 
 /**

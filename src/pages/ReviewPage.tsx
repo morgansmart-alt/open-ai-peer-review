@@ -18,6 +18,10 @@ import { acceptWebChatResult, draftWebChatReview, scrubPrivateUrls } from "../se
 import { runWebChatExtension, webChatPromptText } from "../services/webChat/client.ts"
 import { planDelivery } from "../services/webChat/deliver.ts"
 import { buildWebChatPacket } from "../services/webChat/packet.ts"
+import { linkReadingPrompt, MANUAL_PASTE_SITE, manualPasteModel, paperTextRecordId } from "../services/webChat/paperText.ts"
+import { submissionFromReview } from "../services/webChat/submission.ts"
+import { postWebChatSubmission } from "../services/webChat/submit.ts"
+import { webChatModelId } from "../services/webChat/chatModel.ts"
 import { isUncalibratedWebChat, WEB_CHAT_LABEL } from "../services/webChat/protocol.ts"
 import { parseExport } from "../services/webChat/standalone.ts"
 import { sha256Hex, uid } from "../services/hash.ts"
@@ -38,7 +42,8 @@ import {
   type ZenodoRecord,
 } from "../services/zenodo.ts"
 import { isPublishedDoi, parseAnyRef, resolvePublishedDoi } from "../services/works.ts"
-import { coverageAllowsPublish } from "../services/textTools.ts"
+import { coverageAllowsPublish, OCR_OR_TEXT_SUGGESTION, coveragePhrase } from "../services/textTools.ts"
+import { estimateReviewCalls, reviewCallEstimateMessage } from "../services/reviewCalls.ts"
 
 interface PanelResult {
   assessorId: string
@@ -68,12 +73,31 @@ export function ReviewPage() {
   const [webWarning, setWebWarning] = useState<string | null>(null)
   const [acceptedWarning, setAcceptedWarning] = useState("")
   const [copyText, setCopyText] = useState("")
+  const [pasteReply, setPasteReply] = useState("")
+  const [pasteModel, setPasteModel] = useState("")
   const [criterionProfile, setCriterionProfile] = useState<CriterionProfileId>("device")
   const [includeCodeData, setIncludeCodeData] = useState(true)
   const [guideOpen, setGuideOpen] = useState(params.get("guide") === "1")
+  const [quotaAck, setQuotaAck] = useState<string | null>(null)
   const guideRef = useRef<HTMLDivElement>(null)
   const acknowledged = publishNotices.every((notice) => acks[notice.id])
   const criteria = readingCriteria(air.criteria, criterionProfile, air.customCriteria)
+  const callEstimate = useMemo(() => {
+    const documents = docs.filter((doc) => selected.includes(doc.filename) && doc.text.trim())
+    if (documents.length === 0 || air.settings.demoMode) return null
+    let worst: { level: "info" | "warn"; text: string; calls: number } | null = null
+    for (const assessorId of assessors) {
+      const profile = air.profiles.find((item) => item.id === assessorId)
+      if (!profile) continue
+      const estimate = estimateReviewCalls(documents, profile.provider)
+      const message = reviewCallEstimateMessage(estimate.calls)
+      if (message.level === "none") continue
+      if (!worst || message.level === "warn" || (worst.level !== "warn" && estimate.calls > worst.calls)) {
+        worst = { level: message.level, text: message.text, calls: estimate.calls }
+      }
+    }
+    return worst
+  }, [air.profiles, air.settings.demoMode, assessors, docs, selected])
 
   useEffect(() => {
     const initial = params.get("doi")
@@ -204,6 +228,8 @@ export function ReviewPage() {
     }
     setBusy(true)
     setError(null)
+    if (kind === "browser") air.setLastRoute({ kind: "webgpu", id: "webgpu" })
+    else if (profile) air.setLastRoute({ kind: "assessor", id: profile.id })
     saveSubmissionLinks(record.doi, record.recordVersion, collected.links)
     try {
     const extracted = await ensureDocs()
@@ -269,6 +295,11 @@ export function ReviewPage() {
 
   async function run(demo: boolean) {
     if (!record) return
+    if (!demo && callEstimate?.level === "warn" && quotaAck !== callEstimate.text) {
+      setQuotaAck(callEstimate.text)
+      setError(`${callEstimate.text} Press the in-depth review button again to run it anyway.`)
+      return
+    }
     if (!demo) {
       const missing = air.profiles.filter((profile) => assessors.includes(profile.id) && !air.providerSettings.keys[keySlot(profile)] && !air.providerSettings.keys[profile.provider])
       if (missing.length) {
@@ -281,6 +312,8 @@ export function ReviewPage() {
       setError("Choose at least one assessor.")
       return
     }
+    const remembered = assessors[0]
+    if (!demo && remembered) air.setLastRoute({ kind: "assessor", id: remembered })
     const collected = collectConversationLinks(linkDrafts)
     if (!collected.ok) {
       setError(collected.error)
@@ -366,6 +399,7 @@ export function ReviewPage() {
     setBusy(true)
     setError(null)
     setPublished(false)
+    air.setLastRoute({ kind: "web-chat", id: providerId })
     try {
       const extracted = await ensureDocs()
       const documents = extracted.filter((doc) => selected.includes(doc.filename) && doc.text.trim())
@@ -378,6 +412,7 @@ export function ReviewPage() {
         record,
         documents,
         conversations: collected.links,
+        useTextPage: true,
       })
       const provider = webChatProvider(providerId)
       if (!provider) return
@@ -397,7 +432,7 @@ export function ReviewPage() {
         return
       }
       const createdAt = new Date().toISOString()
-      const modelId = `${provider.modelLabel} (${WEB_CHAT_LABEL})`
+      const modelId = webChatModelId(provider.modelLabel, outcome.chatModel)
       const report = scrubPrivateUrls(accepted.report, collected.links.map((link) => link.url))
       const stored = draftWebChatReview({
         id: uid("review"),
@@ -424,6 +459,7 @@ export function ReviewPage() {
       stored.modelId = modelId
       stored.tier = "uncalibrated web-chat"
       stored.source = "web-chat extension"
+      if (outcome.notice) stored.sourceNote = outcome.notice
       setResults((current) => [...current.filter((item) => !isUncalibratedWebChat(item.stored)), { assessorId: stored.assessorId, report: stored.report, stored }])
       setStatus(`${WEB_CHAT_LABEL}. The score card is below. Publishing it keeps that label and leaves the calibrated ranking unchanged.`)
     } catch (caught) {
@@ -461,6 +497,106 @@ export function ReviewPage() {
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The packet could not be copied.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function copyPrompt() {
+    if (!record) return
+    setBusy(true)
+    setError(null)
+    try {
+      const usePage = Boolean(paperTextRecordId(record))
+      const extracted = usePage ? [] : await ensureDocs()
+      const documents = extracted.filter((doc) => selected.includes(doc.filename) && doc.text.trim())
+      const packet = buildWebChatPacket({
+        requestId: uid("copy"),
+        providerId: "grok",
+        criteria: air.criteria,
+        criterionProfile,
+        customCriteria: air.customCriteria,
+        record,
+        documents,
+        useTextPage: usePage,
+      })
+      const text = packet.textUrl ? linkReadingPrompt(packet.textUrl, packet.system, packet.instructions) : webChatPromptText(packet)
+      try {
+        await navigator.clipboard.writeText(text)
+        setCopyText("")
+        setStatus("Prompt copied. Paste it into a chat you are signed into. The score stays uncalibrated.")
+      } catch {
+        setCopyText(text)
+        setStatus("The clipboard refused the prompt. It is in the box below, on this device.")
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The prompt could not be copied.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function scorePastedReply() {
+    if (!record) return
+    const criteria = readingCriteria(air.criteria, criterionProfile, air.customCriteria)
+    const accepted = acceptWebChatResult(pasteReply, criteria)
+    if (!accepted.ok) {
+      setError(`The pasted reply was not a usable AIR reading. ${accepted.errors.slice(0, 3).join(" ")}`)
+      return
+    }
+    const model = manualPasteModel(pasteModel)
+    const createdAt = new Date().toISOString()
+    const packet = buildWebChatPacket({
+      requestId: uid("paste"),
+      providerId: "grok",
+      criteria: air.criteria,
+      criterionProfile,
+      customCriteria: air.customCriteria,
+      record,
+      documents: [],
+    })
+    const stored = draftWebChatReview({
+      id: uid("review"),
+      packet,
+      report: accepted.report,
+      record: {
+        doi: record.doi,
+        id: record.id,
+        conceptId: record.conceptId,
+        recordVersion: record.recordVersion,
+        title: record.title,
+        creators: record.creators.map((creator) => creator.name),
+        keywords: record.keywords,
+        publicationDate: record.publicationDate,
+        license: record.license,
+      },
+      criteria,
+      customCriteria: air.customCriteria,
+      outputHash: await sha256Hex(`${MANUAL_PASTE_SITE}\n${model}\n${JSON.stringify(accepted.report)}`),
+      createdAt,
+      privateUrls: [],
+      privateContextCount: 0,
+    })
+    stored.modelId = model
+    stored.tier = "uncalibrated web-chat"
+    stored.source = "web-chat extension"
+    setResults((current) => [...current.filter((item) => !isUncalibratedWebChat(item.stored)), { assessorId: stored.assessorId, report: stored.report, stored }])
+    const built = submissionFromReview(stored, MANUAL_PASTE_SITE)
+    if (!built.ok) {
+      setError(built.error)
+      setStatus("The score card is below. It was not sent.")
+      return
+    }
+    setBusy(true)
+    try {
+      const response = await postWebChatSubmission(built.submission)
+      if (!response.ok) {
+        setStatus(`The score card is below. The leaderboard did not accept it (${response.error || response.status}). It stays on this page as ${WEB_CHAT_LABEL}.`)
+        return
+      }
+      setStatus(response.duplicate ? `That paper, site, and model were already on the board. The score card is below.` : `Sent as ${WEB_CHAT_LABEL} from manual paste. The score card is below.`)
+    } catch {
+      setStatus(`The score card is below. The browser could not reach the leaderboard. It stays on this page as ${WEB_CHAT_LABEL}.`)
     } finally {
       setBusy(false)
     }
@@ -715,7 +851,7 @@ export function ReviewPage() {
                 </select>
               </label>
               <p className="mt-1 text-xs text-ink-soft">
-                {CRITERION_PROFILES.find((profile) => profile.id === criterionProfile)?.summary} Suggested from the record’s type and keywords. You can change it before the reading. Estimated project value stays hidden unless this is a device or funding proposal.
+                {CRITERION_PROFILES.find((profile) => profile.id === criterionProfile)?.summary} Suggested from the title, description, keywords, and resource type. You can change it before the reading. Estimated project value stays hidden unless this is a device or funding proposal.
               </p>
               <ul className="mt-3 space-y-2">
                 {air.profiles.map((profile) => {
@@ -742,6 +878,12 @@ export function ReviewPage() {
                   )
                 })}
               </ul>
+              {callEstimate && (
+                <p className={`mt-3 text-sm ${callEstimate.level === "warn" ? "text-gold" : "text-ink-soft"}`} role={callEstimate.level === "warn" ? "alert" : "status"}>
+                  {callEstimate.text}
+                  {quotaAck === callEstimate.text && callEstimate.level === "warn" ? " Press the in-depth review button again to run it anyway." : ""}
+                </p>
+              )}
               <div className="mt-4 flex flex-wrap gap-2">
                 <button type="button" data-testid="indepth-review" className={btnPrimary} disabled={busy} onClick={() => void run(air.settings.demoMode)}>
                   {air.settings.demoMode ? "Run demo readings" : "In-depth review with your key"}
@@ -776,6 +918,41 @@ export function ReviewPage() {
                 onImport={(file) => void importWeb(file)}
               />
               {copyText && <textarea className={`${fieldClass} mt-3 min-h-40`} readOnly value={copyText} aria-label="Review packet to copy" />}
+              <div data-testid="manual-paste" className="mt-4 rounded-2xl border border-line p-3">
+                <h3 className="text-sm font-medium">Copy the prompt, or paste a reply</h3>
+                <p className="mt-1 text-xs text-ink-soft">
+                  Copy prompt gives you a short message with the public text page and the rubric. Paste the chat’s JSON reply to score it here. It is sent as site manual paste and labelled {WEB_CHAT_LABEL}.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button type="button" data-testid="copy-prompt" className={btnQuiet} disabled={busy || !record} onClick={() => void copyPrompt()}>
+                    Copy prompt
+                  </button>
+                </div>
+                <label className="mt-3 block text-xs text-ink-soft">
+                  Model
+                  <input
+                    className={`${fieldClass} mt-1`}
+                    data-testid="paste-model"
+                    value={pasteModel}
+                    placeholder="unknown"
+                    aria-label="Model name"
+                    onChange={(event) => setPasteModel(event.target.value)}
+                  />
+                </label>
+                <label className="mt-3 block text-xs text-ink-soft">
+                  Paste the chat’s reply
+                  <textarea
+                    className={`${fieldClass} mt-1 min-h-32`}
+                    data-testid="paste-reply"
+                    value={pasteReply}
+                    aria-label="Paste the chat's reply"
+                    onChange={(event) => setPasteReply(event.target.value)}
+                  />
+                </label>
+                <button type="button" data-testid="score-pasted-reply" className={`${btnPrimary} mt-3`} disabled={busy || !record || !pasteReply.trim()} onClick={() => void scorePastedReply()}>
+                  Score the pasted reply
+                </button>
+              </div>
             </fieldset>
           </div>
         </section>
@@ -805,7 +982,10 @@ export function ReviewPage() {
             {!acknowledged && <p className="mt-2 text-sm text-ink-soft">Tick the four notices in step 1 before a reading can join the ranking.</p>}
             {record && !isPublishedDoi(record.doi) && <p className="mt-2 text-sm text-ink-soft">Publishing to the leaderboard needs a published DOI. This reading can still run in this browser.</p>}
             {results.some((result) => result.report && !coverageAllowsPublish(result.report.reading)) && (
-              <p className="mt-2 text-sm text-ink-soft">The ranked board needs full coverage, or at least 90% of the pages read.</p>
+              <p className="mt-2 text-sm text-ink-soft">
+                The ranked board needs full coverage, or at least 90% of the pages read.
+                {results.some((result) => result.report?.reading?.coverageLabel) ? ` ${OCR_OR_TEXT_SUGGESTION} Coverage: ${results.map((result) => coveragePhrase(result.report?.reading)).filter(Boolean).join("; ")}.` : ""}
+              </p>
             )}
             <button
               type="button"

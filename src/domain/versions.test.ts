@@ -301,4 +301,24 @@ describe("quotes and comments", () => {
     expect(issuePenalty([commented])).toBe(issuePenalty([open]))
     expect(canAppendRound(open, { kind: "comment" })).toBe(true)
   })
+
+  it("does not let two comments count toward the cap or flip a not-addressed check to unresolved", () => {
+    const withComments = [
+      round({ id: "c", kind: "claim" }),
+      round({ id: "n1", kind: "comment", body: "A reader asked where the table is." }),
+      round({ id: "n2", kind: "comment", body: "Another reader asked the same." }),
+    ]
+    expect(statusFromCheck("NOT_ADDRESSED", withComments, "v1", "v1")).toBe("open")
+    expect(statusFromCheck("NOT_ADDRESSED", withComments, "v1", "v1")).not.toBe("unresolved")
+    const full = thread([
+      round({ id: "c", kind: "claim" }),
+      ...Array.from({ length: 5 }, (_, index) => round({ id: `r${index}`, kind: "rebuttal" })),
+      round({ id: "n1", kind: "comment" }),
+      round({ id: "n2", kind: "comment" }),
+    ])
+    expect(canAppendRound(full, { kind: "rebuttal" })).toBe(false)
+    expect(canAppendRound(full, { kind: "source-check", recordVersionChecked: "v1" })).toBe(false)
+    expect(canAppendRound(full, { kind: "comment" })).toBe(true)
+    expect(canAppendRound(thread(withComments), { kind: "rebuttal" })).toBe(true)
+  })
 })

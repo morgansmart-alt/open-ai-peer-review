@@ -1,4 +1,5 @@
 import { normaliseQuoteText } from "../domain/quotes.ts"
+import { FIGURES_NOT_READ } from "./figures.ts"
 import { stripHtml } from "./zenodo.ts"
 
 export function decodeText(data: ArrayBuffer): string {
@@ -88,13 +89,39 @@ export function anchorExcerpts(text: string): string {
   return [`Beginning: ${clean.slice(0, take)}`, `Middle: ${clean.slice(mid - Math.floor(take / 2), mid + Math.ceil(take / 2))}`, `End: ${clean.slice(-take)}`].join("\n\n")
 }
 
-export function coverageAllowsPublish(reading: { coverage?: string; pagesRead?: number; pagesTotal?: number } | undefined): boolean {
+export function coverageAllowsPublish(reading: { coverage?: string; pagesRead?: number; pagesTotal?: number; extractableWords?: number; coverageLabel?: string } | undefined): boolean {
   if (!reading) return false
+  if (reading.extractableWords === 0) return false
+  if (reading.coverageLabel?.startsWith("not read")) return false
   if (reading.coverage === "full") return true
   const total = Number(reading.pagesTotal ?? 0)
   const read = Number(reading.pagesRead ?? 0)
   if (total <= 0) return false
   return read / total >= 0.9
+}
+
+/** Shown instead of "full" when a PDF was opened and had no text layer. */
+export const UNREAD_SCAN_COVERAGE = "not read (no extractable text, likely scanned/images)"
+
+export const OCR_OR_TEXT_SUGGESTION = "OCR the scan, or attach a text version, before a full review."
+
+const FIGURE_BOILERPLATE = [
+  FIGURES_NOT_READ,
+  "No figure caption was found in the text layer.",
+  "No alt text was exposed by the PDF.",
+  "Figure captions:",
+  "Alt text:",
+]
+
+/** Words a reviewer could quote. Figure notices are not the paper. */
+export function extractableWordCount(text: string): number {
+  const stripped = FIGURE_BOILERPLATE.reduce((value, phrase) => value.replaceAll(phrase, " "), text)
+  return stripped.match(/[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*/g)?.length ?? 0
+}
+
+export function coveragePhrase(reading: { coverage?: string; coverageLabel?: string } | undefined): string {
+  if (!reading) return ""
+  return reading.coverageLabel || reading.coverage || ""
 }
 
 export function normaliseForQuote(value: string): string {
@@ -107,18 +134,49 @@ export function quoteMatchesCorpus(quote: string, corpus: string): boolean {
   return normaliseForQuote(corpus).includes(needle)
 }
 
-export function readingCoverage(documents: readonly Record<string, unknown>[], chunksSummarised: number): ReadingCoverage {
+export function readingCoverage(documents: readonly Record<string, unknown>[], chunksSummarised: number): ReadingCoverage & { extractableWords?: number; coverageLabel?: string } {
   let pagesRead = 0
   let pagesTotal = 0
   let partial = false
+  let knowText = false
+  let words = 0
+  let emptyPdf = false
   for (const document of documents) {
     const total = Number(document.pagesTotal ?? document.pages ?? 0)
     const read = Number(document.pagesRead ?? (total > 0 ? total : 0))
+    const hasText = "text" in document && typeof document.text === "string"
+    const count = hasText ? extractableWordCount(document.text as string) : null
+    const name = typeof document.filename === "string" ? document.filename : ""
+    const isPdf = document.kind === "pdf" || /\.pdf$/i.test(name)
+    const scanned = Boolean(hasText && isPdf && count === 0 && (total > 0 || (document.text as string).trim() === ""))
+    if (hasText && count !== null) {
+      knowText = true
+      words += count
+    }
+    if (scanned) {
+      emptyPdf = true
+      pagesTotal += total
+      partial = true
+      continue
+    }
     pagesRead += read
     pagesTotal += total
     if (total > 0 && read < total) partial = true
   }
-  return { pagesRead, pagesTotal, chunksSummarised, coverage: partial ? "partial" : "full" }
+  const unread = knowText && words === 0 && (emptyPdf || documents.length > 0)
+  if (unread) {
+    return {
+      pagesRead: 0,
+      pagesTotal,
+      chunksSummarised,
+      coverage: "partial",
+      extractableWords: 0,
+      coverageLabel: UNREAD_SCAN_COVERAGE,
+    }
+  }
+  const coverage = partial || emptyPdf ? "partial" : "full"
+  if (!knowText) return { pagesRead, pagesTotal, chunksSummarised, coverage }
+  return { pagesRead, pagesTotal, chunksSummarised, coverage, extractableWords: words }
 }
 
 export function bundleItems<T>(items: T[], size: number): T[][] {

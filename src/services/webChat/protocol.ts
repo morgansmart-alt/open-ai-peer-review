@@ -46,6 +46,8 @@ export interface WebChatPacket {
   files: WebChatFile[]
   /** Paper-type profile. Absent means the device or engineering set. */
   criterionProfile?: string
+  /** Public text page. When set, the first message is a short link instead of the whole paper. */
+  textUrl?: string
 }
 
 /** Eight million characters is a guard against a runaway file, not a model context window. */
@@ -89,6 +91,7 @@ export function validatePacket(input: unknown): { ok: true; packet: WebChatPacke
       ...(typeof packet.criterionProfile === "string" && packet.criterionProfile.trim()
         ? { criterionProfile: packet.criterionProfile.trim() }
         : {}),
+      ...(typeof packet.textUrl === "string" && packet.textUrl.trim() ? { textUrl: packet.textUrl.trim() } : {}),
     },
   }
 }

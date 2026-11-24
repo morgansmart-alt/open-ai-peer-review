@@ -19,7 +19,7 @@ import { buildWebChatPacket, WEB_CHAT_FILE_CHARS } from "./webChat/packet.ts"
 import { originAllowed, validatePacket, WEB_CHAT_LABEL } from "./webChat/protocol.ts"
 import { renderReviewApp, type ReviewActions, type ReviewModel } from "./webChat/reviewView.ts"
 import { runTurn } from "./webChat/runTurn.ts"
-import { exportBundle, packetForLocalPaper, parseExport, resultCard, storedLocalReview, textFromPdfDocument } from "./webChat/standalone.ts"
+import { exportBundle, packetForLocalPaper, parseExport, resultCard, sourceRecordFromText, storedLocalReview, textFromPdfDocument } from "./webChat/standalone.ts"
 
 const record = {
   id: "1",
@@ -122,6 +122,10 @@ describe("web chat origins and packet", () => {
     expect(packet.instructions).toContain("AIR PAPER PART")
     expect(packet.system).toContain("out of 100")
     expect(packet.instructions).toContain("https://share.google/aimode/EXAMPLE")
+    expect(packet.instructions).toContain("This version: https://zenodo.org/records/1")
+    expect(packet.instructions).toContain("DOI: https://doi.org/10.5281/zenodo.1")
+    const source = packet.instructions.slice(0, packet.instructions.indexOf("Private AI context links"))
+    expect(source).not.toContain("share.google")
     const validated = validatePacket(packet)
     expect(validated.ok).toBe(true)
     expect(validatePacket({ ...packet, providerId: "nope" }).ok).toBe(false)
@@ -443,6 +447,19 @@ describe("extension panel", () => {
       text: `Measured yield in one season. ${"alpha ".repeat(30)}`,
     })
     expect(packet.files[0]?.text).toContain("Measured yield")
+    const linked = packetForLocalPaper({
+      requestId: "web-doi",
+      providerId: "grok",
+      criteria: officialCriteria,
+      filename: "codata.pdf",
+      text: "See https://zenodo.org/records/22826 and doi 10.5281/zenodo.22826. conceptrecid: 18916930. A private note https://share.google/aimode/SECRET is not the source.",
+    })
+    const source = linked.instructions.slice(0, linked.instructions.indexOf("Private AI context links"))
+    expect(source).toContain("https://zenodo.org/records/22826")
+    expect(source).toContain("https://doi.org/10.5281/zenodo.22826")
+    expect(source).toContain("https://zenodo.org/records/18916930")
+    expect(source).not.toContain("share.google")
+    expect(sourceRecordFromText("note.txt", "no identifiers here")).toBeNull()
     expect(packet.instructions).toContain("ontologyClass")
     const accepted = acceptWebChatResult(
       `\`\`\`json\n${JSON.stringify({ ...body(50, 95, "encourage"), summary: `${body(50, 95, "encourage").summary} https://share.google/aimode/EXAMPLE` })}\n\`\`\``,
@@ -468,6 +485,21 @@ describe("extension panel", () => {
     expect(card.mismatch).toContain("Scoring mismatch")
     renderReviewApp(app, model({ fileName: "note.txt", result: card, history: [{ id: stored.id, title: stored.title, overall: stored.report.overallScore }] }), actions())
     expect(app.textContent).toContain("free web-chat, uncalibrated")
+    renderReviewApp(
+      app,
+      model({
+        fileName: "note.txt",
+        result: {
+          ...card,
+          scores: [{ criterionId: "clarity", score: 80 }],
+          feedback: [{ label: "Missing context or files", text: "The supplement was not attached." }],
+        },
+      }),
+      actions(),
+    )
+    expect(app.querySelector("#criterion-scores")?.textContent).toContain("clarity: 80")
+    expect(app.querySelector("#air-feedback")?.textContent).toContain("Feedback on AIR")
+    expect(app.querySelector("#air-feedback")?.textContent).toContain("supplement was not attached")
     expect(app.textContent).toContain("Scoring mismatch, needs re-check")
     const exported = exportBundle([stored])
     expect(exported).not.toContain("share.google")

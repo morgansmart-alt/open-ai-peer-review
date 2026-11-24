@@ -1,6 +1,7 @@
 import type { AirDatabase, AssessorProfile, CriteriaSet, ProviderSettings } from "../domain/types.ts"
 import { emptyDatabase } from "../domain/types.ts"
 import { parseCriteria } from "../domain/criteria.ts"
+import type { LastRoute } from "./recheckRoute.ts"
 
 const DB_KEY = "air.db.v1"
 const OVERLAY_KEY = "air.overlay.v1"
@@ -19,6 +20,8 @@ export interface PersistedSettings {
   authorName: string
   customProfiles: AssessorProfile[]
   customCriteria: CriteriaSet | null
+  /** Assessor, WebGPU, or web-chat route last used for a reading or re-check. */
+  lastRoute: LastRoute | null
 }
 
 function readJson<T>(key: string): T | null {
@@ -70,7 +73,16 @@ export function defaultSettings(): PersistedSettings {
     authorName: "",
     customProfiles: [],
     customCriteria: null,
+    lastRoute: null,
   }
+}
+
+function sanitizeLastRoute(value: unknown): LastRoute | null {
+  if (!value || typeof value !== "object") return null
+  const route = value as { kind?: unknown; id?: unknown }
+  if (route.kind !== "assessor" && route.kind !== "webgpu" && route.kind !== "web-chat") return null
+  if (typeof route.id !== "string" || !route.id.trim()) return null
+  return { kind: route.kind, id: route.id.trim() }
 }
 
 export function loadSettings(): PersistedSettings {
@@ -91,6 +103,7 @@ export function loadSettings(): PersistedSettings {
     customCriteria: custom && custom.ok ? custom.criteria : null,
     nodeId: stored.nodeId || crypto.randomUUID(),
     nodeName: stored.nodeName || "guest-node",
+    lastRoute: sanitizeLastRoute(stored.lastRoute),
   }
 }
 

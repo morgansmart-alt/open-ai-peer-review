@@ -142,22 +142,36 @@
     modelLabel: "Grok on x.com",
     startUrl: "https://x.com/i/grok",
     origins: ["https://x.com/i/grok*"],
-    pasteLimit: 32e3,
+    pasteLimit: 1e5,
     fileCharLimit: 4e5,
     maxFiles: 4,
     comfortableTurns: 6,
     fileUpload: true,
-    limits: "Grok on X is at x.com/i/grok. AIR tries a file up to about 400,000 characters, then pastes 32,000 characters at a time. X rate-limits long threads. That limit was not measured here.",
+    limits: "Grok on X is at x.com/i/grok. AIR sends one message when the paper and the instructions fit in about 100,000 characters, attaches a file when the site accepts one, and otherwise pastes in parts. X rate-limits long threads. That limit was not measured here.",
     selectors: {
       composer: [
+        'textarea[aria-label="Ask anything"]',
+        'textarea[placeholder="Ask anything"]',
+        '[contenteditable="true"][aria-label="Ask anything"]',
+        '[contenteditable="true"][placeholder="Ask anything"]',
+        '[role="textbox"][aria-label*="Ask"]',
+        '[role="textbox"][placeholder*="Ask"]',
         'textarea[aria-label="Ask Grok"]',
         'textarea[aria-label*="Ask Grok"]',
+        'textarea[aria-label*="Ask"]',
+        'textarea[placeholder*="Ask"]',
         'div[data-testid="grokComposer"] textarea',
         'div[contenteditable="true"][role="textbox"]'
       ],
-      submit: ['button[aria-label="Send"]', 'button[data-testid="grok-send"]', 'button[aria-label*="Send"]'],
-      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]'],
-      assistant: ['[data-testid="assistant-message"]', '[data-testid="grok-message"]'],
+      submit: [
+        'button[aria-label="Send"]',
+        'button[aria-label*="Send"]',
+        'button[aria-label*="Submit"]',
+        'button[aria-label*="Grok"]',
+        'button[data-testid="grok-send"]'
+      ],
+      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]', 'button[aria-label*="Stop generating"]'],
+      assistant: ['[data-testid="assistant-message"]', '[data-testid="grok-message"]', '[class*="assistant-message"]', '[data-message-author="assistant"]'],
       fileInput: ['input[type="file"]'],
       login: ['a[href*="/login"]', 'a[href*="/i/flow/login"]', 'a[data-testid="login"]']
     }
@@ -180,14 +194,26 @@
     limits: "AIR attaches a paper up to about 1.2 million characters, or pastes 48,000 characters at a time. Grok's free web chat rate-limits long threads. The exact cap is set by xAI and was not measured here.",
     selectors: {
       composer: [
+        'textarea[aria-label="Message Grok"]',
+        'textarea[aria-label*="Message Grok"]',
+        '[contenteditable="true"][aria-label="Message Grok"]',
+        '[contenteditable="true"][aria-label*="Message Grok"]',
+        '[role="textbox"][aria-label="Message Grok"]',
+        '[role="textbox"][aria-label*="Message Grok"]',
         'textarea[aria-label="Ask Grok anything"]',
         'textarea[aria-label*="Ask Grok"]',
+        'textarea[placeholder*="What do you want to know"]',
+        'textarea[aria-label*="What do you want to know"]',
+        'textarea[placeholder*="Ask anything"]',
+        'textarea[aria-label*="Ask anything"]',
         'textarea[placeholder*="Ask"]',
+        '[contenteditable="true"][placeholder*="Ask"]',
+        '[contenteditable="true"][aria-label*="Ask"]',
         'div[contenteditable="true"][role="textbox"]'
       ],
-      submit: ['button[aria-label="Submit"]', 'button[aria-label*="Send"]', 'button[type="submit"]'],
-      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]'],
-      assistant: ['[data-testid="assistant-message"]', '[data-message-author="assistant"]'],
+      submit: ['button[aria-label="Submit"]', 'button[aria-label*="Send"]', 'button[aria-label*="Submit"]', 'button[type="submit"]'],
+      stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]', 'button[aria-label*="Stop generating"]'],
+      assistant: ['[data-testid="assistant-message"]', '[data-message-author="assistant"]', '[class*="assistant-message"]'],
       fileInput: ['input[type="file"]'],
       login: ['a[href*="accounts.x.com"]', 'a[href*="/login"]', 'button[data-testid="login"]']
     }
@@ -1137,7 +1163,7 @@ ${parsed.errors.join("\n")}`);
     return "not-ready";
   }
   function recommendationMatchesBand(recommendation, board) {
-    const expected = expectedVerdict(board);
+    const expected = expectedVerdict(Math.round(board));
     if (recommendation === expected) return true;
     return recommendation === "accept" && expected === "encourage";
   }
@@ -1165,24 +1191,910 @@ ${parsed.errors.join("\n")}`);
     };
   }
 
+  // src/services/airFeedback.ts
+  var ALIASES = {
+    criteria: "criteria",
+    criterion: "criteria",
+    profile: "profile",
+    missingContext: "missingContext",
+    missing_context: "missingContext",
+    missing: "missingContext",
+    files: "missingContext",
+    prompt: "prompt",
+    rubric: "rubric",
+    scoringProcess: "scoringProcess",
+    scoring_process: "scoringProcess",
+    scoring: "scoringProcess"
+  };
+  function clip(value) {
+    if (typeof value !== "string") return "";
+    return value.trim().replace(/https?:\/\/(?:www\.)?(?:share\.google\/aimode|chatgpt\.com\/share|chat\.openai\.com\/share|claude\.ai\/share|grok\.com\/share)\/\S+/gi, "[private link]").slice(0, 1e3);
+  }
+  function parseAirFeedback(input) {
+    if (input == null || input === "") return void 0;
+    if (typeof input === "string") {
+      const note = clip(input);
+      return note ? { scoringProcess: note } : void 0;
+    }
+    if (typeof input !== "object" || Array.isArray(input)) return void 0;
+    const feedback = {};
+    for (const [key, value] of Object.entries(input)) {
+      const field = ALIASES[key];
+      const text = clip(value);
+      if (!field || !text) continue;
+      feedback[field] = text;
+    }
+    return Object.keys(feedback).length > 0 ? feedback : void 0;
+  }
+
+  // node_modules/jsonrepair/lib/esm/utils/JSONRepairError.js
+  var JSONRepairError = class extends Error {
+    constructor(message, position) {
+      super(`${message} at position ${position}`);
+      this.position = position;
+    }
+  };
+
+  // node_modules/jsonrepair/lib/esm/utils/stringUtils.js
+  var codeSpace = 32;
+  var codeNewline = 10;
+  var codeTab = 9;
+  var codeReturn = 13;
+  var codeNonBreakingSpace = 160;
+  var codeMongolianVowelSeparator = 6158;
+  var codeEnQuad = 8192;
+  var codeZeroWidthSpace = 8203;
+  var codeNarrowNoBreakSpace = 8239;
+  var codeMediumMathematicalSpace = 8287;
+  var codeIdeographicSpace = 12288;
+  var codeZeroWidthNoBreakSpace = 65279;
+  function isHex(char) {
+    return /^[0-9A-Fa-f]$/.test(char);
+  }
+  function isDigit(char) {
+    return char >= "0" && char <= "9";
+  }
+  function isValidStringCharacter(char) {
+    return char >= " ";
+  }
+  function isDelimiter(char) {
+    return ",:[]/{}()\n+".includes(char);
+  }
+  function isFunctionNameCharStart(char) {
+    return char >= "a" && char <= "z" || char >= "A" && char <= "Z" || char === "_" || char === "$";
+  }
+  function isFunctionNameChar(char) {
+    return char >= "a" && char <= "z" || char >= "A" && char <= "Z" || char === "_" || char === "$" || char >= "0" && char <= "9";
+  }
+  var regexUrlStart = /^(http|https|ftp|mailto|file|data|irc):\/\/$/;
+  var regexUrlChar = /^[A-Za-z0-9-._~:/?#@!$&'()*+;=]$/;
+  function isUnquotedStringDelimiter(char) {
+    return ",[]/{}\n+".includes(char);
+  }
+  function isStartOfValue(char) {
+    return isQuote(char) || regexStartOfValue.test(char);
+  }
+  var regexStartOfValue = /^[[{\w-]$/;
+  function isControlCharacter(char) {
+    return char === "\n" || char === "\r" || char === "	" || char === "\b" || char === "\f";
+  }
+  function isWhitespace(text, index) {
+    const code = text.charCodeAt(index);
+    return code === codeSpace || code === codeNewline || code === codeTab || code === codeReturn;
+  }
+  function isWhitespaceExceptNewline(text, index) {
+    const code = text.charCodeAt(index);
+    return code === codeSpace || code === codeTab || code === codeReturn;
+  }
+  function isSpecialWhitespace(text, index) {
+    const code = text.charCodeAt(index);
+    return code === codeNonBreakingSpace || code === codeMongolianVowelSeparator || code >= codeEnQuad && code <= codeZeroWidthSpace || code === codeNarrowNoBreakSpace || code === codeMediumMathematicalSpace || code === codeIdeographicSpace || code === codeZeroWidthNoBreakSpace;
+  }
+  function isQuote(char) {
+    return isDoubleQuoteLike(char) || isSingleQuoteLike(char);
+  }
+  function isDoubleQuoteLike(char) {
+    return char === '"' || char === "\u201C" || char === "\u201D";
+  }
+  function isDoubleQuote(char) {
+    return char === '"';
+  }
+  function isSingleQuoteLike(char) {
+    return char === "'" || char === "\u2018" || char === "\u2019" || char === "`" || char === "\xB4";
+  }
+  function isSingleQuote(char) {
+    return char === "'";
+  }
+  function stripLastOccurrence(text, textToStrip) {
+    let stripRemainingText = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : false;
+    const index = text.lastIndexOf(textToStrip);
+    return index !== -1 ? text.substring(0, index) + (stripRemainingText ? "" : text.substring(index + 1)) : text;
+  }
+  function insertBeforeLastWhitespace(text, textToInsert) {
+    let index = text.length;
+    if (!isWhitespace(text, index - 1)) {
+      return text + textToInsert;
+    }
+    while (isWhitespace(text, index - 1)) {
+      index--;
+    }
+    return text.substring(0, index) + textToInsert + text.substring(index);
+  }
+  function removeAtIndex(text, start, count) {
+    return text.substring(0, start) + text.substring(start + count);
+  }
+  function endsWithCommaOrNewline(text) {
+    return /[,\n][ \t\r]*$/.test(text);
+  }
+  var namedHtmlEntities = {
+    "&quot;": '"',
+    "&amp;": "&",
+    "&lt;": "<",
+    "&gt;": ">",
+    "&apos;": "'"
+  };
+  var maxHtmlEntityLength = 12;
+  function matchHtmlEntity(fragment) {
+    if (fragment.charAt(0) !== "&") {
+      return null;
+    }
+    const semicolon = fragment.indexOf(";");
+    if (semicolon === -1) {
+      return null;
+    }
+    const entity = fragment.substring(0, semicolon + 1);
+    const named = namedHtmlEntities[entity];
+    if (named !== void 0) {
+      return {
+        char: named,
+        length: entity.length
+      };
+    }
+    if (fragment.charAt(1) === "#") {
+      const body = fragment.substring(2, semicolon);
+      const hex = body.charAt(0) === "x" || body.charAt(0) === "X";
+      const digits = hex ? body.substring(1) : body;
+      if (digits.length > 0) {
+        const code = Number.parseInt(digits, hex ? 16 : 10);
+        if (!Number.isNaN(code) && code >= 0 && code <= 1114111) {
+          return {
+            char: String.fromCodePoint(code),
+            length: entity.length
+          };
+        }
+      }
+    }
+    return null;
+  }
+  function isDoubleQuoteEntity(match) {
+    return match !== null && match.char === '"';
+  }
+  function isSingleQuoteEntity(match) {
+    return match !== null && match.char === "'";
+  }
+  function countOccurrences(text, char) {
+    let count = 0;
+    for (let i = 0; i < text.length; i++) {
+      if (text.charAt(i) === char) {
+        count++;
+      }
+    }
+    return count;
+  }
+  function isInsideUnclosedBracket(text, closeChar) {
+    switch (closeChar) {
+      case ")":
+        return countOccurrences(text, "(") > countOccurrences(text, ")");
+      case "]":
+        return countOccurrences(text, "[") > countOccurrences(text, "]");
+      case "}":
+        return countOccurrences(text, "{") > countOccurrences(text, "}");
+      default:
+        return false;
+    }
+  }
+
+  // node_modules/jsonrepair/lib/esm/regular/jsonrepair.js
+  var controlCharacters = {
+    "\b": "\\b",
+    "\f": "\\f",
+    "\n": "\\n",
+    "\r": "\\r",
+    "	": "\\t"
+  };
+  var escapeCharacters = {
+    '"': '"',
+    "\\": "\\",
+    "/": "/",
+    b: "\b",
+    f: "\f",
+    n: "\n",
+    r: "\r",
+    t: "	"
+    // note that \u is handled separately in parseString()
+  };
+  function jsonrepair(text) {
+    let i = 0;
+    let output = "";
+    parseMarkdownCodeBlock(["```", "[```", "{```"]);
+    const processed = parseValue();
+    if (!processed) {
+      throwUnexpectedEnd();
+    }
+    parseMarkdownCodeBlock(["```", "```]", "```}"]);
+    const processedComma = parseCharacter(",");
+    if (processedComma) {
+      parseWhitespaceAndSkipComments();
+    }
+    if (isStartOfValue(text[i]) && endsWithCommaOrNewline(output)) {
+      if (!processedComma) {
+        output = insertBeforeLastWhitespace(output, ",");
+      }
+      parseNewlineDelimitedJSON();
+    } else if (processedComma) {
+      output = stripLastOccurrence(output, ",");
+    }
+    while (text[i] === "}" || text[i] === "]") {
+      i++;
+      parseWhitespaceAndSkipComments();
+    }
+    if (i >= text.length) {
+      return output;
+    }
+    throwUnexpectedCharacter();
+    function parseValue() {
+      parseWhitespaceAndSkipComments();
+      const processed2 = parseObject() || parseArray() || parseString() || parseNumber() || parseKeywords() || parseUnquotedString(false) || parseRegex();
+      parseWhitespaceAndSkipComments();
+      return processed2;
+    }
+    function parseWhitespaceAndSkipComments() {
+      let skipNewline = arguments.length > 0 && arguments[0] !== void 0 ? arguments[0] : true;
+      const start = i;
+      let changed = parseWhitespace(skipNewline);
+      do {
+        changed = parseComment();
+        if (changed) {
+          changed = parseWhitespace(skipNewline);
+        }
+      } while (changed);
+      return i > start;
+    }
+    function parseWhitespace(skipNewline) {
+      const _isWhiteSpace = skipNewline ? isWhitespace : isWhitespaceExceptNewline;
+      let whitespace = "";
+      while (true) {
+        if (_isWhiteSpace(text, i)) {
+          whitespace += text[i];
+          i++;
+        } else if (isSpecialWhitespace(text, i)) {
+          whitespace += " ";
+          i++;
+        } else {
+          break;
+        }
+      }
+      if (whitespace.length > 0) {
+        output += whitespace;
+        return true;
+      }
+      return false;
+    }
+    function parseComment() {
+      if (text[i] === "/" && text[i + 1] === "*") {
+        while (i < text.length && !atEndOfBlockComment(text, i)) {
+          i++;
+        }
+        i += 2;
+        return true;
+      }
+      if (text[i] === "/" && text[i + 1] === "/") {
+        while (i < text.length && text[i] !== "\n") {
+          i++;
+        }
+        return true;
+      }
+      return false;
+    }
+    function parseMarkdownCodeBlock(blocks) {
+      if (skipMarkdownCodeBlock(blocks)) {
+        if (isFunctionNameCharStart(text[i])) {
+          while (i < text.length && isFunctionNameChar(text[i])) {
+            i++;
+          }
+        }
+        parseWhitespaceAndSkipComments();
+        return true;
+      }
+      return false;
+    }
+    function skipMarkdownCodeBlock(blocks) {
+      parseWhitespace(true);
+      for (const block of blocks) {
+        const end = i + block.length;
+        if (text.slice(i, end) === block) {
+          i = end;
+          return true;
+        }
+      }
+      return false;
+    }
+    function parseCharacter(char) {
+      if (text[i] === char) {
+        output += text[i];
+        i++;
+        return true;
+      }
+      return false;
+    }
+    function skipCharacter(char) {
+      if (text[i] === char) {
+        i++;
+        return true;
+      }
+      return false;
+    }
+    function skipEscapeCharacter() {
+      return skipCharacter("\\");
+    }
+    function skipEllipsis() {
+      parseWhitespaceAndSkipComments();
+      if (text[i] === "." && text[i + 1] === "." && text[i + 2] === ".") {
+        i += 3;
+        parseWhitespaceAndSkipComments();
+        skipCharacter(",");
+        return true;
+      }
+      return false;
+    }
+    function parseObject() {
+      if (text[i] === "{") {
+        output += "{";
+        i++;
+        parseWhitespaceAndSkipComments();
+        if (skipCharacter(",")) {
+          parseWhitespaceAndSkipComments();
+        }
+        let initial = true;
+        while (i < text.length && text[i] !== "}") {
+          let processedComma2;
+          if (!initial) {
+            processedComma2 = parseCharacter(",");
+            if (!processedComma2) {
+              output = insertBeforeLastWhitespace(output, ",");
+            }
+            parseWhitespaceAndSkipComments();
+          } else {
+            processedComma2 = true;
+          }
+          skipEllipsis();
+          const processedKey = parseString() || parseUnquotedString(true);
+          if (!processedKey) {
+            if (text[i] === "}" || text[i] === "{" || text[i] === "]" || text[i] === "[" || text[i] === void 0) {
+              if (!initial) {
+                output = stripLastOccurrence(output, ",");
+              }
+            } else {
+              throwObjectKeyExpected();
+            }
+            break;
+          }
+          parseWhitespaceAndSkipComments();
+          const processedColon = parseCharacter(":");
+          const truncatedText = i >= text.length;
+          if (!processedColon) {
+            if (isStartOfValue(text[i]) || truncatedText) {
+              output = insertBeforeLastWhitespace(output, ":");
+            } else {
+              throwColonExpected();
+            }
+          }
+          const processedValue = parseValue();
+          if (!processedValue) {
+            if (processedColon || truncatedText) {
+              output += "null";
+            } else {
+              throwColonExpected();
+            }
+          }
+          initial = false;
+        }
+        if (text[i] === "}") {
+          output += "}";
+          i++;
+        } else {
+          output = insertBeforeLastWhitespace(output, "}");
+        }
+        return true;
+      }
+      return false;
+    }
+    function parseArray() {
+      if (text[i] === "[") {
+        output += "[";
+        i++;
+        parseWhitespaceAndSkipComments();
+        if (skipCharacter(",")) {
+          parseWhitespaceAndSkipComments();
+        }
+        let initial = true;
+        while (i < text.length && text[i] !== "]") {
+          if (!initial) {
+            const processedComma2 = parseCharacter(",");
+            if (!processedComma2) {
+              output = insertBeforeLastWhitespace(output, ",");
+            }
+          }
+          skipEllipsis();
+          const processedValue = parseValue();
+          if (!processedValue) {
+            if (!initial) {
+              output = stripLastOccurrence(output, ",");
+            }
+            break;
+          }
+          initial = false;
+        }
+        if (text[i] === "]") {
+          output += "]";
+          i++;
+        } else {
+          output = insertBeforeLastWhitespace(output, "]");
+        }
+        return true;
+      }
+      return false;
+    }
+    function parseNewlineDelimitedJSON() {
+      let initial = true;
+      let processedValue = true;
+      while (processedValue) {
+        if (!initial) {
+          const processedComma2 = parseCharacter(",");
+          if (!processedComma2) {
+            output = insertBeforeLastWhitespace(output, ",");
+          }
+        } else {
+          initial = false;
+        }
+        processedValue = parseValue();
+      }
+      if (!processedValue) {
+        output = stripLastOccurrence(output, ",");
+      }
+      output = `[
+${output}
+]`;
+    }
+    function parseString() {
+      let stopAtDelimiter = arguments.length > 0 && arguments[0] !== void 0 ? arguments[0] : false;
+      let stopAtIndex = arguments.length > 1 && arguments[1] !== void 0 ? arguments[1] : -1;
+      const skipEscapeChars = text[i] === "\\";
+      if (skipEscapeChars) {
+        i++;
+        if (!isQuote(text[i])) {
+          throwUnexpectedCharacter();
+        }
+      }
+      const openEntity = text[i] === "&" ? matchHtmlEntity(text.slice(i, i + maxHtmlEntityLength)) : null;
+      const openedByEntity = isDoubleQuoteEntity(openEntity) || isSingleQuoteEntity(openEntity);
+      if (isQuote(text[i]) || openedByEntity) {
+        const isEndQuote = isDoubleQuote(text[i]) ? isDoubleQuote : isSingleQuote(text[i]) ? isSingleQuote : isSingleQuoteLike(text[i]) ? isSingleQuoteLike : isDoubleQuoteLike;
+        const iBefore = i;
+        const oBefore = output.length;
+        let str = '"';
+        i += openedByEntity && openEntity ? openEntity.length : 1;
+        while (true) {
+          if (i >= text.length) {
+            const iPrev = prevNonWhitespaceIndex(i - 1);
+            if (!stopAtDelimiter && isDelimiter(text.charAt(iPrev))) {
+              i = iBefore;
+              output = output.substring(0, oBefore);
+              return parseString(true);
+            }
+            str = insertBeforeLastWhitespace(str, '"');
+            output += str;
+            return true;
+          }
+          if (i === stopAtIndex) {
+            str = insertBeforeLastWhitespace(str, '"');
+            output += str;
+            return true;
+          }
+          const entity = openedByEntity && text[i] === "&" ? matchHtmlEntity(text.slice(i, i + maxHtmlEntityLength)) : null;
+          const isEnd = entity && openEntity ? entity.char === openEntity.char : isEndQuote(text[i]);
+          if (isEnd) {
+            const iQuote = i;
+            const oQuote = str.length;
+            str += '"';
+            i += entity ? entity.length : 1;
+            output += str;
+            parseWhitespaceAndSkipComments(false);
+            if (stopAtDelimiter || i >= text.length || isDelimiter(text[i]) && // only count the brackets inside the string when actually needed,
+            // i.e. when the quote is directly followed by a closing bracket
+            !isInsideUnclosedBracket(str, text[i]) || isQuote(text[i]) && !nextQuoteIsEndQuote(i) || isDigit(text[i])) {
+              parseConcatenatedString();
+              return true;
+            }
+            if (text[i] === "\\") {
+              throwUnexpectedCharacter();
+            }
+            const iPrevChar = prevNonWhitespaceIndex(iQuote - 1);
+            const prevChar = text.charAt(iPrevChar);
+            if (prevChar === ",") {
+              i = iBefore;
+              output = output.substring(0, oBefore);
+              return parseString(false, iPrevChar);
+            }
+            if (isDelimiter(prevChar)) {
+              i = iBefore;
+              output = output.substring(0, oBefore);
+              return parseString(true);
+            }
+            output = output.substring(0, oBefore);
+            i = iQuote + (entity ? entity.length : 1);
+            str = `${str.substring(0, oQuote)}\\${str.substring(oQuote)}`;
+          } else if (stopAtDelimiter && isUnquotedStringDelimiter(text[i])) {
+            if (text[i - 1] === ":" && regexUrlStart.test(text.substring(iBefore + 1, i + 2))) {
+              while (i < text.length && regexUrlChar.test(text[i])) {
+                str += text[i];
+                i++;
+              }
+            }
+            str = insertBeforeLastWhitespace(str, '"');
+            output += str;
+            parseConcatenatedString();
+            return true;
+          } else if (entity) {
+            const char = entity.char;
+            if (char === '"') {
+              str += '\\"';
+            } else if (isControlCharacter(char)) {
+              str += controlCharacters[char];
+            } else {
+              str += char;
+            }
+            i += entity.length;
+          } else if (text[i] === "\\") {
+            const char = text.charAt(i + 1);
+            const escapeChar = escapeCharacters[char];
+            if (escapeChar !== void 0) {
+              str += text.slice(i, i + 2);
+              i += 2;
+            } else if (char === "u") {
+              let j = 2;
+              while (j < 6 && isHex(text[i + j])) {
+                j++;
+              }
+              if (j === 6) {
+                str += text.slice(i, i + 6);
+                i += 6;
+              } else if (i + j >= text.length) {
+                i = text.length;
+              } else {
+                throwInvalidUnicodeCharacter();
+              }
+            } else if (char === "\n") {
+              str += "\\n";
+              i += 2;
+            } else {
+              str += char;
+              i += 2;
+            }
+          } else {
+            const char = text.charAt(i);
+            if (char === '"' && text[i - 1] !== "\\") {
+              str += `\\${char}`;
+              i++;
+            } else if (isControlCharacter(char)) {
+              str += controlCharacters[char];
+              i++;
+            } else {
+              if (!isValidStringCharacter(char)) {
+                throwInvalidCharacter(char);
+              }
+              str += char;
+              i++;
+            }
+          }
+          if (skipEscapeChars) {
+            skipEscapeCharacter();
+          }
+        }
+      }
+      return false;
+    }
+    function parseConcatenatedString() {
+      let processed2 = false;
+      parseWhitespaceAndSkipComments();
+      while (text[i] === "+") {
+        processed2 = true;
+        i++;
+        parseWhitespaceAndSkipComments();
+        output = stripLastOccurrence(output, '"', true);
+        const start = output.length;
+        const parsedStr = parseString();
+        if (parsedStr) {
+          output = removeAtIndex(output, start, 1);
+        } else {
+          output = insertBeforeLastWhitespace(output, '"');
+        }
+      }
+      return processed2;
+    }
+    function parseNumber() {
+      const start = i;
+      let num = "";
+      let invalid = false;
+      if (text[i] === "-") {
+        num += text[i];
+        i++;
+        if (!isDigit(text[i]) && atEndOfNumber()) {
+          num += "0";
+        }
+      }
+      if (text[i] === "0" && isDigit(text[i + 1])) {
+        invalid = true;
+      }
+      while (isDigit(text[i])) {
+        num += text[i];
+        i++;
+      }
+      if (text[i] === ".") {
+        if (num === "" || num === "-") {
+          num += "0";
+        }
+        num += text[i];
+        i++;
+        if (!isDigit(text[i])) {
+          num += "0";
+        }
+        while (isDigit(text[i])) {
+          num += text[i];
+          i++;
+        }
+      }
+      if (i > start) {
+        if (text[i] === "e" || text[i] === "E") {
+          if (num === "-") {
+            invalid = true;
+          }
+          num += text[i];
+          i++;
+          if (text[i] === "-" || text[i] === "+") {
+            num += text[i];
+            i++;
+          }
+          if (!isDigit(text[i])) {
+            num += "0";
+          }
+          while (isDigit(text[i])) {
+            num += text[i];
+            i++;
+          }
+        }
+        if (!atEndOfNumber()) {
+          i = start;
+          return false;
+        }
+        output += invalid ? `"${text.substring(start, i)}"` : num;
+        return true;
+      }
+      return false;
+    }
+    function parseKeywords() {
+      return parseKeyword("true", "true") || parseKeyword("false", "false") || parseKeyword("null", "null") || // repair Python keywords True, False, None
+      parseKeyword("True", "true") || parseKeyword("False", "false") || parseKeyword("None", "null");
+    }
+    function parseKeyword(name, value) {
+      if (text.slice(i, i + name.length) === name && !isFunctionNameChar(text[i + name.length])) {
+        output += value;
+        i += name.length;
+        return true;
+      }
+      return false;
+    }
+    function parseUnquotedString(isKey) {
+      const start = i;
+      if (isFunctionNameCharStart(text[i])) {
+        while (i < text.length && isFunctionNameChar(text[i])) {
+          i++;
+        }
+        let j = i;
+        while (isWhitespace(text, j)) {
+          j++;
+        }
+        if (text[j] === "(") {
+          i = j + 1;
+          parseValue();
+          if (text[i] === ")") {
+            i++;
+            if (text[i] === ";") {
+              i++;
+            }
+          }
+          return true;
+        }
+      }
+      while (i < text.length && !isUnquotedStringDelimiter(text[i]) && !isQuote(text[i]) && (!isKey || text[i] !== ":")) {
+        i++;
+      }
+      if (text[i - 1] === ":" && regexUrlStart.test(text.substring(start, i + 2))) {
+        while (i < text.length && regexUrlChar.test(text[i])) {
+          i++;
+        }
+      }
+      if (i > start) {
+        while (isWhitespace(text, i - 1) && i > 0) {
+          i--;
+        }
+        const symbol = text.slice(start, i);
+        output += symbol === "undefined" ? "null" : JSON.stringify(symbol);
+        if (text[i] === '"') {
+          i++;
+        }
+        return true;
+      }
+    }
+    function parseRegex() {
+      if (text[i] === "/") {
+        const start = i;
+        i++;
+        while (i < text.length && (text[i] !== "/" || text[i - 1] === "\\")) {
+          i++;
+        }
+        i++;
+        output += JSON.stringify(text.substring(start, i));
+        return true;
+      }
+    }
+    function prevNonWhitespaceIndex(start) {
+      let prev = start;
+      while (prev > 0 && isWhitespace(text, prev)) {
+        prev--;
+      }
+      return prev;
+    }
+    function nextQuoteIsEndQuote(index) {
+      let next = index + 1;
+      while (next < text.length && isWhitespace(text, next)) {
+        next++;
+      }
+      return next >= text.length || isDelimiter(text[next]);
+    }
+    function atEndOfNumber() {
+      return i >= text.length || isDelimiter(text[i]) || isWhitespace(text, i);
+    }
+    function throwInvalidCharacter(char) {
+      throw new JSONRepairError(`Invalid character ${JSON.stringify(char)}`, i);
+    }
+    function throwUnexpectedCharacter() {
+      throw new JSONRepairError(`Unexpected character ${JSON.stringify(text[i])}`, i);
+    }
+    function throwUnexpectedEnd() {
+      throw new JSONRepairError("Unexpected end of json string", text.length);
+    }
+    function throwObjectKeyExpected() {
+      throw new JSONRepairError("Object key expected", i);
+    }
+    function throwColonExpected() {
+      throw new JSONRepairError("Colon expected", i);
+    }
+    function throwInvalidUnicodeCharacter() {
+      const chars = text.slice(i, i + 6);
+      throw new JSONRepairError(`Invalid unicode character "${chars}"`, i);
+    }
+  }
+  function atEndOfBlockComment(text, i) {
+    return text[i] === "*" && text[i + 1] === "/";
+  }
+
+  // src/services/jsonText.ts
+  function fenced(raw) {
+    const trimmed = raw.trim();
+    const match = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    return (match?.[1] ?? trimmed).trim();
+  }
+  function matchingBrace(text, start) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < text.length; index += 1) {
+      const char = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') inString = true;
+      else if (char === "{") depth += 1;
+      else if (char === "}") {
+        depth -= 1;
+        if (depth === 0) return index;
+      }
+    }
+    return -1;
+  }
+  function parseSlice(slice) {
+    try {
+      return { value: JSON.parse(slice), text: slice, repaired: false };
+    } catch {
+      try {
+        const repaired = jsonrepair(slice);
+        return { value: JSON.parse(repaired), text: repaired, repaired: true };
+      } catch {
+        return null;
+      }
+    }
+  }
+  function hasNumericScore(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value) && typeof value.overallScore === "number";
+  }
+  function lastScoreJson(raw) {
+    const windowText = raw.length > 4e5 ? raw.slice(-2e5) : raw;
+    let last = null;
+    for (let index = 0; index < windowText.length; index += 1) {
+      if (windowText[index] !== "{") continue;
+      const end = matchingBrace(windowText, index);
+      if (end < 0) continue;
+      const slice = windowText.slice(index, end + 1);
+      if (/"overallScore"\s*:/.test(slice)) {
+        const parsed = parseSlice(slice);
+        if (parsed && hasNumericScore(parsed.value)) last = parsed;
+      }
+      index = end;
+    }
+    return last;
+  }
+  function parseModelJson(raw) {
+    const scored = lastScoreJson(raw);
+    if (scored) return { ok: true, value: scored.value, text: scored.text, repaired: scored.repaired };
+    const slice = fenced(raw);
+    const parsed = slice.includes("{") ? parseSlice(slice) : null;
+    if (parsed) return { ok: true, ...parsed };
+    return { ok: false, error: "No JSON object found in the model output." };
+  }
+  function reaskJsonPrompt(problem) {
+    const detail = problem.replace(/\s+/g, " ").trim().slice(0, 500);
+    return `Your JSON did not validate (${detail}). Reply again with only the corrected JSON object.`;
+  }
+  async function settleChatJson(raw, ask, log, validate) {
+    const ready = (parsed) => {
+      if (!validate) return { ok: true };
+      return validate(parsed.text);
+    };
+    const first = parseModelJson(raw);
+    if (first.ok) {
+      const checked = ready(first);
+      if (checked.ok) {
+        if (first.repaired) log("Repaired the chat's JSON before scoring.");
+        return { text: first.repaired ? first.text : raw, repaired: first.repaired, reasked: false };
+      }
+      const problem = checked.errors.join(" ");
+      log(`Asked once for corrected JSON. ${problem}`);
+      const follow2 = await ask(reaskJsonPrompt(problem));
+      const second2 = parseModelJson(follow2);
+      if (second2.ok && second2.repaired) log("Repaired the corrected JSON.");
+      return { text: second2.ok ? second2.repaired ? second2.text : follow2 : follow2, repaired: Boolean(second2.ok && second2.repaired), reasked: true };
+    }
+    log(`Asked once for corrected JSON. ${first.error}`);
+    const follow = await ask(reaskJsonPrompt(first.error));
+    const second = parseModelJson(follow);
+    if (second.ok && second.repaired) log("Repaired the corrected JSON.");
+    return { text: second.ok ? second.repaired ? second.text : follow : follow, repaired: Boolean(second.ok && second.repaired), reasked: true };
+  }
+
   // src/services/validateReport.ts
   function isRecord2(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
   }
   function extractJsonValue(raw) {
-    const trimmed = raw.trim();
-    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-    const body = (fenced?.[1] ?? trimmed).trim();
-    try {
-      return JSON.parse(body);
-    } catch {
-      const start = body.indexOf("{");
-      const end = body.lastIndexOf("}");
-      if (start >= 0 && end > start) return JSON.parse(body.slice(start, end + 1));
-      throw new Error("No JSON object found in the model output.");
-    }
+    const parsed = parseModelJson(raw);
+    if (!parsed.ok) throw new Error(parsed.error);
+    return parsed.value;
   }
-  function clip(value, max) {
+  function clip2(value, max) {
     return typeof value === "string" ? value.trim().slice(0, max) : "";
   }
   function citationsFrom(value, errors, path) {
@@ -1193,23 +2105,56 @@ ${parsed.errors.join("\n")}`);
     return value.flatMap((item) => {
       if (typeof item === "string") return [{ quote: item.slice(0, 500), location: "Record" }];
       if (!isRecord2(item)) return [];
-      const quote = clip(item.quote ?? item.passage ?? item.text, 500);
+      const quote = clip2(item.quote ?? item.passage ?? item.text, 500);
       if (!quote) return [];
-      return [{ quote, location: clip(item.location ?? item.where ?? "Record", 160) || "Record" }];
+      return [{ quote, location: clip2(item.location ?? item.where ?? "Record", 160) || "Record" }];
     });
   }
   function stringArray(value, maxItems, maxLen) {
-    if (!Array.isArray(value)) return [];
-    return value.map((item) => clip(item, maxLen)).filter(Boolean).slice(0, maxItems);
+    const items = typeof value === "string" ? [value] : Array.isArray(value) ? value : [];
+    return items.map((item) => clip2(item, maxLen)).filter((item) => Boolean(item) && item.toLowerCase() !== "string").slice(0, maxItems);
+  }
+  function criterionKey(raw, criteria) {
+    const compact = raw.toLowerCase().replace(/[_\s]+/g, "-").replace(/[^a-z0-9-]/g, "");
+    const found = criteria.criteria.find(
+      (item) => item.id === compact || item.id.replace(/-/g, "") === compact.replace(/-/g, "") || item.name.toLowerCase().replace(/[\s_]+/g, "-") === compact
+    );
+    return found?.id ?? compact;
+  }
+  function recommendationId(raw, criteria) {
+    const trimmed = raw.trim().toLowerCase().replace(/\s+/g, " ");
+    const cleaned = trimmed.replace(/[._]+$/g, "").replace(/[_/]+/g, " ").replace(/\s+/g, " ").trim();
+    const exact = criteria.recommendationCategories.find((item) => item.id.toLowerCase() === cleaned || item.id.replace(/-/g, " ") === cleaned || item.label.toLowerCase() === trimmed);
+    if (exact) return exact.id;
+    const synonyms = {
+      minor: "revise",
+      "minor revision": "revise",
+      "minor revisions": "revise",
+      "needs revision": "revise",
+      major: "major-revision",
+      "major revision": "major-revision",
+      "major revisions": "major-revision",
+      reject: "not-ready",
+      rejected: "not-ready",
+      rejection: "not-ready",
+      "not ready": "not-ready",
+      accepted: "accept",
+      sound: "accept",
+      "accept sound": "accept"
+    };
+    const alias = synonyms[cleaned];
+    if (alias && criteria.recommendationCategories.some((item) => item.id === alias)) return alias;
+    const hits = criteria.recommendationCategories.filter((item) => new RegExp(`\\b${item.id.replace("-", "[- ]")}\\b`, "i").test(cleaned));
+    return hits.length === 1 ? hits[0].id : "";
   }
   function validateReport(input, criteria) {
     const errors = [];
     if (!isRecord2(input)) return { ok: false, errors: ["The model output was not a JSON object."] };
-    const summary = clip(input.summary, 4e3);
+    const summary = clip2(input.summary, 4e3);
     if (summary.length < 40) errors.push("summary must be at least 40 characters.");
     const scoresRaw = Array.isArray(input.scores) ? input.scores : [];
     const scores = criteria.criteria.map((criterion) => {
-      const found = scoresRaw.find((item) => isRecord2(item) && clip(item.criterionId ?? item.id, 80) === criterion.id);
+      const found = scoresRaw.find((item) => isRecord2(item) && criterionKey(clip2(item.criterionId ?? item.id, 80), criteria) === criterion.id);
       if (!isRecord2(found)) {
         errors.push(`Missing score for ${criterion.id}.`);
         return null;
@@ -1218,21 +2163,18 @@ ${parsed.errors.join("\n")}`);
       if (!Number.isInteger(score) || score < criteria.scale.min || score > criteria.scale.max) {
         errors.push(`${criterion.id} score must be an integer from ${criteria.scale.min} to ${criteria.scale.max}.`);
       }
-      const rationale = clip(found.rationale ?? found.reason, 2e3);
+      const rationale = clip2(found.rationale ?? found.reason, 2e3);
       if (rationale.length < 20) errors.push(`${criterion.id} rationale is too short.`);
       const citations = citationsFrom(found.citations ?? found.quotes, errors, criterion.id);
       if (citations.length === 0) errors.push(`${criterion.id} needs at least one citation.`);
-      const confidenceRaw = clip(found.confidence, 16).toLowerCase();
+      const confidenceRaw = clip2(found.confidence, 16).toLowerCase();
       const confidence = confidenceRaw === "low" || confidenceRaw === "med" || confidenceRaw === "medium" || confidenceRaw === "high" ? confidenceRaw : "";
       if (criteria.reportSchema === "0.2" && !confidence) errors.push(`${criterion.id} needs a confidence of low, medium, or high.`);
       const normalizedConfidence = confidence === "high" ? "high" : confidence === "medium" || confidence === "med" ? "medium" : confidence === "low" ? "low" : void 0;
       return { criterionId: criterion.id, score, rationale, citations, confidence: normalizedConfidence };
     });
-    const recommendationRaw = clip(input.recommendation, 120).toLowerCase();
-    const recommendation = criteria.recommendationCategories.find(
-      (item) => item.id.toLowerCase() === recommendationRaw || item.label.toLowerCase() === recommendationRaw
-    )?.id ?? "";
-    if (!recommendation) errors.push("recommendation must be one of the criteria category ids.");
+    const recommendation = recommendationId(clip2(input.recommendation, 160), criteria);
+    if (!recommendation) errors.push(`recommendation must be one of: ${criteria.recommendationCategories.map((item) => item.id).join(", ")}.`);
     const strengths = stringArray(input.strengths, 6, 400);
     const questions = stringArray(input.questionsForAuthors ?? input.questions, 6, 400);
     const nextSteps = stringArray(input.suggestedNextSteps ?? input.nextSteps, 6, 400);
@@ -1247,16 +2189,16 @@ ${parsed.errors.join("\n")}`);
         return [{ criterionId: criteria.criteria[0]?.id ?? "clarity", claim: item.slice(0, 500), quotedPassage: "", reason: item.slice(0, 800) }];
       }
       if (!isRecord2(item)) return [];
-      const criterionId = clip(item.criterionId ?? item.criterion, 80);
-      if (criterionId && !known.has(criterionId)) errors.push(`Unknown criterion on a major issue: ${criterionId}.`);
-      const claim = clip(item.claim ?? item.summary ?? item.issue, 500);
+      const criterionId = criterionKey(clip2(item.criterionId ?? item.criterion, 80), criteria);
+      if (clip2(item.criterionId ?? item.criterion, 80) && !known.has(criterionId)) errors.push(`Unknown criterion on a major issue: ${criterionId}.`);
+      const claim = clip2(item.claim ?? item.summary ?? item.issue, 500);
       if (!claim) return [];
       return [
         {
           criterionId: known.has(criterionId) ? criterionId : criteria.criteria[0]?.id ?? "clarity",
           claim,
-          quotedPassage: clip(item.quotedPassage ?? item.quote ?? "", 500),
-          reason: clip(item.reason ?? item.why ?? claim, 800)
+          quotedPassage: clip2(item.quotedPassage ?? item.quote ?? "", 500),
+          reason: clip2(item.reason ?? item.why ?? claim, 800)
         }
       ];
     });
@@ -1268,6 +2210,7 @@ ${parsed.errors.join("\n")}`);
     const idea = weightedMean(ready, criteria, criteria.ideaCriterionIds);
     if (overall === null || idea === null) return { ok: false, errors: ["Could not weight the scores."] };
     const statedRaw = Number(input.overallScore);
+    const airFeedback = parseAirFeedback(input.air_feedback ?? input.airFeedback);
     const check = describeScoring({
       scores: ready,
       statedOverall: Number.isFinite(statedRaw) ? statedRaw : null,
@@ -1290,6 +2233,7 @@ ${parsed.errors.join("\n")}`);
         minorIssues,
         questionsForAuthors: questions,
         suggestedNextSteps: nextSteps,
+        ...airFeedback ? { airFeedback } : {},
         ...v2
       }
     };
@@ -1300,22 +2244,22 @@ ${parsed.errors.join("\n")}`);
   function rangeFrom(value, fallbackUnit) {
     const record = isRecord2(value) ? value : {};
     return {
-      low: clip(record.low, 80) || "not estimated",
-      central: clip(record.central, 80) || "not estimated",
-      high: clip(record.high, 80) || "not estimated",
-      unit: clip(record.unit, 40) || fallbackUnit
+      low: clip2(record.low, 80) || "not estimated",
+      central: clip2(record.central, 80) || "not estimated",
+      high: clip2(record.high, 80) || "not estimated",
+      unit: clip2(record.unit, 40) || fallbackUnit
     };
   }
   function readV2(input, errors, includeValue) {
-    const ontologyClass = clip(input.ontologyClass, 80);
+    const ontologyClass = clip2(input.ontologyClass, 80);
     if (!ontologyClasses.has(ontologyClass)) errors.push("ontologyClass must be one of the four AIR classes.");
     const physicsRaw = isRecord2(input.physics) ? input.physics : null;
-    const classification = clip(physicsRaw?.classification, 20).toUpperCase();
+    const classification = clip2(physicsRaw?.classification, 20).toUpperCase();
     if (!physicsClasses.has(classification)) errors.push("physics.classification must be CONSISTENT, EXTENDS, or CHALLENGES.");
     const physics = {
       classification: physicsClasses.has(classification) ? classification : "CONSISTENT",
       laws: stringArray(physicsRaw?.laws, 8, 120),
-      howAddressed: clip(physicsRaw?.howAddressed, 800)
+      howAddressed: clip2(physicsRaw?.howAddressed, 800)
     };
     if (physics.laws.length === 0) errors.push("physics.laws needs at least one named law or an explicit 'none used'.");
     const simulationRaw = isRecord2(input.simulation) ? input.simulation : null;
@@ -1324,7 +2268,7 @@ ${parsed.errors.join("\n")}`);
     const simulation = {
       reported: Number.isInteger(reported) ? reported : null,
       passed: Number.isInteger(passed) ? passed : null,
-      methods: clip(simulationRaw?.methods, 400),
+      methods: clip2(simulationRaw?.methods, 400),
       inputsAvailable: Boolean(simulationRaw?.inputsAvailable)
     };
     if (!simulation.methods) errors.push("simulation.methods must say what was run, or that simulation does not apply.");
@@ -1332,7 +2276,7 @@ ${parsed.errors.join("\n")}`);
     const valueEstimate = {
       confidence: "low",
       assumptions: stringArray(valueRaw?.assumptions, 8, 240),
-      marketDisruption: clip(valueRaw?.marketDisruption, 400) || "Not estimated from the record.",
+      marketDisruption: clip2(valueRaw?.marketDisruption, 400) || "Not estimated from the record.",
       addressableMarket: rangeFrom(valueRaw?.addressableMarket, "not estimated"),
       units: rangeFrom(valueRaw?.units, "units"),
       valuePerUnit: rangeFrom(valueRaw?.valuePerUnit, "per unit"),
@@ -1342,11 +2286,11 @@ ${parsed.errors.join("\n")}`);
     if (includeValue && valueEstimate.assumptions.length === 0) errors.push("valueEstimate.assumptions needs at least one assumption.");
     const goals = Array.isArray(input.goals) ? input.goals.flatMap((item) => {
       if (!isRecord2(item)) return [];
-      const level = clip(item.level, 20);
+      const level = clip2(item.level, 20);
       if (!goalLevels.has(level)) return [];
-      const goalId = clip(item.goalId, 80);
+      const goalId = clip2(item.goalId, 80);
       if (!goalId) return [];
-      return [{ goalId, level, note: clip(item.note, 300) }];
+      return [{ goalId, level, note: clip2(item.note, 300) }];
     }) : [];
     if (goals.length === 0) errors.push("goals must list a level for the documented public goals you considered.");
     return {
@@ -1443,6 +2387,45 @@ ${parsed.errors.join("\n")}`);
     return { transcript, defendedText, stopped: false };
   }
 
+  // src/services/webChat/paperText.ts
+  function linkReadingPrompt(url, system, instructions) {
+    return [
+      "Open this public text page and read the full paper. No sign-in is required.",
+      url,
+      "",
+      "Score that paper with the rubric below. Return one JSON object and nothing else.",
+      "",
+      system,
+      "",
+      instructions
+    ].join("\n");
+  }
+  var ACCESS_FAILURE = /could not (?:access|open|read|fetch|browse|reach)|couldn't (?:access|open|read|fetch|browse)|cannot (?:access|open|read|browse)|can't (?:access|open|read)|unable to (?:access|open|read|fetch|reach)|no access to (?:the |that )?(?:url|page|link)|page not found|sign in to (?:view|read|continue)|login required|failed to (?:load|fetch|open)|403 forbidden|404\b/i;
+  function couldNotReadPaper(reply) {
+    if (/"overallScore"\s*:\s*-?\d+/.test(reply)) return false;
+    return ACCESS_FAILURE.test(reply);
+  }
+  var TEXT_PAGE_NOTE = "text page unreachable, model used other sources";
+  function textPageHasPaper(status, body) {
+    if (status !== 200) return false;
+    if (/<div id=["']root["']>\s*<\/div>/.test(body) && !/Zenodo record:/.test(body)) return false;
+    const text = body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    if (text.length < 400) return false;
+    return /Zenodo record:|Version DOI:/.test(text);
+  }
+  function missingContextText(reply) {
+    const match = reply.match(/"missingContext"\s*:\s*"((?:\\.|[^"\\])*)"/i);
+    if (!match?.[1]) return "";
+    return match[1].replace(/\\"/g, '"').replace(/\\n/g, " ");
+  }
+  function textPageUntrusted(reply) {
+    const context = missingContextText(reply);
+    const failed = /404|could not open|couldn't open|cannot open|can't open|unable to (?:open|access|reach)|page not found|not reachable|failed to (?:open|load|fetch)|returned 404/i;
+    const aboutPage = /paper\/[^/\s"']+\/text|open-ai-peer-review|text page|github\.io/i;
+    if (context && failed.test(context) && (aboutPage.test(context) || /url|link|page/i.test(context))) return true;
+    return aboutPage.test(reply) && failed.test(reply);
+  }
+
   // src/services/webChat/deliver.ts
   function splitText(text, size) {
     const clean = text.replace(/\r\n/g, "\n");
@@ -1484,11 +2467,29 @@ ${file.text}`).join("\n\n");
     ].join("\n");
   }
   var PAPER_HEADER = 220;
-  function instructionSteps(text, pasteLimit) {
+  function sourceBanner(instructions) {
+    return instructions.split("\n").map((line) => line.trim()).filter((line) => /^(Source record\b|This version:|DOI:|Concept record\b|Concept DOI:)/.test(line)).join("\n");
+  }
+  function withBanner(banner, text) {
+    if (!banner.trim()) return text;
+    if (text.includes("This version:") || text.includes("DOI: https://doi.org/")) return text;
+    return `${banner}
+
+${text}`;
+  }
+  function stamp(banner, text, limit) {
+    const next = withBanner(banner, text);
+    return next.length <= limit ? next : text;
+  }
+  function stampSteps(steps, banner, limit) {
+    return steps.map((step) => ({ ...step, text: stamp(banner, step.text, limit) }));
+  }
+  function instructionSteps(text, pasteLimit, banner) {
+    const room = Math.max(500, pasteLimit - (banner.length > 0 ? banner.length + 2 : 0));
     if (text.length <= pasteLimit) {
       return [{ kind: "paste", text, files: [], index: 1, total: 1, final: true }];
     }
-    const parts = splitText(text, Math.max(500, pasteLimit - PAPER_HEADER));
+    const parts = splitText(text, Math.max(500, room - PAPER_HEADER));
     return parts.map((part, index) => {
       const final = index === parts.length - 1;
       return {
@@ -1543,7 +2544,32 @@ ${file.text}`).join("\n\n");
     const closing = files.length ? `${finalText}
 
 The paper is in the attached files or in the earlier messages labelled AIR PAPER. Score that text. Return one JSON object and nothing else.` : finalText;
+    const banner = sourceBanner(packet.instructions);
+    const paper = paperBody(files);
+    const combined = [paper, closing].filter(Boolean).join("\n\n");
     const canUpload = provider.fileUpload && provider.fileCharLimit > 0 && provider.maxFiles > 0 && files.length > 0;
+    if (packet.textUrl) {
+      return {
+        steps: [
+          {
+            kind: "paste",
+            text: linkReadingPrompt(packet.textUrl, packet.system, packet.instructions),
+            files: [],
+            index: 1,
+            total: 1,
+            final: true,
+            link: true
+          }
+        ],
+        warning: null
+      };
+    }
+    if (provider.id === "grok-x" && combined.length > 0 && combined.length <= provider.pasteLimit) {
+      return {
+        steps: [{ kind: "paste", text: combined, files: [], index: 1, total: 1, final: true }],
+        warning: warn(provider, 1, files)
+      };
+    }
     if (canUpload) {
       const batches = fileBatches(files, provider.fileCharLimit, provider.maxFiles);
       const instructionsFit = closing.length <= provider.pasteLimit;
@@ -1564,13 +2590,17 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
         });
       });
       if (!instructionsFit || steps2.every((step) => !step.final)) {
-        steps2.push(...instructionSteps(closing, provider.pasteLimit).map((step) => ({ ...step, final: step.final })));
+        steps2.push(...instructionSteps(closing, provider.pasteLimit, banner).map((step) => ({ ...step, final: step.final })));
       }
-      const numbered = numberSteps(steps2).map((step, index, all) => ({ ...step, final: index === all.length - 1 }));
+      const numbered = stampSteps(
+        numberSteps(steps2).map((step, index, all) => ({ ...step, final: index === all.length - 1 })),
+        banner,
+        provider.pasteLimit
+      );
       return { steps: numbered, warning: warn(provider, numbered.length, files) };
     }
-    const paper = paperBody(files);
-    const chunkSize = Math.max(500, provider.pasteLimit - PAPER_HEADER);
+    const bannerRoom = banner.length > 0 ? banner.length + 2 : 0;
+    const chunkSize = Math.max(500, provider.pasteLimit - PAPER_HEADER - bannerRoom);
     const chunks = paper ? splitText(paper, chunkSize) : [];
     const paperSteps = chunks.map((chunk, index) => ({
       kind: "paste",
@@ -1580,10 +2610,14 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       total: 1,
       final: false
     }));
-    const steps = numberSteps([...paperSteps, ...instructionSteps(closing, provider.pasteLimit)]).map((step, index, all) => ({
-      ...step,
-      final: index === all.length - 1
-    }));
+    const steps = stampSteps(
+      numberSteps([...paperSteps, ...instructionSteps(closing, provider.pasteLimit, banner)]).map((step, index, all) => ({
+        ...step,
+        final: index === all.length - 1
+      })),
+      banner,
+      provider.pasteLimit
+    );
     return { steps, warning: warn(provider, steps.length, files) };
   }
   function warn(provider, turns, files) {
@@ -1627,12 +2661,74 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     }
     return null;
   }
-  function diagnose(root, provider) {
-    if (queryFirst(root, provider.selectors.composer)) return "ready";
-    if (queryFirst(root, provider.selectors.login)) return "signed-out";
-    return "selector-miss";
+  var COMPOSER_HINTS = ["message grok", "ask", "what do you want to know", "message"];
+  var SEND_WORDS = ["send", "submit", "grok", "ask"];
+  function ignoredElement(node) {
+    const id = (node.id || "").toLowerCase();
+    const className = classNameOf(node).toLowerCase();
+    const tag = node.tagName.toLowerCase();
+    const label = `${node.getAttribute("aria-label") ?? ""} ${node.getAttribute("title") ?? ""}`.toLowerCase();
+    const blob = `${id} ${className} ${tag} ${(node.getAttribute("data-extension") || "").toLowerCase()} ${label}`;
+    return id === "air-web-chat-banner" || node.hasAttribute("data-air-ignore") || blob.includes("stl-forge") || blob.includes("stlforge") || blob.includes("stl_forge") || blob.includes("stl forge") || tag.includes("forge");
   }
-  function assistantText(root, selectors) {
+  function isIgnoredRegion(el) {
+    let node = el;
+    const seen = /* @__PURE__ */ new Set();
+    while (node && !seen.has(node)) {
+      seen.add(node);
+      if (node instanceof Element && ignoredElement(node)) return true;
+      const parent = node.parentNode;
+      if (parent instanceof ShadowRoot) {
+        node = parent.host;
+        continue;
+      }
+      node = parent;
+    }
+    return false;
+  }
+  function isHiddenControl(el) {
+    if (el.hasAttribute("hidden")) return true;
+    if (el.getAttribute("aria-hidden") === "true") return true;
+    if (el.getAttribute("aria-disabled") === "true") return true;
+    const style = el.style;
+    if (style?.display === "none" || style?.visibility === "hidden") return true;
+    if ("disabled" in el && Boolean(el.disabled)) return true;
+    return false;
+  }
+  function classNameOf(el) {
+    return typeof el.className === "string" ? el.className : "";
+  }
+  function isComposerCandidate(el) {
+    if (isIgnoredRegion(el) || isHiddenControl(el)) return false;
+    const tag = el.tagName;
+    if (tag === "TEXTAREA") return true;
+    if (tag === "INPUT") {
+      const type = (el.type || "text").toLowerCase();
+      return type === "text" || type === "search";
+    }
+    if (el.getAttribute("contenteditable") === "true" || el.getAttribute("contenteditable") === "") return true;
+    if (el.getAttribute("role") === "textbox") return true;
+    return false;
+  }
+  function hintText(el) {
+    return `${el.getAttribute("aria-label") ?? ""} ${el.getAttribute("placeholder") ?? ""}`.toLowerCase();
+  }
+  function matchesHint(el) {
+    const text = hintText(el);
+    return COMPOSER_HINTS.some((hint) => text.includes(hint));
+  }
+  function chatRegion(root) {
+    const scope = root instanceof Document ? root.body ?? root : root;
+    if (scope instanceof Element || scope instanceof Document) {
+      const main = scope.querySelector("main, [role='main']");
+      if (main) return main;
+    }
+    return scope;
+  }
+  function firstUsable(nodes, accept) {
+    return nodes.find((el) => accept(el)) ?? null;
+  }
+  function findComposer(root, selectors) {
     for (const selector of selectors) {
       let nodes = [];
       try {
@@ -1640,14 +2736,203 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       } catch {
         continue;
       }
-      const last = nodes[nodes.length - 1];
-      if (!last) continue;
-      const element = last;
-      const text = typeof element.innerText === "string" && element.innerText.trim() ? element.innerText : last.textContent ?? "";
-      const trimmed = text.trim();
-      if (trimmed) return trimmed;
+      const found = firstUsable(nodes, isComposerCandidate);
+      if (found) return found;
     }
-    return "";
+    const region = chatRegion(root);
+    let pool = [];
+    try {
+      pool = queryAllDeep(region, "textarea, input, [contenteditable='true'], [contenteditable=''], [role='textbox']");
+    } catch {
+      pool = [];
+    }
+    const usable = pool.filter(isComposerCandidate);
+    return usable.find(matchesHint) ?? usable.find((el) => el.tagName === "TEXTAREA") ?? usable.find((el) => el.getAttribute("contenteditable") === "true" || el.getAttribute("contenteditable") === "") ?? usable.find((el) => el.getAttribute("role") === "textbox") ?? null;
+  }
+  function buttonLabel(el) {
+    return `${el.getAttribute("aria-label") ?? ""} ${el.getAttribute("title") ?? ""} ${(el.textContent ?? "").replace(/\s+/g, " ")}`.toLowerCase();
+  }
+  function isSendControl(el) {
+    if (isIgnoredRegion(el) || isHiddenControl(el)) return false;
+    const tag = el.tagName;
+    if (tag !== "BUTTON" && el.getAttribute("role") !== "button" && el.type !== "submit") return false;
+    const label = buttonLabel(el);
+    if (/add files|voice mode|select a model|model auto/.test(label)) return false;
+    return true;
+  }
+  function nearest(origin, options) {
+    if (options.length === 0) return null;
+    const doc = origin.ownerDocument;
+    if (!doc) return options[0] ?? null;
+    const order = [...doc.querySelectorAll("body *")];
+    const index = new Map(order.map((el, position) => [el, position]));
+    const originIndex = index.get(origin) ?? 0;
+    let best = options[0] ?? null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const option of options) {
+      const distance = Math.abs((index.get(option) ?? 0) - originIndex);
+      if (distance < bestDistance) {
+        best = option;
+        bestDistance = distance;
+      }
+    }
+    return best;
+  }
+  function uniqueElements(nodes) {
+    return [...new Set(nodes)];
+  }
+  function findSubmit(root, selectors, composer) {
+    const matches = [];
+    for (const selector of selectors) {
+      try {
+        matches.push(...queryAllDeep(root, selector).filter(isSendControl));
+      } catch {
+      }
+    }
+    const listed = uniqueElements(matches);
+    if (listed.length) return composer ? nearest(composer, listed) : listed[listed.length - 1] ?? null;
+    const region = chatRegion(root);
+    let buttons = [];
+    try {
+      buttons = queryAllDeep(region, "button, [role='button'], input[type='submit']").filter(isSendControl);
+    } catch {
+      buttons = [];
+    }
+    const hinted = [];
+    for (const word of SEND_WORDS) hinted.push(...buttons.filter((button) => buttonLabel(button).includes(word)));
+    const hintedUnique = uniqueElements(hinted);
+    if (hintedUnique.length) return composer ? nearest(composer, hintedUnique) : hintedUnique[hintedUnique.length - 1] ?? null;
+    const submits = buttons.filter((button) => button.getAttribute("type") === "submit" || button.type === "submit");
+    if (composer) return nearest(composer, submits);
+    return submits[submits.length - 1] ?? null;
+  }
+  function describeButtons(root, limit = 6) {
+    let nodes = [];
+    try {
+      nodes = queryAllDeep(root, "button, [role='button'], input[type='submit']");
+    } catch {
+      nodes = [];
+    }
+    if (nodes.length === 0) return "Buttons: none.";
+    const text = nodes.filter((el) => !isIgnoredRegion(el)).slice(0, limit).map((el) => {
+      const tag = el.tagName.toLowerCase();
+      const type = el.getAttribute("type") ?? "";
+      const label = el.getAttribute("aria-label") ?? "";
+      const state = isHiddenControl(el) ? "disabled" : "enabled";
+      return [tag, type && `type=${type}`, label && `aria-label=${label}`, state].filter(Boolean).join(" ");
+    }).join("; ");
+    return `Buttons: ${text}.`;
+  }
+  function describeCandidates(root, limit = 6) {
+    let nodes = [];
+    try {
+      nodes = queryAllDeep(root, "textarea, input, [contenteditable='true'], [contenteditable=''], [role='textbox']");
+    } catch {
+      nodes = [];
+    }
+    const candidates = nodes.filter((el) => {
+      if (el.tagName === "INPUT") {
+        const type = (el.type || "").toLowerCase();
+        if (type === "file" || type === "hidden" || type === "password" || type === "checkbox" || type === "radio") return false;
+      }
+      return el.tagName === "TEXTAREA" || el.tagName === "INPUT" || el.getAttribute("contenteditable") != null || el.getAttribute("role") === "textbox";
+    });
+    if (candidates.length === 0) return "none";
+    return candidates.slice(0, limit).map((el) => {
+      const tag = el.tagName.toLowerCase();
+      const role = el.getAttribute("role") ?? "";
+      const label = el.getAttribute("aria-label") ?? "";
+      const placeholder = el.getAttribute("placeholder") ?? "";
+      return [tag, role && `role=${role}`, label && `aria-label=${label}`, placeholder && `placeholder=${placeholder}`].filter(Boolean).join(" ");
+    }).join("; ");
+  }
+  function elementText(el) {
+    const element = el;
+    const text = typeof element.innerText === "string" && element.innerText.trim() ? element.innerText : el.textContent ?? "";
+    return text.trim();
+  }
+  function looksLikeAssistant(el) {
+    const blob = `${el.getAttribute("data-testid") ?? ""} ${el.getAttribute("data-message-author") ?? ""} ${el.getAttribute("data-message-author-role") ?? ""} ${classNameOf(el)}`.toLowerCase();
+    return /assistant|grok-message|model-response|response-message/.test(blob);
+  }
+  function assistantText(root, selectors, composer) {
+    const seen = /* @__PURE__ */ new Set();
+    const consider = (nodes) => {
+      const usable = nodes.filter((el) => {
+        if (seen.has(el) || isIgnoredRegion(el)) return false;
+        seen.add(el);
+        if (!composer) return true;
+        if (el === composer || composer.contains(el) || el.contains(composer)) return false;
+        return true;
+      });
+      const last = usable[usable.length - 1];
+      return last ? elementText(last) : "";
+    };
+    for (const selector of selectors) {
+      let nodes = [];
+      try {
+        nodes = queryAllDeep(root, selector);
+      } catch {
+        continue;
+      }
+      const text2 = consider(nodes);
+      if (text2) return text2;
+    }
+    let pool = [];
+    try {
+      pool = queryAllDeep(root, "[data-testid], [data-message-author], [data-message-author-role], [class*='assistant'], [class*='response']");
+    } catch {
+      pool = [];
+    }
+    const text = consider(pool.filter(looksLikeAssistant));
+    return text;
+  }
+  function walkReplyText(node, composer, chunks) {
+    if (node instanceof Element) {
+      if (isIgnoredRegion(node)) return;
+      if (composer && (node === composer || composer.contains(node))) return;
+      if (node.shadowRoot) walkReplyText(node.shadowRoot, composer, chunks);
+    }
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent ?? "";
+      if (text.trim()) chunks.push(text);
+      return;
+    }
+    for (const child of node.childNodes) walkReplyText(child, composer, chunks);
+  }
+  function visibleReplyText(root, composer) {
+    const chunks = [];
+    const scope = root instanceof Document ? root.body ?? root.documentElement : root;
+    walkReplyText(scope, composer, chunks);
+    return chunks.join("\n");
+  }
+  function reviewJsonBlock(text) {
+    return lastScoreJson(text)?.text ?? "";
+  }
+  function reviewJsonOnPage(root, composer) {
+    return reviewJsonBlock(visibleReplyText(root, composer));
+  }
+  function stopControlActive(root, selectors) {
+    const extra = ["button", "[role='button']"];
+    const found = [];
+    for (const selector of [...selectors, ...extra]) {
+      try {
+        found.push(...queryAllDeep(root, selector));
+      } catch {
+      }
+    }
+    return found.some((el) => {
+      if (isIgnoredRegion(el) || !isActiveStop(el)) return false;
+      const fromAdapter = selectors.some((selector) => {
+        try {
+          return el.matches(selector);
+        } catch {
+          return false;
+        }
+      });
+      if (fromAdapter) return true;
+      return /stop/.test(buttonLabel(el));
+    });
   }
   function isActiveStop(el) {
     if (el.hasAttribute("hidden")) return false;
@@ -1659,6 +2944,30 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     const base = filename.replace(/[^\w.\- ]+/g, "_").slice(0, 80) || "paper";
     return /\.(txt|md|csv|json)$/i.test(base) ? base : `${base}.txt`;
   }
+  function dispatchInput(el, text) {
+    try {
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }));
+    } catch {
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  }
+  function containsStart(el, text) {
+    if (!text) return true;
+    const probe = text.slice(0, Math.min(16, text.length));
+    const value = "value" in el ? String(el.value ?? "") : "";
+    return value.includes(probe) || (el.textContent ?? "").includes(probe);
+  }
+  function pasteText(el, text) {
+    try {
+      const transfer = new DataTransfer();
+      transfer.setData("text/plain", text);
+      const event = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer });
+      el.dispatchEvent(event);
+    } catch {
+      return false;
+    }
+    return containsStart(el, text);
+  }
   function writeComposer(el, text) {
     const tag = el.tagName;
     if (tag === "TEXTAREA" || tag === "INPUT") {
@@ -1666,7 +2975,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(control), "value")?.set;
       if (typeof setter === "function") setter.call(control, text);
       else control.value = text;
-      control.dispatchEvent(new Event("input", { bubbles: true }));
+      dispatchInput(control, text);
       control.dispatchEvent(new Event("change", { bubbles: true }));
       return;
     }
@@ -1684,27 +2993,132 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     } catch {
       inserted = false;
     }
-    const current = editable.textContent ?? "";
-    if (!inserted || text.length > 0 && !current.includes(text.slice(0, Math.min(16, text.length)))) {
+    if (!inserted || !containsStart(editable, text)) inserted = pasteText(editable, text);
+    if (!inserted || !containsStart(editable, text)) {
       editable.textContent = text;
-      try {
-        editable.dispatchEvent(new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }));
-      } catch {
-        editable.dispatchEvent(new Event("input", { bubbles: true }));
-      }
+      dispatchInput(editable, text);
     }
   }
   var clickLock = /* @__PURE__ */ new WeakMap();
-  function clickElement(el) {
+  function pressEnterSequence(el) {
     if (clickLock.has(el)) return false;
     clickLock.set(el, 1);
     queueMicrotask(() => {
       setTimeout(() => clickLock.delete(el), 0);
     });
-    const node = el;
-    if (typeof node.click === "function") node.click();
-    else el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    const init = {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true
+    };
+    el.dispatchEvent(new KeyboardEvent("keydown", init));
+    el.dispatchEvent(new KeyboardEvent("keypress", init));
+    el.dispatchEvent(new KeyboardEvent("keyup", init));
     return true;
+  }
+  function pointerClick(el) {
+    if (typeof el.focus === "function") el.focus();
+    const view = el.ownerDocument?.defaultView ?? void 0;
+    const common = { bubbles: true, cancelable: true, view };
+    try {
+      el.dispatchEvent(new PointerEvent("pointerdown", common));
+    } catch {
+    }
+    el.dispatchEvent(new MouseEvent("mousedown", common));
+    try {
+      el.dispatchEvent(new PointerEvent("pointerup", common));
+    } catch {
+    }
+    el.dispatchEvent(new MouseEvent("mouseup", common));
+    el.dispatchEvent(new MouseEvent("click", common));
+  }
+  function requestSubmitButton(button) {
+    const control = button;
+    const form = control.form;
+    if (!form || typeof form.requestSubmit !== "function") return false;
+    try {
+      form.requestSubmit(control);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  function composerText(el) {
+    if ("value" in el && typeof el.value === "string") return el.value;
+    return el.textContent ?? "";
+  }
+  function sendLanded(doc, composer, beforeAssistant, previousComposer) {
+    const now = composerText(composer).trim();
+    const placeholder = (composer.getAttribute("placeholder") ?? "").toLowerCase();
+    if (/ask, create images, or build anything/.test(placeholder) && now.length < 12) return true;
+    if (previousComposer.trim().length > 12 && now.length < previousComposer.trim().length * 0.25) return true;
+    const reply = assistantText(doc, [], composer);
+    if (reply && reply !== beforeAssistant) return true;
+    if (ackReply(doc, composer)) return true;
+    if (stopControlActive(doc, [])) return true;
+    const probe = previousComposer.trim().slice(0, 24);
+    if (probe.length > 8 && userTurnHas(doc, composer, probe)) return true;
+    return false;
+  }
+  function userTurnHas(doc, composer, probe) {
+    let nodes = [];
+    try {
+      nodes = queryAllDeep(doc, "div, p, span, article");
+    } catch {
+      return false;
+    }
+    return nodes.some((el) => {
+      if (el === composer || composer.contains(el) || el.contains(composer) || isIgnoredRegion(el)) return false;
+      const text = (el.textContent ?? "").trim();
+      return text.length < 8e3 && text.includes(probe);
+    });
+  }
+  var ACK_PATTERN = /\bRECEIVED(?:\s+(?:FILES|INSTRUCTIONS))?\s+\d+\b/i;
+  function ackLabel(text) {
+    const compact = text.replace(/\s+/g, " ").trim();
+    const match = compact.match(ACK_PATTERN);
+    if (!match?.[0]) return "";
+    if (compact.length > match[0].length + 30) return "";
+    return match[0].replace(/\s+/g, " ").toUpperCase();
+  }
+  function ackReply(root, composer) {
+    let nodes = [];
+    try {
+      nodes = queryAllDeep(root, "div, p, span, article");
+    } catch {
+      return "";
+    }
+    const hits = nodes.filter((el) => {
+      if (isIgnoredRegion(el) || composer && (el === composer || composer.contains(el) || el.contains(composer))) return false;
+      return Boolean(ackLabel(el.textContent ?? ""));
+    });
+    return ackLabel(hits[hits.length - 1]?.textContent ?? "");
+  }
+  function replyActionsVisible(root) {
+    let nodes = [];
+    try {
+      nodes = queryAllDeep(root, "button, [role='button']");
+    } catch {
+      return false;
+    }
+    return nodes.some((el) => {
+      if (isIgnoredRegion(el) || isHiddenControl(el)) return false;
+      return /\b(copy|regenerate|retry|rewrite)\b/i.test(buttonLabel(el));
+    });
+  }
+  function describeMessages(root, limit = 4) {
+    let nodes = [];
+    try {
+      nodes = queryAllDeep(root, "div, p, article");
+    } catch {
+      return "Messages: none.";
+    }
+    const lines = nodes.filter((el) => !isIgnoredRegion(el)).map((el) => (el.textContent ?? "").trim().replace(/\s+/g, " ")).filter((text) => text.length > 2 && text.length < 180).slice(-limit);
+    if (lines.length === 0) return "Messages: none.";
+    return `Messages: ${lines.join(" | ")}.`;
   }
   var ATTACHMENT_SELECTORS = [
     '[data-attachment-state="ready"]',
@@ -1714,29 +3128,57 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     '[aria-label*="Attached"]',
     '[aria-label*="Remove file"]'
   ];
+  function attachmentNames(files) {
+    const names = /* @__PURE__ */ new Set();
+    for (const file of files) {
+      const raw = file.filename.trim().toLowerCase();
+      const named = textFilename(file.filename).toLowerCase();
+      if (raw.length > 2) names.add(raw);
+      if (named.length > 2) names.add(named);
+      const stem = named.replace(/\.txt$/i, "");
+      if (stem.length > 2) names.add(stem);
+    }
+    return [...names];
+  }
+  function attachmentState(el) {
+    return `${el.getAttribute("data-attachment-state") ?? ""} ${el.getAttribute("data-state") ?? ""}`.toLowerCase();
+  }
+  function isPendingAttachment(el) {
+    return /\b(pending|uploading|processing)\b/.test(attachmentState(el));
+  }
   function attachmentReady(root, files, selectors = ATTACHMENT_SELECTORS) {
-    const names = files.map((file) => textFilename(file.filename).toLowerCase()).filter((name) => name.length > 0);
+    const names = attachmentNames(files);
     const seen = /* @__PURE__ */ new Set();
     const list = selectors.length > 0 ? selectors : ATTACHMENT_SELECTORS;
-    for (const selector of [...list, "[data-attachment-state]"]) {
+    const consider = (node) => {
+      if (seen.has(node) || isIgnoredRegion(node)) return false;
+      if (node.tagName === "INPUT" || node.tagName === "TEXTAREA" || node.tagName === "SCRIPT" || node.tagName === "STYLE") return false;
+      if (node.getAttribute("contenteditable") === "true" || node.getAttribute("role") === "textbox") return false;
+      seen.add(node);
+      if (isPendingAttachment(node)) return false;
+      const state = attachmentState(node);
+      if (/\b(ready|complete|uploaded|attached)\b/.test(state)) return true;
+      const label = (node.getAttribute("aria-label") ?? "").toLowerCase();
+      const text = (node.textContent ?? "").trim().toLowerCase();
+      const short = text.length > 0 && text.length < 180;
+      return names.some((name) => label.includes(name) || short && text.includes(name));
+    };
+    for (const selector of [...list, "[data-attachment-state]", "[class*='file']", "[class*='chip']", "[aria-label*='Remove']"]) {
       let nodes = [];
       try {
         nodes = queryAllDeep(root, selector);
       } catch {
         continue;
       }
-      for (const node of nodes) {
-        if (seen.has(node) || node.tagName === "INPUT" || node.tagName === "TEXTAREA" || node.tagName === "SCRIPT" || node.tagName === "STYLE") continue;
-        seen.add(node);
-        const state = `${node.getAttribute("data-attachment-state") ?? ""} ${node.getAttribute("data-state") ?? ""}`.toLowerCase();
-        const text = (node.textContent ?? "").toLowerCase();
-        const pending = /\b(pending|uploading|processing)\b/.test(state);
-        const ready = /\b(ready|complete|uploaded|attached)\b/.test(state);
-        if (ready) return true;
-        if (!pending && names.some((name) => text.includes(name))) return true;
-      }
+      if (nodes.some(consider)) return true;
     }
-    return false;
+    let all = [];
+    try {
+      all = queryAllDeep(root, "div, span, li, button, p");
+    } catch {
+      all = [];
+    }
+    return all.some(consider);
   }
   function attachTextFiles(input, files) {
     if (input.tagName !== "INPUT") return false;
@@ -1766,97 +3208,247 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
   function signedOut(provider) {
     return `${provider.label} is showing a sign-in page. Sign in on this tab, then click Run again in AIR. AIR does not see your password.`;
   }
-  function selectorMiss(provider) {
-    return `AIR could not find the message box on ${provider.label}. The page may still be loading, or the site changed its layout. Reload the tab and run again. The selectors for this site are in extension/adapters/${provider.id}.ts.`;
+  function selectorMiss(provider, diagnostic) {
+    const detail = diagnostic && diagnostic !== "none" ? ` Candidates: ${diagnostic}.` : " Candidates: none.";
+    return `AIR could not find the message box on ${provider.label}. The page may still be loading, or the site changed its layout. Reload the tab and run again.${detail} The selectors for this site are in extension/adapters/${provider.id}.ts.`;
   }
-  async function waitForReply(doc, provider, before, hooks) {
+  async function waitForComposer(doc, provider, hooks) {
+    const timeoutMs = hooks.composerTimeoutMs ?? 2e4;
+    const pollMs = hooks.pollMs ?? 200;
+    const start = Date.now();
+    let found = findComposer(doc, provider.selectors.composer);
+    while (!found && Date.now() - start <= timeoutMs) {
+      if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.");
+      await hooks.sleep(pollMs);
+      found = findComposer(doc, provider.selectors.composer);
+    }
+    return found;
+  }
+  function stepDiagnostic(doc) {
+    return `${describeButtons(doc)} ${describeCandidates(doc)}`;
+  }
+  function replyTimeoutReason(doc, composer) {
+    if (reviewJsonOnPage(doc, composer) || ackReply(doc, composer)) return "reply seen, JSON not parsed";
+    const visible = visibleReplyText(doc, composer).replace(/\s+/g, " ").trim();
+    if (visible.length > 40) return "reply seen, JSON not parsed";
+    return "no reply seen";
+  }
+  async function waitForReply(doc, provider, before, hooks, composer, beforeJson = "") {
     const pollMs = hooks.pollMs ?? 400;
     const stableMs = hooks.stableMs ?? 2e3;
     const timeoutMs = hooks.stepTimeoutMs ?? 4 * 60 * 1e3;
+    const startLimit = hooks.replyStartTimeoutMs ?? 2e4;
     const start = Date.now();
     let last = before;
     let stableFor = 0;
+    let lastJson = "";
+    let jsonStable = 0;
+    let lastAck = "";
+    let ackStable = 0;
+    let started = false;
     while (Date.now() - start < timeoutMs) {
       if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.");
-      const text = assistantText(doc, provider.selectors.assistant);
-      const stopping = provider.selectors.stop.some((selector) => {
-        try {
-          const found = queryFirst(doc, [selector]);
-          return Boolean(found && isActiveStop(found));
-        } catch {
-          return false;
+      const json = reviewJsonOnPage(doc, composer);
+      const freshJson = json && json !== beforeJson ? json : "";
+      const ack = ackReply(doc, composer);
+      const assistant = assistantText(doc, provider.selectors.assistant, composer);
+      const stopping = stopControlActive(doc, provider.selectors.stop);
+      if (freshJson || ack || assistant && assistant !== before) started = true;
+      if (freshJson) {
+        if (freshJson === lastJson && jsonStable >= stableMs) return freshJson;
+        if (freshJson !== lastJson) {
+          lastJson = freshJson;
+          jsonStable = 0;
+        } else jsonStable += pollMs;
+      } else {
+        lastJson = "";
+        jsonStable = 0;
+      }
+      if (ack && !freshJson) {
+        if (ack === lastAck && ackStable >= stableMs) return ack;
+        if (ack !== lastAck) {
+          lastAck = ack;
+          ackStable = 0;
+        } else ackStable += pollMs;
+      } else if (!ack) {
+        lastAck = "";
+        ackStable = 0;
+      }
+      if (!started && !stopping && Date.now() - start >= startLimit) {
+        const send = findSubmit(doc, provider.selectors.submit, composer);
+        if (send) {
+          throw new TurnError(
+            "send-timeout",
+            `Send step on ${provider.label} did not start a reply. The Send button was still enabled. ${stepDiagnostic(doc)}`
+          );
         }
-      });
-      if (text && text !== before && text === last && !stopping && stableFor >= stableMs) return text;
-      if (text !== last) {
-        last = text;
+      }
+      const settled = Boolean(assistant) && assistant !== before && assistant === last && !stopping && stableFor >= stableMs;
+      if (!freshJson && !ack && (settled || started && !stopping && replyActionsVisible(doc) && assistant && assistant !== before)) return assistant;
+      if (assistant !== last) {
+        last = assistant;
         stableFor = 0;
       } else {
         stableFor += pollMs;
       }
       await hooks.sleep(pollMs);
     }
-    throw new TurnError("timeout", `${provider.label} did not finish a reply in time. The tab stays open so you can read what is there.`);
+    throw new TurnError("timeout", `Reply step on ${provider.label} did not finish in time. ${replyTimeoutReason(doc, composer)}.`);
+  }
+  async function waitForEnabledSubmit(doc, provider, composer, hooks) {
+    const timeoutMs = hooks.submitReadyMs ?? 5e3;
+    const stableMs = hooks.submitStableMs ?? 300;
+    const pollMs = hooks.pollMs ?? 200;
+    const start = Date.now();
+    let last = null;
+    let stableFor = 0;
+    while (Date.now() - start <= timeoutMs) {
+      if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.");
+      const button = findSubmit(doc, provider.selectors.submit, composer);
+      if (button && button === last && stableFor >= stableMs) return button;
+      if (button && button === last) stableFor += pollMs;
+      else {
+        last = button;
+        stableFor = button ? pollMs : 0;
+      }
+      if (button && stableMs <= 0) return button;
+      await hooks.sleep(pollMs);
+    }
+    return last;
+  }
+  async function verifySend(doc, composer, beforeAssistant, previousComposer, hooks) {
+    const timeoutMs = hooks.sendVerifyMs ?? 3e3;
+    const pollMs = hooks.pollMs ?? 200;
+    const start = Date.now();
+    while (Date.now() - start <= timeoutMs) {
+      if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.");
+      if (sendLanded(doc, composer, beforeAssistant, previousComposer)) return true;
+      await hooks.sleep(pollMs);
+    }
+    return sendLanded(doc, composer, beforeAssistant, previousComposer);
+  }
+  async function commitSend(doc, provider, composer, beforeAssistant, hooks) {
+    const previousComposer = composerText(composer);
+    const button = await waitForEnabledSubmit(doc, provider, composer, hooks);
+    let primary = "none";
+    if (button) {
+      primary = requestSubmitButton(button) ? "requestSubmit" : "pointer";
+      if (primary === "pointer") pointerClick(button);
+      hooks.onProgress?.(`Send step on ${provider.label}. Tried ${primary}.`);
+      if (await verifySend(doc, composer, beforeAssistant, previousComposer, hooks)) return primary;
+      if (sendLanded(doc, composer, beforeAssistant, previousComposer)) return primary;
+    }
+    if (sendLanded(doc, composer, beforeAssistant, previousComposer)) return primary;
+    const entered = pressEnterSequence(composer);
+    hooks.onProgress?.(`Send step on ${provider.label}. Tried Enter after ${primary} did not send.`);
+    if (!entered) return primary;
+    if (await verifySend(doc, composer, beforeAssistant, previousComposer, hooks)) return "enter";
+    const still = findSubmit(doc, provider.selectors.submit, composer);
+    throw new TurnError(
+      "send-timeout",
+      `Send step on ${provider.label} did not start a reply. Tried ${primary}, then Enter. ${still ? "The Send button was still enabled." : "Send was not enabled."} ${stepDiagnostic(doc)} ${describeMessages(doc)}`
+    );
   }
   async function waitForAttachment(doc, provider, files, hooks) {
     const timeoutMs = hooks.attachmentTimeoutMs ?? 2e4;
+    const chipWindow = hooks.attachmentChipMs ?? 3e3;
     const pollMs = hooks.pollMs ?? 200;
     const selectors = provider.selectors.attachment?.length ? provider.selectors.attachment : ATTACHMENT_SELECTORS;
     const start = Date.now();
     while (Date.now() - start <= timeoutMs) {
       if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.");
       if (attachmentReady(doc, files, selectors)) return;
+      if (Date.now() - start >= chipWindow) {
+        const composer = findComposer(doc, provider.selectors.composer);
+        const send = composer ? findSubmit(doc, provider.selectors.submit, composer) : null;
+        if (send) return;
+      }
       await hooks.sleep(pollMs);
     }
     throw new TurnError(
       "upload-timeout",
-      `${provider.label} did not finish accepting the file. The attachment never showed as ready. Wait until the file chip appears, then run again.`
+      `Attachment step on ${provider.label} timed out. The file chip never showed as ready, and Send was not enabled. ${stepDiagnostic(doc)}`
     );
   }
   async function sendStep(doc, provider, step, hooks) {
     if (step.kind === "upload") {
+      hooks.onProgress?.(`Attachment step on ${provider.label}. Waiting for the file chip, or for Send to become enabled.`);
       const input = queryFirst(doc, provider.selectors.fileInput);
       const attached = input ? attachTextFiles(input, step.files) : false;
       if (!attached) throw new TurnError("upload-miss", "file upload was not accepted");
       await waitForAttachment(doc, provider, step.files, hooks);
     }
-    const composer = queryFirst(doc, provider.selectors.composer);
-    if (!composer) throw new TurnError("selector-miss", selectorMiss(provider));
-    const before = assistantText(doc, provider.selectors.assistant);
+    const composer = findComposer(doc, provider.selectors.composer);
+    if (!composer) throw new TurnError("selector-miss", selectorMiss(provider, describeCandidates(doc)));
+    const before = assistantText(doc, provider.selectors.assistant, composer);
+    const beforeJson = reviewJsonOnPage(doc, composer);
     writeComposer(composer, step.text);
-    const submit = queryFirst(doc, provider.selectors.submit);
-    if (!submit) throw new TurnError("selector-miss", `AIR could not find the send button on ${provider.label}. The site's page may have changed.`);
-    const clicked = clickElement(submit);
-    if (!clicked) throw new TurnError("double-click", `Send on ${provider.label} was already clicked for this message. AIR did not click again, so a Stop button is not pressed.`);
-    return waitForReply(doc, provider, before, hooks);
+    const method = await commitSend(doc, provider, composer, before, hooks);
+    hooks.onProgress?.(`Send step on ${provider.label}. Method that sent: ${method}.`);
+    return waitForReply(doc, provider, before, hooks, composer, beforeJson);
   }
   async function sendFollowUp(doc, provider, text, hooks) {
     const step = { kind: "paste", text, files: [], index: 1, total: 1, final: true };
     return sendStep(doc, provider, step, hooks);
   }
+  async function pageIsLive(url, hooks) {
+    try {
+      const loaded = hooks.loadTextPage ? await hooks.loadTextPage(url) : await fetch(url).then(async (response) => ({ status: response.status, body: await response.text() }));
+      return textPageHasPaper(loaded.status, loaded.body);
+    } catch {
+      return false;
+    }
+  }
   async function runTurn(doc, provider, packet, hooks) {
     try {
-      const state = diagnose(doc, provider);
-      if (state === "signed-out") return { ok: false, code: "signed-out", message: signedOut(provider) };
-      if (state === "selector-miss") return { ok: false, code: "selector-miss", message: selectorMiss(provider) };
+      const composer = await waitForComposer(doc, provider, hooks);
+      if (!composer) {
+        if (queryFirst(doc, provider.selectors.login)) return { ok: false, code: "signed-out", message: signedOut(provider) };
+        return { ok: false, code: "selector-miss", message: selectorMiss(provider, describeCandidates(doc)) };
+      }
       let providerForPlan = provider;
-      let planned = planDelivery(packet, providerForPlan);
+      let activePacket = packet;
+      let notice;
+      if (activePacket.textUrl) {
+        const live = await pageIsLive(activePacket.textUrl, hooks);
+        if (!live) {
+          hooks.onProgress?.("The public text page is not available. Sending the paper in the chat instead.");
+          const { textUrl: dropped, ...rest } = activePacket;
+          void dropped;
+          activePacket = rest;
+        }
+      }
+      let planned = planDelivery(activePacket, providerForPlan);
       if (planned.warning) hooks.onProgress?.(planned.warning);
       let steps = planned.steps;
       let fellBack = false;
+      let linkFellBack = false;
       for (let index = 0; index < steps.length; index += 1) {
         const step = steps[index];
         if (!step) continue;
         hooks.onProgress?.(`Sending part ${step.index} of ${step.total} on ${provider.label}. Stay on this tab.`);
         try {
           const reply = await sendStep(doc, provider, step, hooks);
-          if (step.final) return { ok: true, text: reply, steps: steps.length };
+          if (step.link && !linkFellBack && (couldNotReadPaper(reply) || textPageUntrusted(reply))) {
+            linkFellBack = true;
+            notice = TEXT_PAGE_NOTE;
+            hooks.onProgress?.(`${TEXT_PAGE_NOTE}. Sending the paper in the chat instead.`);
+            const { textUrl: dropped, ...rest } = activePacket;
+            void dropped;
+            activePacket = rest;
+            planned = planDelivery(activePacket, providerForPlan);
+            steps = planned.steps;
+            if (planned.warning) hooks.onProgress?.(planned.warning);
+            index = -1;
+            continue;
+          }
+          if (step.final) return { ok: true, text: reply, steps: steps.length, ...notice ? { notice } : {} };
         } catch (error) {
           if (error instanceof TurnError && error.code === "upload-miss" && !fellBack) {
             fellBack = true;
             hooks.onProgress?.(`${provider.label} did not accept the file. Pasting the paper in parts instead.`);
             providerForPlan = { ...provider, fileUpload: false };
-            planned = planDelivery(packet, providerForPlan);
+            planned = planDelivery(activePacket, providerForPlan);
             steps = planned.steps;
             if (planned.warning) hooks.onProgress?.(planned.warning);
             index = -1;
@@ -1871,6 +3463,67 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       const message = error instanceof Error ? error.message : "The web chat run failed.";
       return { ok: false, code: "error", message };
     }
+  }
+
+  // src/services/webChat/chatModel.ts
+  var UNKNOWN_CHAT_MODEL = "unknown (site default)";
+  var GROK_MODES = ["heavy", "expert", "auto"];
+  function labelOf(el) {
+    return `${el.getAttribute("aria-label") ?? ""} ${(el.textContent ?? "").replace(/\s+/g, " ")}`.trim();
+  }
+  function controls(root) {
+    let nodes = [];
+    try {
+      nodes = queryAllDeep(root, "button, [role='button'], [data-testid*='model'], [aria-haspopup='listbox']");
+    } catch {
+      return [];
+    }
+    return nodes.filter((el) => !isIgnoredRegion(el) && !isHiddenControl(el));
+  }
+  function titled(label) {
+    return label.slice(0, 80);
+  }
+  function grokMode(label) {
+    const lower = label.toLowerCase();
+    if (/add files|voice|send|submit|stop|upload/.test(lower)) return null;
+    const mode = GROK_MODES.find((word) => new RegExp(`\\b${word}\\b`, "i").test(label));
+    if (!mode) return null;
+    if (!/model/.test(lower) && !/^(auto|expert|heavy)$/i.test(label.trim())) return null;
+    return mode.charAt(0).toUpperCase() + mode.slice(1);
+  }
+  function geminiName(label) {
+    const match = label.match(/gemini(?:\s+\d+(?:\.\d+)?)?(?:\s+(?:pro|flash|thinking|nano|ultra))+/i) || label.match(/\b\d+(?:\.\d+)?\s+(?:pro|flash|thinking)\b/i);
+    if (!match) return null;
+    if (/send|upload|stop|attach/i.test(label)) return null;
+    return titled(match[0].replace(/\s+/g, " ").trim());
+  }
+  function chatgptName(label) {
+    if (/send|upload|stop|attach|voice/i.test(label)) return null;
+    const match = label.match(/\b(?:gpt[-\s]?\d+(?:\.\d+)?[a-z]?|chatgpt\s+\w[\w.\-]*|o[134](?:-[\w.]+)?|4o(?:-[\w.]+)?)\b/i);
+    if (!match) return null;
+    return titled(match[0].replace(/\s+/g, " ").trim());
+  }
+  function detectChatModel(root, providerId) {
+    const buttons = controls(root);
+    if (providerId === "grok" || providerId === "grok-x") {
+      for (const button of buttons) {
+        const mode = grokMode(labelOf(button));
+        if (mode) return mode;
+      }
+    }
+    if (providerId === "gemini") {
+      for (const button of buttons) {
+        const name = geminiName(labelOf(button));
+        if (name) return name;
+      }
+    }
+    if (providerId === "chatgpt") {
+      for (const button of buttons) {
+        const name = chatgptName(labelOf(button));
+        if (name) return name;
+      }
+    }
+    return UNKNOWN_CHAT_MODEL;
   }
 
   // extension/runner.ts
@@ -1909,6 +3562,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     aborted = false;
     showBanner(provider.label);
     sendResponse({ ok: true, started: true });
+    const observedModel = () => detectChatModel(document, provider.id);
     const hooks = {
       aborted: () => aborted,
       onProgress: (text) => report({ type: "air-web-chat-progress", requestId: message.requestId, message: text }),
@@ -1919,15 +3573,25 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
         report({ type: "air-web-chat-done", requestId: message.requestId, ok: false, message: result.message, code: result.code });
         return;
       }
-      const rounds = Math.min(3, Math.max(0, Math.round(Number(message.defenceRounds) || 0)));
       const criteria = readingCriteria(officialCriteria, message.packet.criterionProfile, false);
+      const settled = await settleChatJson(
+        result.text,
+        (prompt) => sendFollowUp(document, provider, prompt, hooks),
+        (note) => hooks.onProgress?.(note),
+        (text) => {
+          const accepted2 = acceptWebChatResult(text, criteria);
+          return accepted2.ok ? { ok: true } : { ok: false, errors: accepted2.errors };
+        }
+      );
+      const rounds = Math.min(3, Math.max(0, Math.round(Number(message.defenceRounds) || 0)));
+      const notice = result.notice;
       if (!rounds) {
-        report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: result.text });
+        report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: settled.text, chatModel: observedModel(), notice });
         return;
       }
-      const accepted = acceptWebChatResult(result.text, criteria);
+      const accepted = acceptWebChatResult(settled.text, criteria);
       if (!accepted.ok) {
-        report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: result.text, defendedText: null, transcript: [], stopped: false });
+        report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: settled.text, defendedText: null, transcript: [], stopped: false, chatModel: observedModel(), notice });
         return;
       }
       const paperText = message.packet.files.map((file) => file.text).join("\n\n");
@@ -1945,18 +3609,22 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
           type: "air-web-chat-done",
           requestId: message.requestId,
           ok: true,
-          text: result.text,
+          text: settled.text,
           defendedText: defence.defendedText,
           transcript: defence.transcript,
-          stopped: defence.stopped
+          stopped: defence.stopped,
+          chatModel: observedModel(),
+          notice
         });
       } catch (error) {
         report({
           type: "air-web-chat-done",
           requestId: message.requestId,
           ok: true,
-          text: result.text,
-          message: error instanceof Error ? error.message : "The defence stopped early."
+          text: settled.text,
+          notice,
+          message: error instanceof Error ? error.message : "The defence stopped early.",
+          chatModel: observedModel()
         });
       }
     });

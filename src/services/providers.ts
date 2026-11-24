@@ -22,9 +22,115 @@ export function resolvedKey(profile: AssessorProfile, settings: ProviderSettings
   return settings.keys[keySlot(profile)]?.trim() || settings.keys[profile.provider]?.trim() || ""
 }
 
-export function providerErrorMessage(status: number, body: string): string {
-  const cleaned = body.replace(/sk-[a-zA-Z0-9_-]{8,}/g, "[redacted]").replace(/\s+/g, " ").trim().slice(0, 360)
+/** Gemini’s free tier is about 20 requests a day, and a failed call still counts. */
+export const FREE_DAILY_REQUEST_CAP = 20
+
+export const PROVIDER_ALTERNATIVES = "You can try another free model or provider, OpenRouter’s free models, or the web-chat extension."
+
+/** Busy/overloaded responses may be retried. Daily quota is not, because another call still counts. */
+export const MAX_BUSY_RETRIES = 2
+export const MAX_RATE_RETRIES = 1
+
+export function cleanedProviderBody(body: string): string {
+  return body.replace(/sk-[a-zA-Z0-9_-]{8,}/g, "[redacted]").replace(/\s+/g, " ").trim().slice(0, 280)
+}
+
+export function isDailyQuota(status: number, body: string): boolean {
+  if (status !== 429) return false
+  return /per day|daily|quota|resource_exhausted|free[-_ ]?tier|exceeded your current quota|requestsperday|generate_content_free_tier/i.test(body)
+}
+
+export function isModelBusy(status: number, body: string): boolean {
+  if (isDailyQuota(status, body)) return false
+  if (status === 503) return true
+  return /high demand|overloaded|model is busy|try again later/i.test(body) && (status === 429 || status === 500 || status === 502 || status === 503)
+}
+
+function delayUnitMs(unit: string): number {
+  const name = unit.toLowerCase()
+  if (name.startsWith("hour")) return 3_600_000
+  if (name.startsWith("minute")) return 60_000
+  if (name.startsWith("second") || name === "s") return 1_000
+  return 1_000
+}
+
+/** Milliseconds until the provider asked us to retry, from a header or a JSON body. */
+export function providerDelayMs(retryAfter: string | null, body: string, now = Date.now()): number | null {
+  const header = retryAfter?.trim() ?? ""
+  if (header) {
+    const seconds = Number(header)
+    if (Number.isFinite(seconds)) return Math.max(0, seconds * 1_000)
+    const dated = Date.parse(header)
+    if (Number.isFinite(dated)) return Math.max(0, dated - now)
+  }
+  const retryDelay = body.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/i)
+  if (retryDelay?.[1]) return Math.round(Number(retryDelay[1]) * 1_000)
+  const prose = body.match(/retry in\s+(\d+(?:\.\d+)?)\s*(hours?|minutes?|seconds?|s)\b/i)
+  if (prose?.[1] && prose[2]) return Math.round(Number(prose[1]) * delayUnitMs(prose[2]))
+  return null
+}
+
+export function quotaResetPhrase(retryAfter: string | null, body: string, now = Date.now()): string {
+  const ms = providerDelayMs(retryAfter, body, now)
+  if (ms == null) return "resets when the provider’s daily window ends"
+  if (ms >= 3_600_000) {
+    const hours = Math.max(1, Math.round(ms / 3_600_000))
+    return `resets in about ${hours} hour${hours === 1 ? "" : "s"}`
+  }
+  if (ms >= 60_000) {
+    const minutes = Math.max(1, Math.round(ms / 60_000))
+    return `resets in about ${minutes} minute${minutes === 1 ? "" : "s"}`
+  }
+  const seconds = Math.max(1, Math.round(ms / 1_000))
+  return `resets in about ${seconds} second${seconds === 1 ? "" : "s"}`
+}
+
+export function providerRetryDelayMs(attempt: number, retryAfterMs: number | null, random = Math.random()): number {
+  const exponential = Math.min(8_000, 400 * 2 ** Math.max(0, attempt))
+  const jitter = Math.floor(Math.min(1, Math.max(0, random)) * 250)
+  if (retryAfterMs == null) return exponential + jitter
+  return Math.max(retryAfterMs, exponential) + jitter
+}
+
+export interface ProviderFailurePlan {
+  retry: boolean
+  delayMs: number
+  message: string
+}
+
+export function planProviderFailure(input: {
+  status: number
+  body: string
+  retryAfter?: string | null
+  attempt: number
+  random?: number
+  now?: number
+}): ProviderFailurePlan {
+  const retryAfter = input.retryAfter ?? null
+  const message = providerErrorMessage(input.status, input.body, retryAfter, input.now)
+  if (isDailyQuota(input.status, input.body)) return { retry: false, delayMs: 0, message }
+  const delayMsHeader = providerDelayMs(retryAfter, input.body, input.now)
+  if (delayMsHeader != null && delayMsHeader > 30_000) return { retry: false, delayMs: 0, message }
+  const busy = isModelBusy(input.status, input.body)
+  const rate = input.status === 429
+  const limit = busy ? MAX_BUSY_RETRIES : rate ? MAX_RATE_RETRIES : 0
+  if (limit === 0 || input.attempt >= limit) return { retry: false, delayMs: 0, message }
+  return {
+    retry: true,
+    delayMs: providerRetryDelayMs(input.attempt, delayMsHeader, input.random),
+    message,
+  }
+}
+
+export function providerErrorMessage(status: number, body: string, retryAfter?: string | null, now = Date.now()): string {
+  const cleaned = cleanedProviderBody(body)
   const lower = cleaned.toLowerCase()
+  if (isDailyQuota(status, body)) {
+    return `The daily free quota is used up (${quotaResetPhrase(retryAfter ?? null, body, now)}). Failed calls count toward that cap. ${PROVIDER_ALTERNATIVES} ${cleaned}`.trim()
+  }
+  if (isModelBusy(status, body)) {
+    return `The model is busy with high demand. Try again later. ${PROVIDER_ALTERNATIVES} ${cleaned}`.trim()
+  }
   const credits = /credit|billing|spending|payment|insufficient|balance|quota exceeded|out of credits/.test(lower)
   const rate = /rate limit|too many requests|resource_exhausted|daily|per day|retry/.test(lower)
   if (status === 429) return rate ? `The provider hit a rate limit. ${cleaned}` : `The provider rate-limited this request. ${cleaned}`
@@ -39,24 +145,55 @@ export function providerErrorMessage(status: number, body: string): string {
   return `The provider returned ${status}. ${cleaned}`
 }
 
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(finish, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(new DOMException("Aborted", "AbortError"))
+    }
+    function finish() {
+      signal?.removeEventListener("abort", onAbort)
+      resolve()
+    }
+    if (signal?.aborted) {
+      onAbort()
+      return
+    }
+    signal?.addEventListener("abort", onAbort, { once: true })
+  })
+}
+
 async function postJson(url: string, headers: Record<string, string>, body: unknown, signal?: AbortSignal): Promise<string> {
-  let response: Response
-  try {
-    response = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      signal,
+  let attempt = 0
+  for (;;) {
+    let response: Response
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal,
+      })
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") throw error
+      throw new Error(
+        "The browser could not complete this call. If the provider blocks cross-origin requests, point the OpenAI-compatible base URL at a host that allows them (OpenRouter and xAI do).",
+      )
+    }
+    const text = await response.text()
+    if (response.ok) return text
+    const plan = planProviderFailure({
+      status: response.status,
+      body: text,
+      retryAfter: response.headers.get("retry-after"),
+      attempt,
     })
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") throw error
-    throw new Error(
-      "The browser could not complete this call. If the provider blocks cross-origin requests, point the OpenAI-compatible base URL at a host that allows them (OpenRouter and xAI do).",
-    )
+    if (!plan.retry) throw new Error(plan.message)
+    attempt += 1
+    await sleep(plan.delayMs, signal)
   }
-  const text = await response.text()
-  if (!response.ok) throw new Error(providerErrorMessage(response.status, text))
-  return text
 }
 
 export const OUTPUT_TOKEN_LIMIT = 16384
