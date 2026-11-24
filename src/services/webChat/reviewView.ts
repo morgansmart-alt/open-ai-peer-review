@@ -37,6 +37,12 @@ export interface PublicationDraft {
   url: string
 }
 
+export interface StepLogEntry {
+  at: string
+  step: string
+  status: string
+}
+
 export interface ReviewModel {
   showOnboarding: boolean
   providerId: string
@@ -50,6 +56,7 @@ export interface ReviewModel {
   status: string
   error: string
   busy: boolean
+  stepLog?: StepLogEntry[]
   result: ReviewCard | null
   history: HistoryItem[]
 }
@@ -224,6 +231,13 @@ export function renderReviewApp(root: HTMLElement, model: ReviewModel, actions: 
     stop.addEventListener("click", () => actions.onStop())
   }
 
+  if (model.stepLog && model.stepLog.length > 0) {
+    const log = el(form, "ol", undefined, "note")
+    log.id = "step-log"
+    for (const entry of model.stepLog) {
+      el(log, "li", `${entry.at} · ${entry.step} · ${entry.status}`)
+    }
+  }
   if (model.status) {
     const status = el(form, "p", model.status, "status")
     status.id = "status"

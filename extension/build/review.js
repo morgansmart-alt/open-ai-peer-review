@@ -3047,6 +3047,13 @@ ${output}
       stop.id = "stop";
       stop.addEventListener("click", () => actions.onStop());
     }
+    if (model.stepLog && model.stepLog.length > 0) {
+      const log = el(form, "ol", void 0, "note");
+      log.id = "step-log";
+      for (const entry of model.stepLog) {
+        el(log, "li", `${entry.at} \xB7 ${entry.step} \xB7 ${entry.status}`);
+      }
+    }
     if (model.status) {
       const status2 = el(form, "p", model.status, "status");
       status2.id = "status";
@@ -3622,9 +3629,14 @@ ${JSON.stringify(report)}`),
   var status = "";
   var error = "";
   var busy = false;
+  var stepLog = [];
   var reviews = [];
   var requestId = "";
   var pendingPaper = null;
+  function rememberStep(step, stepStatus) {
+    const at = (/* @__PURE__ */ new Date()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    return [...stepLog, { at, step, status: stepStatus }].slice(-20);
+  }
   function storageGet(key) {
     return new Promise((resolve) => {
       chrome.storage.local.get(key, (data) => resolve(data?.[key]));
@@ -3669,6 +3681,7 @@ ${JSON.stringify(report)}`),
         status,
         error,
         busy,
+        stepLog,
         result: latest ? resultCard(latest) : null,
         history: reviews.map(historyItem)
       },
@@ -3707,9 +3720,12 @@ ${JSON.stringify(report)}`),
           paint();
         },
         onStop() {
-          void send({ type: "air-web-chat-cancel", requestId });
-          status = "Stopping. The chat tab stays open.";
+          busy = false;
+          error = "";
+          status = "Stopped. The chat tab stays open.";
+          stepLog = rememberStep("Stop", "idle");
           paint();
+          void send({ type: "air-web-chat-cancel", requestId });
         },
         onReview() {
           void run();
@@ -3807,7 +3823,9 @@ ${JSON.stringify(report)}`),
     if (!provider) return;
     busy = true;
     error = "";
+    stepLog = [];
     status = "Reading the paper\u2026";
+    stepLog = rememberStep("Review", "reading");
     paint();
     try {
       const paper = file ? await readPaper(file) : await paperFromPublication(publication);
@@ -3839,14 +3857,23 @@ ${JSON.stringify(report)}`),
   chrome.runtime.onMessage.addListener((message) => {
     if (!message || message.source !== EXTENSION_SOURCE || message.requestId !== requestId) return;
     if (message.type === "air-web-chat-progress" && message.message) {
+      if (!busy) return;
+      stepLog = rememberStep(message.step || "Review", message.status || "update");
       status = message.message;
       paint();
       return;
     }
     if (message.type === "air-web-chat-error") {
       busy = false;
-      status = "";
-      error = message.message || "The chat did not finish.";
+      const stopped = typeof message.message === "string" && message.message.startsWith("Stopped.");
+      if (stopped) {
+        error = "";
+        status = message.message || "Stopped. The chat tab stays open.";
+        stepLog = rememberStep("Stop", "idle");
+      } else {
+        status = "";
+        error = message.message || "The chat did not finish.";
+      }
       paint();
       return;
     }

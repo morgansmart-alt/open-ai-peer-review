@@ -81,7 +81,7 @@ export async function runDefenceLoop(options: {
   critiques: Critique[]
   paperText: string
   includeExcerpt?: boolean
-  send: (prompt: string, label?: string) => Promise<string>
+  send: (prompt: string, label?: string, expect?: "json" | "text") => Promise<string>
   aborted: () => boolean
   pause?: () => Promise<void>
   onProgress?: (message: string) => void
@@ -95,7 +95,7 @@ export async function runDefenceLoop(options: {
     options.onProgress?.(`Defence round ${round} of ${rounds}. Stay on the chat tab.`)
     const prompt = rebuttalPrompt({ round, rounds, critiques: options.critiques, paperText: options.paperText, includeExcerpt })
     transcript.push({ round, kind: "rebuttal", text: prompt })
-    const reply = await options.send(prompt, `defence round ${round} of ${rounds}`)
+    const reply = await options.send(prompt, `defence round ${round} of ${rounds}`, "text")
     if (options.aborted()) return { transcript, defendedText: null, stopped: true }
     transcript.push({ round, kind: "reply", text: reply })
     await pause()
@@ -104,7 +104,7 @@ export async function runDefenceLoop(options: {
   options.onProgress?.("Asking for the score after author defence.")
   const prompt = rescorePrompt()
   transcript.push({ round: rounds, kind: "rescore", text: prompt })
-  const defendedText = await options.send(prompt, "score after author defence")
+  const defendedText = await options.send(prompt, "score after author defence", "json")
   if (options.aborted()) return { transcript, defendedText: null, stopped: true }
   transcript.push({ round: rounds, kind: "rescore-reply", text: defendedText })
   return { transcript, defendedText, stopped: false }

@@ -17,11 +17,13 @@ export interface ProviderEvent {
   stopped?: boolean
   chatModel?: string
   notice?: string
+  step?: string
+  status?: string
 }
 
 export type RelayDecision =
   | { kind: "ignore" }
-  | { kind: "progress"; requestId: string; message: string; airTabId: number }
+  | { kind: "progress"; requestId: string; message: string; airTabId: number; step: string; status: string }
   | { kind: "result"; requestId: string; airTabId: number; text: string; defendedText: string | null; transcript: unknown; stopped: boolean; chatModel: string; notice: string }
   | { kind: "error"; requestId: string; airTabId: number; message: string }
 
@@ -39,7 +41,14 @@ export function airTabForRequest(sender: { tab?: { id?: number }; url?: string }
 export function relayFromProvider(job: RelayJob | null, senderTabId: number | undefined, message: ProviderEvent): RelayDecision {
   if (!job || senderTabId == null || senderTabId !== job.providerTabId || message.requestId !== job.requestId) return { kind: "ignore" }
   if (message.type === "air-web-chat-progress") {
-    return { kind: "progress", requestId: job.requestId, message: typeof message.message === "string" ? message.message : "", airTabId: job.airTabId }
+    return {
+      kind: "progress",
+      requestId: job.requestId,
+      message: typeof message.message === "string" ? message.message : "",
+      airTabId: job.airTabId,
+      step: typeof message.step === "string" && message.step.trim() ? message.step.trim() : "Review",
+      status: typeof message.status === "string" && message.status.trim() ? message.status.trim() : "update",
+    }
   }
   if (message.type === "air-web-chat-done") {
     if (message.ok && typeof message.text === "string" && message.text) {
@@ -62,7 +71,15 @@ export function relayFromProvider(job: RelayJob | null, senderTabId: number | un
 
 export function extensionEnvelope(decision: Exclude<RelayDecision, { kind: "ignore" }>): Record<string, unknown> {
   if (decision.kind === "progress") {
-    return { source: EXTENSION_SOURCE, version: PROTOCOL_VERSION, type: "air-web-chat-progress", requestId: decision.requestId, message: decision.message }
+    return {
+      source: EXTENSION_SOURCE,
+      version: PROTOCOL_VERSION,
+      type: "air-web-chat-progress",
+      requestId: decision.requestId,
+      message: decision.message,
+      step: decision.step,
+      status: decision.status,
+    }
   }
   if (decision.kind === "result") {
     return {

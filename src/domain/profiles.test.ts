@@ -2,7 +2,7 @@ import previousMigration from "../../supabase/migrations/20261123120000_fluid_ve
 import nextMigration from "../../supabase/migrations/20261124120000_comment_rounds.sql?raw"
 import profileMigration from "../../supabase/migrations/20261124150000_recheck_profile_and_comment_cap.sql?raw"
 import { describe, expect, it } from "vitest"
-import { recommendationFor, weightedMean } from "./criteria.ts"
+import { recommendationFor, weightLabel, weightedMean } from "./criteria.ts"
 import { officialCriteria } from "./officialCriteria.ts"
 import {
   applyCriterionProfile,
@@ -197,6 +197,12 @@ describe("global goals bonus", () => {
     expect(criteriaForReview(stored).criteria.some((criterion) => criterion.id === "global-goals")).toBe(true)
     expect(weightedMean(stored.report.scores, criteriaForReview(stored))).toBe(80)
     expect(PROFILE_RANKING_NOTE).toMatch(/left out of that mean/)
+    const goalCriterion = officialCriteria.criteria.find((criterion) => criterion.id === "global-goals")
+    const impact = officialCriteria.criteria.find((criterion) => criterion.id === "impact")
+    expect(weightLabel(goalCriterion ?? { id: "global-goals", name: "Global goals alignment", weight: 1.1 })).toBe(
+      "Global goals alignment · bonus, not counted in the overall",
+    )
+    expect(weightLabel(impact ?? { id: "impact", name: "Impact", weight: 1.4 })).toContain("weight 1.4")
   })
 })
 

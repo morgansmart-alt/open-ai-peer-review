@@ -18,11 +18,11 @@ export interface DeliveryPlan {
   warning: string | null
 }
 
-/** Split on a paragraph or sentence when one is near the cut, and keep every character of content. */
-export function splitText(text: string, size: number): string[] {
+/** Split on a paragraph or sentence when one is near the cut. `floor` is the smallest piece, except the tail. */
+export function splitText(text: string, size: number, floor = 500): string[] {
   const clean = text.replace(/\r\n/g, "\n")
   if (!clean.trim()) return []
-  const limit = Math.max(500, size)
+  const limit = Math.max(floor, size)
   if (clean.length <= limit) return [clean]
   const parts: string[] = []
   let cursor = 0

@@ -442,6 +442,18 @@ describe("extension panel", () => {
     expect(link.value).toBe("h")
     ;(document.getElementById("review") as HTMLButtonElement).click()
     expect(reviewed).toBe(true)
+    renderReviewApp(
+      app,
+      model({
+        stepLog: [
+          { at: "5:21:03 PM", step: "defence round 1 of 2", status: "waiting" },
+          { at: "5:21:04 PM", step: "Stop", status: "idle" },
+        ],
+      }),
+      actions(),
+    )
+    expect(app.querySelector("#step-log")?.textContent).toContain("5:21:03 PM · defence round 1 of 2 · waiting")
+    expect(app.querySelector("#step-log")?.textContent).toContain("5:21:04 PM · Stop · idle")
 
     const packet = packetForLocalPaper({
       requestId: "web-local",

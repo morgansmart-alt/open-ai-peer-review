@@ -2,7 +2,7 @@ import type { ProviderAdapter } from "../../../extension/adapters/index.ts"
 import { planDelivery, type DeliveryStep } from "./deliver.ts"
 import { choosePaperTextUrl, couldNotReadPaper, recordIdFromPaperTextUrl, TEXT_PAGE_NOTE, textPageHasPaper, textPageUntrusted } from "./paperText.ts"
 import {
-  assistantText,
+  assistantMessages,
   attachTextFiles,
   attachmentReady,
   ATTACHMENT_SELECTORS,
@@ -15,13 +15,12 @@ import {
   pointerClick,
   pressEnterSequence,
   queryFirst,
-  replyActionsVisible,
   requestSubmitButton,
-  reviewJsonOnPage,
+  placeComposerText,
+  replyAfter,
+  reviewJsonBlock,
   sendLanded,
-  visibleReplyText,
   stopControlActive,
-  writeComposer,
   composerText,
 } from "./dom.ts"
 import type { WebChatPacket } from "./protocol.ts"
@@ -29,7 +28,7 @@ import type { WebChatPacket } from "./protocol.ts"
 export interface TurnHooks {
   sleep(ms: number): Promise<void>
   aborted(): boolean
-  onProgress?(message: string): void
+  onProgress?(message: string, meta?: { step: string; status: string }): void
   pollMs?: number
   stableMs?: number
   stepTimeoutMs?: number
@@ -92,31 +91,36 @@ function stepDiagnostic(doc: Document): string {
   return `${describeButtons(doc)} ${describeCandidates(doc)}`
 }
 
-function replyTimeoutReason(doc: Document, composer: Element): string {
-  if (reviewJsonOnPage(doc, composer) || ackReply(doc, composer)) return "reply seen, JSON not parsed"
-  const visible = visibleReplyText(doc, composer).replace(/\s+/g, " ").trim()
-  if (visible.length > 40) return "reply seen, JSON not parsed"
-  return "no reply seen"
+export type ReplyExpect = "json" | "text"
+
+function note(hooks: TurnHooks, step: string, status: string, detail: string): void {
+  hooks.onProgress?.(detail, { step, status })
+}
+
+function replyTimeoutReason(reply: string, expect: ReplyExpect): string {
+  if (!reply) return "no reply seen"
+  if (expect === "json" && !reviewJsonBlock(reply)) return "reply seen, JSON not parsed"
+  return "reply seen"
 }
 
 async function waitForReply(
   doc: Document,
   provider: ProviderAdapter,
-  before: string,
+  beforeMessages: string[],
   hooks: TurnHooks,
   composer: Element,
-  beforeJson = "",
   label = "review",
+  expect: ReplyExpect = "json",
   attempt = 1,
 ): Promise<string> {
-  hooks.onProgress?.(`Waiting for the reply: ${label}.`)
+  note(hooks, label, "waiting", `Waiting for the reply: ${label}.`)
   await hooks.keepAwake?.()
   const pollMs = hooks.pollMs ?? 400
   const stableMs = hooks.stableMs ?? 2000
   const timeoutMs = hooks.stepTimeoutMs ?? 4 * 60 * 1000
   const startLimit = hooks.replyStartTimeoutMs ?? 20_000
   const start = Date.now()
-  let last = before
+  let lastReply = ""
   let stableFor = 0
   let lastJson = ""
   let jsonStable = 0
@@ -125,23 +129,24 @@ async function waitForReply(
   let started = false
   while (Date.now() - start < timeoutMs) {
     if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.")
-    const json = reviewJsonOnPage(doc, composer)
-    const freshJson = json && json !== beforeJson ? json : ""
+    const reply = replyAfter(beforeMessages, assistantMessages(doc, provider.selectors.assistant, composer))
+    const json = expect === "json" ? reviewJsonBlock(reply) : ""
     const ack = ackReply(doc, composer)
-    const assistant = assistantText(doc, provider.selectors.assistant, composer)
-    const stopping = stopControlActive(doc, provider.selectors.stop)
-    if (freshJson || ack || (assistant && assistant !== before)) started = true
-    if (freshJson) {
-      if (freshJson === lastJson && jsonStable >= stableMs) return freshJson
-      if (freshJson !== lastJson) {
-        lastJson = freshJson
+    const streaming = stopControlActive(doc, provider.selectors.stop)
+    const sendReady = Boolean(findSubmit(doc, provider.selectors.submit, composer))
+    const idle = sendReady && !streaming
+    if (reply || ack) started = true
+    if (expect === "json" && json) {
+      if (json === lastJson && jsonStable >= stableMs && (!streaming || sendReady)) return json
+      if (json !== lastJson) {
+        lastJson = json
         jsonStable = 0
       } else jsonStable += pollMs
     } else {
       lastJson = ""
       jsonStable = 0
     }
-    if (ack && !freshJson) {
+    if (expect === "text" && ack && !reply) {
       if (ack === lastAck && ackStable >= stableMs) return ack
       if (ack !== lastAck) {
         lastAck = ack
@@ -151,31 +156,31 @@ async function waitForReply(
       lastAck = ""
       ackStable = 0
     }
-    if (!started && !stopping && Date.now() - start >= startLimit) {
-      const send = findSubmit(doc, provider.selectors.submit, composer)
-      if (send) {
+    if (!started && !streaming && Date.now() - start >= startLimit) {
+      if (sendReady) {
         throw new TurnError(
           "send-timeout",
           `Send step on ${provider.label} did not start a reply. The Send button was still enabled. ${stepDiagnostic(doc)}`,
         )
       }
     }
-    const settled = Boolean(assistant) && assistant !== before && assistant === last && !stopping && stableFor >= stableMs
-    if (!freshJson && !ack && (settled || (started && !stopping && replyActionsVisible(doc) && assistant && assistant !== before))) return assistant
-    if (assistant !== last) {
-      last = assistant
+    const settled = Boolean(reply) && reply === lastReply && stableFor >= stableMs && (!streaming || idle || sendReady)
+    if (expect === "text" && settled) return reply
+    if (reply !== lastReply) {
+      lastReply = reply
       stableFor = 0
     } else {
       stableFor += pollMs
     }
     await hooks.sleep(pollMs)
   }
+  const reply = replyAfter(beforeMessages, assistantMessages(doc, provider.selectors.assistant, composer))
   if (attempt < 2) {
-    hooks.onProgress?.(`Reply step (${label}) timed out. Focusing the chat tab and waiting once more.`)
+    note(hooks, label, "retry", `Reply step (${label}) timed out. Focusing the chat tab and waiting once more.`)
     await hooks.keepAwake?.()
-    return waitForReply(doc, provider, before, hooks, composer, beforeJson, label, attempt + 1)
+    return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1)
   }
-  throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} did not finish in time. ${replyTimeoutReason(doc, composer)}.`)
+  throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} did not finish in time. ${replyTimeoutReason(reply, expect)}.`)
 }
 
 async function waitForEnabledSubmit(doc: Document, provider: ProviderAdapter, composer: Element, hooks: TurnHooks): Promise<Element | null> {
@@ -257,9 +262,43 @@ async function waitForAttachment(doc: Document, provider: ProviderAdapter, files
   )
 }
 
-async function sendStep(doc: Document, provider: ProviderAdapter, step: DeliveryStep, hooks: TurnHooks, label = "review"): Promise<string> {
+async function sendComposerText(
+  doc: Document,
+  provider: ProviderAdapter,
+  composer: Element,
+  text: string,
+  hooks: TurnHooks,
+  label: string,
+  expect: ReplyExpect,
+): Promise<string> {
+  let pending = text
+  let part = 1
+  while (pending.length > 0) {
+    const placed = placeComposerText(composer, pending)
+    if (!placed.ok) {
+      throw new TurnError(
+        "insert-miss",
+        `The message box on ${provider.label} did not hold the message for ${label}. The box has ${placed.actual.length} characters and the message has ${pending.length}.`,
+      )
+    }
+    const chunk = placed.chunk
+    const rest = pending.slice(chunk.length).trim()
+    const beforeMessages = assistantMessages(doc, provider.selectors.assistant, composer)
+    const beforeAssistant = beforeMessages[beforeMessages.length - 1] ?? ""
+    note(hooks, label, "sending", `Sending ${label}${rest ? ` part ${part}` : ""} on ${provider.label}. ${chunk.length} characters verified in the message box.`)
+    const method = await commitSend(doc, provider, composer, beforeAssistant, hooks)
+    note(hooks, label, "sent", `Send step on ${provider.label}. Method that sent: ${method}.`)
+    if (!rest) return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect)
+    part += 1
+    pending = rest
+    await waitForReply(doc, provider, beforeMessages, hooks, composer, `${label} part ${part - 1}`, "text")
+  }
+  throw new TurnError("insert-miss", `The message for ${label} was empty.`)
+}
+
+async function sendStep(doc: Document, provider: ProviderAdapter, step: DeliveryStep, hooks: TurnHooks, label = "review", expect: ReplyExpect = "json"): Promise<string> {
   if (step.kind === "upload") {
-    hooks.onProgress?.(`Attachment step on ${provider.label}. Waiting for the file chip, or for Send to become enabled.`)
+    note(hooks, label, "sending", `Attachment step on ${provider.label}. Waiting for the file chip, or for Send to become enabled.`)
     const input = queryFirst(doc, provider.selectors.fileInput)
     const attached = input ? attachTextFiles(input, step.files) : false
     if (!attached) throw new TurnError("upload-miss", "file upload was not accepted")
@@ -267,18 +306,20 @@ async function sendStep(doc: Document, provider: ProviderAdapter, step: Delivery
   }
   const composer = findComposer(doc, provider.selectors.composer)
   if (!composer) throw new TurnError("selector-miss", selectorMiss(provider, describeCandidates(doc)))
-  const before = assistantText(doc, provider.selectors.assistant, composer)
-  const beforeJson = reviewJsonOnPage(doc, composer)
-  writeComposer(composer, step.text)
-  const method = await commitSend(doc, provider, composer, before, hooks)
-  hooks.onProgress?.(`Send step on ${provider.label}. Method that sent: ${method}.`)
-  return waitForReply(doc, provider, before, hooks, composer, beforeJson, label)
+  return sendComposerText(doc, provider, composer, step.text, hooks, label, step.final ? expect : "text")
 }
 
-/** One more message in the chat that is already open. Waits until streaming stops. */
-export async function sendFollowUp(doc: Document, provider: ProviderAdapter, text: string, hooks: TurnHooks, label = "follow-up"): Promise<string> {
+/** One more message in the chat that is already open. A defence reply completes on stable text. A score completes on JSON. */
+export async function sendFollowUp(
+  doc: Document,
+  provider: ProviderAdapter,
+  text: string,
+  hooks: TurnHooks,
+  label = "follow-up",
+  expect: ReplyExpect = "json",
+): Promise<string> {
   const step: DeliveryStep = { kind: "paste", text, files: [], index: 1, total: 1, final: true }
-  return sendStep(doc, provider, step, hooks, label)
+  return sendStep(doc, provider, step, hooks, label, expect)
 }
 
 async function pageIsLive(url: string, hooks: TurnHooks): Promise<boolean> {
@@ -320,7 +361,7 @@ export async function runTurn(doc: Document, provider: ProviderAdapter, packet: 
     let fellBack = false
     let linkFellBack = false
     let route: "link" | "paste" = activePacket.textUrl ? "link" : "paste"
-    hooks.onProgress?.(route === "link" ? `Review route: public text link. ${activePacket.textUrl}` : "Review route: pasted paper.")
+    note(hooks, "Review route", route, route === "link" ? `Review route: public text link. ${activePacket.textUrl}` : "Review route: pasted paper.")
     for (let index = 0; index < steps.length; index += 1) {
       const step = steps[index]
       if (!step) continue

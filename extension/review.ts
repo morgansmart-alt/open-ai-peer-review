@@ -5,7 +5,7 @@ import { acceptWebChatResult } from "../src/services/webChat/accept.ts"
 import { webChatModelId } from "../src/services/webChat/chatModel.ts"
 import { WEB_CHAT_PDF_PAGES } from "../src/services/webChat/packet.ts"
 import { EXTENSION_SOURCE, PAGE_SOURCE, PROTOCOL_VERSION } from "../src/services/webChat/protocol.ts"
-import { renderReviewApp, type ReviewModel } from "../src/services/webChat/reviewView.ts"
+import { renderReviewApp, type ReviewModel, type StepLogEntry } from "../src/services/webChat/reviewView.ts"
 import { defendedFromReply } from "../src/services/webChat/defence.ts"
 import { resolvePublication, type PublicationPreview } from "../src/services/webChat/publication.ts"
 import { submissionFromReview } from "../src/services/webChat/submission.ts"
@@ -39,9 +39,15 @@ let showOnboarding = true
 let status = ""
 let error = ""
 let busy = false
+let stepLog: StepLogEntry[] = []
 let reviews: StoredReview[] = []
 let requestId = ""
 let pendingPaper: { filename: string; text: string; note?: string } | null = null
+
+function rememberStep(step: string, stepStatus: string): StepLogEntry[] {
+  const at = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+  return [...stepLog, { at, step, status: stepStatus }].slice(-20)
+}
 
 function storageGet(key: string): Promise<unknown> {
   return new Promise((resolve) => {
@@ -90,6 +96,7 @@ function paint(): void {
       status,
       error,
       busy,
+      stepLog,
       result: latest ? resultCard(latest) : null,
       history: reviews.map(historyItem),
     } satisfies ReviewModel,
@@ -128,9 +135,12 @@ function paint(): void {
         paint()
       },
       onStop() {
-        void send({ type: "air-web-chat-cancel", requestId })
-        status = "Stopping. The chat tab stays open."
+        busy = false
+        error = ""
+        status = "Stopped. The chat tab stays open."
+        stepLog = rememberStep("Stop", "idle")
         paint()
+        void send({ type: "air-web-chat-cancel", requestId })
       },
       onReview() {
         void run()
@@ -237,7 +247,9 @@ async function run(): Promise<void> {
   if (!provider) return
   busy = true
   error = ""
+  stepLog = []
   status = "Reading the paper…"
+  stepLog = rememberStep("Review", "reading")
   paint()
   try {
     const paper = file ? await readPaper(file) : await paperFromPublication(publication as PublicationPreview)
@@ -267,17 +279,26 @@ async function run(): Promise<void> {
   }
 }
 
-chrome.runtime.onMessage.addListener((message: { source?: string; type?: string; requestId?: string; text?: string; message?: string; defendedText?: string | null; transcript?: { round: number; kind: string; text: string }[]; stopped?: boolean; chatModel?: string; notice?: string }) => {
+chrome.runtime.onMessage.addListener((message: { source?: string; type?: string; requestId?: string; text?: string; message?: string; step?: string; status?: string; defendedText?: string | null; transcript?: { round: number; kind: string; text: string }[]; stopped?: boolean; chatModel?: string; notice?: string }) => {
   if (!message || message.source !== EXTENSION_SOURCE || message.requestId !== requestId) return
   if (message.type === "air-web-chat-progress" && message.message) {
+    if (!busy) return
+    stepLog = rememberStep(message.step || "Review", message.status || "update")
     status = message.message
     paint()
     return
   }
   if (message.type === "air-web-chat-error") {
     busy = false
-    status = ""
-    error = message.message || "The chat did not finish."
+    const stopped = typeof message.message === "string" && message.message.startsWith("Stopped.")
+    if (stopped) {
+      error = ""
+      status = message.message || "Stopped. The chat tab stays open."
+      stepLog = rememberStep("Stop", "idle")
+    } else {
+      status = ""
+      error = message.message || "The chat did not finish."
+    }
     paint()
     return
   }
