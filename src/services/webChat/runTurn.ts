@@ -1,6 +1,6 @@
 import type { ProviderAdapter } from "../../../extension/adapters/index.ts"
 import { planDelivery, type DeliveryStep } from "./deliver.ts"
-import { couldNotReadPaper, TEXT_PAGE_NOTE, textPageHasPaper, textPageUntrusted } from "./paperText.ts"
+import { choosePaperTextUrl, couldNotReadPaper, recordIdFromPaperTextUrl, TEXT_PAGE_NOTE, textPageHasPaper, textPageUntrusted } from "./paperText.ts"
 import {
   assistantText,
   attachTextFiles,
@@ -281,12 +281,17 @@ export async function runTurn(doc: Document, provider: ProviderAdapter, packet: 
     let activePacket = packet
     let notice: string | undefined
     if (activePacket.textUrl) {
-      const live = await pageIsLive(activePacket.textUrl, hooks)
-      if (!live) {
+      const id = recordIdFromPaperTextUrl(activePacket.textUrl)
+      const load = hooks.loadTextPage ?? ((url: string) => fetch(url).then(async (response) => ({ status: response.status, body: await response.text() })))
+      const chosen = id ? await choosePaperTextUrl(id, load) : (await pageIsLive(activePacket.textUrl, hooks) ? activePacket.textUrl : null)
+      if (!chosen) {
         hooks.onProgress?.("The public text page is not available. Sending the paper in the chat instead.")
         const { textUrl: dropped, ...rest } = activePacket
         void dropped
         activePacket = rest
+      } else if (chosen !== activePacket.textUrl) {
+        hooks.onProgress?.("The static text file is not on the site yet. Using the text service instead.")
+        activePacket = { ...activePacket, textUrl: chosen }
       }
     }
     let planned = planDelivery(activePacket, providerForPlan)

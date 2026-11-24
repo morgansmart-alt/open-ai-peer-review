@@ -3,6 +3,8 @@ name: Deploy GitHub Pages
 on:
   push:
     branches: [main]
+  schedule:
+    - cron: "0 */6 * * *"
   workflow_dispatch:
 
 permissions:
@@ -24,6 +26,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Write public paper text
+        env:
+          VITE_SUPABASE_URL: https://lotswxboafsenmszijpf.supabase.co
+          VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvdHN3eGJvYWZzZW5tc3ppanBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUxMTM0MDEsImV4cCI6MjExMDY4OTQwMX0.K0zYMdv3vkBMXiL4PePWemwodcDactb8rcZJc2cmi5w
+        run: node --experimental-strip-types scripts/build-paper-text.ts
       - name: Build
         run: npm run build
         env:

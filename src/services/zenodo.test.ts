@@ -15,6 +15,8 @@ import {
   selectionWithCodeData,
   stripHtml,
   zenodoClientHeaders,
+  zenodoRecordSources,
+  zenodoRunsInBrowser,
   zenodoHttpMessage,
   zenodoTransport,
   type ZenodoFile,
@@ -287,12 +289,44 @@ describe("Zenodo 403", () => {
   it("sends an identifying header only outside the browser", () => {
     expect(zenodoClientHeaders("json").Accept).toBe("application/json")
     expect(zenodoClientHeaders("json")["User-Agent"]).toMatch(/open-ai-peer-review/)
-    expect(zenodoClientHeaders("bytes").Accept).toBeUndefined()
+    expect(zenodoClientHeaders("bytes").Accept).toBe("*/*")
     vi.stubGlobal("window", {})
     try {
       expect(zenodoClientHeaders("json")).toEqual({ Accept: "application/json" })
       expect(zenodoClientHeaders("bytes")).toEqual({})
     } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("falls back from a blocked API to the record page", async () => {
+    const saved = [...zenodoTransport.delaysMs]
+    zenodoTransport.delaysMs = [0, 0]
+    const urls: string[] = []
+    vi.stubGlobal("fetch", async (url: string) => {
+      urls.push(url)
+      if (url.includes("/api/records/") || url.includes("/export/json")) return { ok: false, status: 403, json: async () => ({}), text: async () => "" }
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          `<html><head><meta name="citation_title" content="CODATA note"><meta name="citation_author" content="Ada Lovelace"><meta name="citation_doi" content="10.5281/zenodo.22826"><meta name="citation_abstract" content="A public data note."></head></html>`,
+      }
+    })
+    try {
+      const record = await fetchZenodoRecord("22826")
+      expect(record.title).toBe("CODATA note")
+      expect(record.doi).toBe("10.5281/zenodo.22826")
+      expect(urls.some((url) => url.includes("/api/records/22826"))).toBe(true)
+      expect(urls.some((url) => url === "https://zenodo.org/records/22826")).toBe(true)
+      expect(zenodoRecordSources("22826").map((source) => source.url)).toEqual([
+        "https://zenodo.org/api/records/22826",
+        "https://zenodo.org/records/22826/export/json",
+        "https://zenodo.org/records/22826",
+      ])
+      expect(zenodoRunsInBrowser()).toBe(false)
+    } finally {
+      zenodoTransport.delaysMs = saved
       vi.unstubAllGlobals()
     }
   })

@@ -465,7 +465,7 @@ describe("live chat composers", () => {
       sendVerifyMs: 20,
       loadTextPage: async () => ({ status: 200, body: livePage }),
     })
-    expect(sent[0]).toContain("/paper/1/text")
+    expect(sent[0]).toContain("paper-text/1.txt")
     expect(sent[0]).not.toContain("UNIQUEYIELD")
     expect(sent[1]).toContain("UNIQUEYIELD")
     expect(result.ok).toBe(true)
