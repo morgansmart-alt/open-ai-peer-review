@@ -127,6 +127,8 @@ The default free review runs `Qwen2.5-0.5B-Instruct-q4f16_1-MLC` in the browser 
 
 Free screenings are labelled “Free quick review: a smaller model, lower fidelity, screening only”. They sit in a separate unranked list. They cannot, on their own, make a work verified.
 
+A browser extension in [`extension/`](extension/README.md) can review a paper in a chat you are already signed into. On the review page, choose **Review with a web chat (free, uses your own signed-in chat)**. The score is labelled “free web-chat, uncalibrated”. It stays on this device until you publish it or click **Send to Global Good Idea leaderboard**. That opt-in posts one score to the existing `submit-web-chat` function. The leaderboard lists those scores under their own label. They do not enter the calibrated median or the two-model corroboration count. Install with Load unpacked. The steps are in [`extension/README.md`](extension/README.md).
+
 An in-depth review uses your own key and the full AIR v0.2 reading. Run independently on an existing review, it is stored as a trusted node: pass or fail on each criterion, an overall verdict, a hash of the prompt, the criteria version, the model name, and the time. The model name is self-reported. The tier ladder is free screening, then in-depth review, then independently corroborated when two or more distinct trusted models pass.
 
 Optional private AI context links can be sent with a reading, a rebuttal, or an independent check. They stay in that browser and are included only in the prompt to the chosen provider. Published rows, exports, and Supabase store a count (`private_context_count`), never the URL. The links are not scored. A chat link cannot mark an issue addressed. Only a quotation from the publication can.

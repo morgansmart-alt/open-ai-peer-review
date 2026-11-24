@@ -1,5 +1,6 @@
 import { clamp, round2 } from "./criteria.ts"
 import { isCommunityAiRecord } from "./moltbook.ts"
+import { isUncalibratedWebChat } from "../services/webChat/protocol.ts"
 import type { NodeSubmission, StoredReview } from "./types.ts"
 
 export interface FidelitySummary {
@@ -128,21 +129,25 @@ export function fidelityFor(nodes: NodeSubmission[], reputations: Map<string, nu
   }
 }
 
-export type LadderTier = "free-screening" | "in-depth" | "corroborated"
+export type LadderTier = "free-screening" | "free-web-chat" | "in-depth" | "corroborated"
+
+/** Two distinct trusted model ids must pass before a record is called corroborated. */
+export const CORROBORATING_MODEL_COUNT = 2
 
 export function ladderTier(reviews: StoredReview[], nodes: NodeSubmission[]): LadderTier {
-  const communityIds = new Set(reviews.filter((review) => isCommunityAiRecord(review)).map((review) => review.id))
+  const offBoard = new Set(reviews.filter((review) => isCommunityAiRecord(review) || isUncalibratedWebChat(review)).map((review) => review.id))
   const distinct = new Set(
     nodes
-      .filter((node) => node.trusted === true && node.verdict === "pass" && !communityIds.has(node.reviewId))
+      .filter((node) => node.trusted === true && node.verdict === "pass" && !offBoard.has(node.reviewId))
       .map((node) => node.modelId),
   )
-  if (distinct.size >= 2) return "corroborated"
-  if (reviews.some((review) => !isCommunityAiRecord(review) && review.tier !== "free-screening")) return "in-depth"
+  if (distinct.size >= CORROBORATING_MODEL_COUNT) return "corroborated"
+  if (reviews.some((review) => !isCommunityAiRecord(review) && !isUncalibratedWebChat(review) && review.tier !== "free-screening")) return "in-depth"
+  if (reviews.some((review) => isUncalibratedWebChat(review))) return "free-web-chat"
   return "free-screening"
 }
 
 export function nodesForReviews(all: NodeSubmission[], reviews: StoredReview[]): NodeSubmission[] {
-  const ids = new Set(reviews.filter((review) => !review.customCriteria && !isCommunityAiRecord(review)).map((review) => review.id))
+  const ids = new Set(reviews.filter((review) => !review.customCriteria && !isCommunityAiRecord(review) && !isUncalibratedWebChat(review)).map((review) => review.id))
   return eligibleNodes(all.filter((node) => ids.has(node.reviewId)))
 }

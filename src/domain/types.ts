@@ -188,8 +188,25 @@ export interface StoredReview {
    * default, which is the current AIR v0.2 set. The stored key is the profile id.
    */
   criterionProfile?: string
-  /** Free screenings stay off the ranked board. In-depth readings are ranked. Community AI never ranks. */
-  tier?: "free-screening" | "in-depth" | "demo" | "community-ai"
+  /**
+   * Free screenings and uncalibrated web-chat readings stay off the ranked board.
+   * In-depth readings are ranked. Community AI never ranks.
+   */
+  tier?: "free-screening" | "free-web-chat" | "uncalibrated web-chat" | "in-depth" | "demo" | "community-ai"
+  /** Set when the reading was sent from the browser extension or published as a web-chat score. */
+  source?: "web-chat extension"
+  /** Public paper address. Private chat links are never stored here. */
+  paperUrl?: string
+  /** Second score after Defend my paper. The blind overallScore stays the displayed score. */
+  defended?: {
+    label: "after author defence"
+    overallScore: number
+    recommendation: string
+    summary: string
+    scores: { criterionId: string; score: number }[]
+  }
+  /** Local only. Never copied into a leaderboard payload. */
+  defenceTranscript?: { round: number; kind: string; text: string }[]
   report: ReviewReport
   outputHash: string
   createdAt: string
@@ -307,6 +324,8 @@ export interface AirDatabase {
   nodes: NodeSubmission[]
   issues: IssueThread[]
   claims: AuthorClaim[]
+  /** Opt-in uncalibrated web-chat rows. Absent on older saved boards. */
+  webChat?: StoredReview[]
 }
 
 export interface ProviderSettings {
@@ -339,6 +358,9 @@ export const STORED_REVIEW_KEYS = [
   "criteriaVersion",
   "customCriteria",
   "criterionProfile",
+  "tier",
+  "source",
+  "paperUrl",
   "report",
   "outputHash",
   "createdAt",
@@ -347,5 +369,5 @@ export const STORED_REVIEW_KEYS = [
 ] as const
 
 export function emptyDatabase(): AirDatabase {
-  return { reviews: [], nodes: [], issues: [], claims: [] }
+  return { reviews: [], nodes: [], issues: [], claims: [], webChat: [] }
 }

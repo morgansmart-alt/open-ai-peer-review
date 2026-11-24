@@ -7,6 +7,8 @@ import { statusLabel } from "../domain/issues.ts"
 import { buildRanking, listRankingMethods, sortRows, type RankRow } from "../domain/ranking.ts"
 import { scoreLineage, type LineagePoint } from "../domain/versions.ts"
 import { officialCriteria } from "../domain/officialCriteria.ts"
+import { profileLabel } from "../domain/profiles.ts"
+import { WEB_CHAT_LABEL } from "../services/webChat/protocol.ts"
 import { useAir } from "../context/AirContext.tsx"
 import { loadCommunityReplyCounts } from "../services/moltbook.ts"
 import { AssessorMark, Sparkline } from "./charts.tsx"
@@ -18,6 +20,7 @@ export function Leaderboard() {
   const [methodId, setMethodId] = useState("panel")
   const [query, setQuery] = useState("")
   const [hideSamples, setHideSamples] = useState(false)
+  const [showWebChat, setShowWebChat] = useState(true)
   const [openKey, setOpenKey] = useState<string | null>(null)
   const [communityCounts, setCommunityCounts] = useState<Record<string, number> | null>(null)
   useEffect(() => {
@@ -105,6 +108,10 @@ export function Leaderboard() {
           <input type="checkbox" checked={hideSamples} onChange={(event) => setHideSamples(event.target.checked)} />
           Hide samples and demos
         </label>
+        <label className="flex items-center gap-2 text-sm text-ink-soft">
+          <input type="checkbox" checked={showWebChat} onChange={(event) => setShowWebChat(event.target.checked)} />
+          Uncalibrated web-chat
+        </label>
       </div>
       <div className="no-print mb-3 flex flex-wrap gap-2">
         {keywords.map((keyword) => (
@@ -155,8 +162,9 @@ export function Leaderboard() {
           </table>
         </div>
       )}
-      <p className="mt-3 text-xs text-ink-soft">These are AI assessments against AIR criteria, not formal peer review. Community replies from Moltbook are not included in these scores. Example rows are sample data.</p>
+      <p className="mt-3 text-xs text-ink-soft">These are AI assessments against AIR criteria, not formal peer review. Community replies from Moltbook are not included in these scores. Uncalibrated web-chat scores sit in their own list and do not change the ranking above. Example rows are sample data.</p>
       <FreeScreening />
+      {showWebChat && <WebChatBoard />}
     </section>
   )
 }
@@ -275,6 +283,30 @@ function FreeScreening() {
         {rows.map((review) => (
           <li key={review.id} className="rounded-2xl border border-line px-3 py-2 text-sm">
             <AssessorMark name="Free" /> {review.title} · {boardValue(review.report.overallScore, review.report, review.criteriaVersion).toFixed(0)} / 100 · screening only
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+function WebChatBoard() {
+  const air = useAir()
+  const rows = air.db.webChat ?? []
+  if (rows.length === 0) return null
+  return (
+    <section className="mt-6" aria-label="Uncalibrated web-chat">
+      <h3 className="font-serif text-xl">Uncalibrated web-chat</h3>
+      <p className="mt-1 text-xs text-ink-soft">
+        Sent from a signed-in web chat. These scores are labelled {WEB_CHAT_LABEL}. They are not part of the calibrated ranking and do not count toward corroboration.
+      </p>
+      <ul className="mt-2 space-y-2">
+        {rows.map((review) => (
+          <li key={review.id} className="rounded-2xl border border-line px-3 py-2 text-sm">
+            <span className="mr-2 rounded-full bg-gold/15 px-2 py-0.5 text-[11px] text-gold">uncalibrated web-chat</span>
+            {review.title}
+            {review.doi ? ` · ${review.doi}` : ""} · blind {boardValue(review.report.overallScore, review.report, review.criteriaVersion).toFixed(0)} / 100
+            {review.defended ? ` · after author defence ${review.defended.overallScore}` : ""} · {profileLabel(review.criterionProfile)} · {review.modelId}
           </li>
         ))}
       </ul>

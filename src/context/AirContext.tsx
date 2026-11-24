@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react"
 import { listAssessors } from "../domain/assessors.ts"
 import { claimKey, issuesFromNode, issuesFromReview } from "../domain/issues.ts"
+import { isUncalibratedWebChat } from "../services/webChat/protocol.ts"
 import { canAppendRound, isHumanReview } from "../domain/versions.ts"
 import { officialCriteria } from "../domain/officialCriteria.ts"
 import { sampleDatabase } from "../domain/samples.ts"
@@ -89,6 +90,16 @@ export function AirProvider({ children }: { children: ReactNode }) {
     async (review: StoredReview) => {
       const error = await publishReview(mode, review)
       if (error) return error
+      if (isUncalibratedWebChat(review)) {
+        if (mode === "supabase" && !review.mock) {
+          setRemote((current) => ({
+            ...current,
+            webChat: [...(current.webChat ?? []).filter((item) => item.id !== review.id), review],
+          }))
+        }
+        bump()
+        return null
+      }
       const label = isHumanReview(review) ? "Human reviewer" : (profiles.find((profile) => profile.id === review.assessorId)?.name ?? review.assessorId)
       const incoming = issuesFromReview(review, label, isHumanReview(review) ? "human-reviewer" : "reviewer")
       const seen = new Set(db.issues.map((issue) => claimKey(issue.doi, issue.recordVersion, issue.criterionId, issue.claim)))

@@ -11,7 +11,15 @@ import { boardValue } from "../domain/scoring.ts"
 import type { ReviewReport, StoredReview } from "../domain/types.ts"
 import { useAir } from "../context/AirContext.tsx"
 import { ReportView } from "../components/ReportView.tsx"
+import { WebChatPanel } from "../components/WebChatPanel.tsx"
 import { Banner, btnPrimary, btnQuiet, ExternalLink, fieldClass } from "../components/ui.tsx"
+import { webChatProvider } from "../../extension/adapters/index.ts"
+import { acceptWebChatResult, draftWebChatReview, scrubPrivateUrls } from "../services/webChat/accept.ts"
+import { runWebChatExtension, webChatPromptText } from "../services/webChat/client.ts"
+import { planDelivery } from "../services/webChat/deliver.ts"
+import { buildWebChatPacket } from "../services/webChat/packet.ts"
+import { isUncalibratedWebChat, WEB_CHAT_LABEL } from "../services/webChat/protocol.ts"
+import { parseExport } from "../services/webChat/standalone.ts"
 import { sha256Hex, uid } from "../services/hash.ts"
 import { resolvedModel } from "../services/providers.ts"
 import { FREE_BROWSER_MODEL, FREE_BROWSER_SIZE, FREE_LABEL, runFreeScreening } from "../services/freeReview.ts"
@@ -57,6 +65,9 @@ export function ReviewPage() {
   const [downloadNote, setDownloadNote] = useState<string | null>(null)
   const localBytes = useRef(new Map<string, ArrayBuffer>())
   const [published, setPublished] = useState(false)
+  const [webWarning, setWebWarning] = useState<string | null>(null)
+  const [acceptedWarning, setAcceptedWarning] = useState("")
+  const [copyText, setCopyText] = useState("")
   const [criterionProfile, setCriterionProfile] = useState<CriterionProfileId>("device")
   const [includeCodeData, setIncludeCodeData] = useState(true)
   const [guideOpen, setGuideOpen] = useState(params.get("guide") === "1")
@@ -345,6 +356,131 @@ export function ReviewPage() {
     setBusy(false)
   }
 
+  async function runWeb(providerId: string) {
+    if (!record || !webChatProvider(providerId)) return
+    const collected = collectConversationLinks(linkDrafts)
+    if (!collected.ok) {
+      setError(collected.error)
+      return
+    }
+    setBusy(true)
+    setError(null)
+    setPublished(false)
+    try {
+      const extracted = await ensureDocs()
+      const documents = extracted.filter((doc) => selected.includes(doc.filename) && doc.text.trim())
+      const packet = buildWebChatPacket({
+        requestId: uid("web"),
+        providerId,
+        criteria: air.criteria,
+        criterionProfile,
+        customCriteria: air.customCriteria,
+        record,
+        documents,
+        conversations: collected.links,
+      })
+      const provider = webChatProvider(providerId)
+      if (!provider) return
+      const plan = planDelivery(packet, provider)
+      if (plan.warning && acceptedWarning !== plan.warning) {
+        setAcceptedWarning(plan.warning)
+        setWebWarning(plan.warning)
+        setStatus(plan.warning)
+        return
+      }
+      setWebWarning(null)
+      saveSubmissionLinks(record.doi, record.recordVersion, collected.links)
+      const outcome = await runWebChatExtension(packet, (message) => setStatus(message))
+      const accepted = acceptWebChatResult(outcome.text, criteria)
+      if (!accepted.ok) {
+        setError(`The chat reply was not a usable AIR reading. ${accepted.errors.slice(0, 3).join(" ")} The provider tab stays open.`)
+        return
+      }
+      const createdAt = new Date().toISOString()
+      const modelId = `${provider.modelLabel} (${WEB_CHAT_LABEL})`
+      const report = scrubPrivateUrls(accepted.report, collected.links.map((link) => link.url))
+      const stored = draftWebChatReview({
+        id: uid("review"),
+        packet,
+        report,
+        record: {
+          doi: record.doi,
+          id: record.id,
+          conceptId: record.conceptId,
+          recordVersion: record.recordVersion,
+          title: record.title,
+          creators: record.creators.map((creator) => creator.name),
+          keywords: record.keywords,
+          publicationDate: record.publicationDate,
+          license: record.license,
+        },
+        criteria,
+        customCriteria: air.customCriteria,
+        outputHash: await sha256Hex(`${modelId}\n${JSON.stringify(report)}`),
+        createdAt,
+        privateUrls: [],
+        privateContextCount: collected.links.length,
+      })
+      stored.modelId = modelId
+      stored.tier = "uncalibrated web-chat"
+      stored.source = "web-chat extension"
+      setResults((current) => [...current.filter((item) => !isUncalibratedWebChat(item.stored)), { assessorId: stored.assessorId, report: stored.report, stored }])
+      setStatus(`${WEB_CHAT_LABEL}. The score card is below. Publishing it keeps that label and leaves the calibrated ranking unchanged.`)
+    } catch (caught) {
+      if (caught instanceof DOMException && caught.name === "AbortError") return
+      setError(caught instanceof Error ? caught.message : "The web-chat review could not run.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function copyWeb(providerId: string) {
+    if (!record) return
+    setBusy(true)
+    setError(null)
+    try {
+      const extracted = await ensureDocs()
+      const documents = extracted.filter((doc) => selected.includes(doc.filename) && doc.text.trim())
+      const packet = buildWebChatPacket({
+        requestId: uid("web"),
+        providerId,
+        criteria: air.criteria,
+        criterionProfile,
+        customCriteria: air.customCriteria,
+        record,
+        documents,
+      })
+      const text = webChatPromptText(packet)
+      try {
+        await navigator.clipboard.writeText(text)
+        setCopyText("")
+        setStatus("Packet copied. Paste it into the chat yourself if the page layout has changed.")
+      } catch {
+        setCopyText(text)
+        setStatus("The clipboard refused the packet. It is in the box below, on this device.")
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The packet could not be copied.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function importWeb(file: File) {
+    setError(null)
+    try {
+      const parsed = parseExport(await file.text())
+      if (!parsed.ok) {
+        setError(parsed.error)
+        return
+      }
+      setResults(parsed.reviews.map((review) => ({ assessorId: review.assessorId, report: review.report, stored: review })))
+      setStatus("Imported. These readings are labelled free web-chat, uncalibrated, and stay out of the calibrated ranking.")
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "That file could not be imported.")
+    }
+  }
+
   async function publish() {
     setError(null)
     const ready = results.flatMap((result) => (result.stored ? [result.stored] : []))
@@ -356,7 +492,7 @@ export function ReviewPage() {
       setError("Publishing to the leaderboard needs a published DOI. This reading stays in this browser.")
       return
     }
-    const thin = ready.filter((review) => !coverageAllowsPublish(review.report.reading))
+    const thin = ready.filter((review) => !isUncalibratedWebChat(review) && !coverageAllowsPublish(review.report.reading))
     if (thin.length > 0) {
       const reading = thin[0]?.report.reading
       setError(
@@ -376,8 +512,9 @@ export function ReviewPage() {
     setPublished(true)
   }
 
+  const rankedResults = results.filter((result) => result.report && !isUncalibratedWebChat(result.stored))
   const panelScore = median(
-    results.flatMap((result) => {
+    rankedResults.flatMap((result) => {
       if (!result.report) return []
       return [boardValue(result.report.overallScore, result.report, result.stored?.criteriaVersion ?? air.criteria.version)]
     }),
@@ -631,6 +768,14 @@ export function ReviewPage() {
                 </button>
               </div>
               <p className="mt-3 text-sm text-ink-soft">Demo readings produce synthetic sample scores and are never published to the live board. A real ranked review uses your own API key, or a free key for an unranked screening.</p>
+              <WebChatPanel
+                busy={busy}
+                warning={webWarning}
+                onRun={(providerId) => void runWeb(providerId)}
+                onCopy={(providerId) => void copyWeb(providerId)}
+                onImport={(file) => void importWeb(file)}
+              />
+              {copyText && <textarea className={`${fieldClass} mt-3 min-h-40`} readOnly value={copyText} aria-label="Review packet to copy" />}
             </fieldset>
           </div>
         </section>
@@ -640,8 +785,9 @@ export function ReviewPage() {
           <div className="mb-4 rounded-3xl border border-line bg-teal/5 p-4">
             <h2 className="font-serif text-2xl">Panel</h2>
             <p className="mt-1 text-sm">
-              Combined median {panelScore === null ? "—" : panelScore.toFixed(0)} / 100 across {results.filter((result) => result.report).length} reading
-              {results.filter((result) => result.report).length === 1 ? "" : "s"}.
+              {rankedResults.length === 0 && results.some((result) => isUncalibratedWebChat(result.stored))
+                ? `This score is ${WEB_CHAT_LABEL}. It is left out of the ranked panel median.`
+                : `Combined median ${panelScore === null ? "—" : panelScore.toFixed(0)} / 100 across ${rankedResults.length} ranked reading${rankedResults.length === 1 ? "" : "s"}.`}
             </p>
             {notes.length > 0 ? (
               <ul className="mt-2 list-disc pl-5 text-sm text-ink-soft">
@@ -654,7 +800,7 @@ export function ReviewPage() {
             )}
             <label className="mt-3 flex items-start gap-2 text-sm">
               <input type="checkbox" checked={optIn} onChange={(event) => setOptIn(event.target.checked)} />
-              <span>Publish these readings to the leaderboard. This is optional. Demo readings stay in this browser. Custom criteria stay unranked.</span>
+              <span>Publish these readings to the leaderboard. This is optional. Demo readings stay in this browser. Custom criteria stay unranked. A web-chat score is published only as an uncalibrated web-chat review.</span>
             </label>
             {!acknowledged && <p className="mt-2 text-sm text-ink-soft">Tick the four notices in step 1 before a reading can join the ranking.</p>}
             {record && !isPublishedDoi(record.doi) && <p className="mt-2 text-sm text-ink-soft">Publishing to the leaderboard needs a published DOI. This reading can still run in this browser.</p>}
@@ -664,7 +810,14 @@ export function ReviewPage() {
             <button
               type="button"
               className={`${btnPrimary} mt-3`}
-              disabled={!optIn || !acknowledged || published || !record || !isPublishedDoi(record.doi) || results.some((result) => result.report && !coverageAllowsPublish(result.report.reading))}
+              disabled={
+                !optIn ||
+                !acknowledged ||
+                published ||
+                !record ||
+                !isPublishedDoi(record.doi) ||
+                results.some((result) => result.report && !isUncalibratedWebChat(result.stored) && !coverageAllowsPublish(result.report.reading))
+              }
               onClick={() => void publish()}
             >
               {published ? "Published" : "Publish to the leaderboard"}

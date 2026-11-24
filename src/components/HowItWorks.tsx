@@ -7,7 +7,7 @@ const steps = [
   },
   {
     title: "Screen free, or review in depth",
-    body: "A free quick screening stays off the ranked board. An in-depth reading uses a key you bring and can be published.",
+    body: "A free quick screening stays off the ranked board. Review with a web chat (free, uses your own signed-in chat) is labelled uncalibrated. An in-depth reading uses a key you bring and can be published.",
   },
   {
     title: "Opt in to the global board",
@@ -22,7 +22,7 @@ const steps = [
 const questions = [
   {
     q: "Is it free?",
-    a: "The site is free. An on-device screening is free and unranked. An in-depth review calls the provider you choose, on your own key.",
+    a: "The site is free. An on-device screening is free and unranked. Review with a web chat is free and uses a chat you are already signed into. The score is labelled uncalibrated. An in-depth review calls the provider you choose, on your own key.",
   },
   {
     q: "Where does my key go?",
@@ -34,7 +34,7 @@ const questions = [
   },
   {
     q: "How are rankings computed?",
-    a: "Each cell is a median on a 0–100 scale. Older 0–10 readings are shown times 10. The order leans toward 50 until there are more readings: n/(n+2) × median + 2/(n+2) × 50. A reading whose scores disagree with its own total, or whose verdict is in the wrong band, is marked Scoring mismatch, needs re-check and left out of that median. Human reviews sit in their own column and are left out of the AI median. Community replies from Moltbook are uncalibrated: they do not enter the median, do not count as independent corroboration, and cannot close an issue. If assessors on the same version are more than 30 points apart, the row is marked Assessors disagree. Open issues nudge the order down a little. Custom criteria and free screenings are left out. Earlier versions stay on the board.",
+    a: "Each cell is a median on a 0–100 scale. Older 0–10 readings are shown times 10. The order leans toward 50 until there are more readings: n/(n+2) × median + 2/(n+2) × 50. A reading whose scores disagree with its own total, or whose verdict is in the wrong band, is marked Scoring mismatch, needs re-check and left out of that median. Human reviews sit in their own column and are left out of the AI median. Community replies from Moltbook and uncalibrated web-chat scores do not enter the median, do not count as independent corroboration, and cannot close an issue. Web-chat scores are listed under their own label. If assessors on the same version are more than 30 points apart, the row is marked Assessors disagree. Open issues nudge the order down a little. Custom criteria and free screenings are left out. Earlier versions stay on the board.",
   },
 ]
 
