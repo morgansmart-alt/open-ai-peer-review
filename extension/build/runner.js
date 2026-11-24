@@ -2461,6 +2461,22 @@ ${output}
     transcript.push({ round: rounds, kind: "rescore-reply", text: defendedText });
     return { transcript, defendedText, stopped: false };
   }
+  function statedDefenceOverall(raw) {
+    const scored = lastScoreJson(raw);
+    const fromJson = scored && typeof scored.value === "object" && scored.value ? Number(scored.value.overallScore) : NaN;
+    if (Number.isInteger(fromJson) && fromJson >= 0 && fromJson <= 100) return fromJson;
+    const match = raw.match(/overall(?:\s+score)?\s+(?:remains|stays|stayed|is|was|of|:)\s*(?:at\s+)?(\d{1,3})\b/i);
+    if (!match) return null;
+    const score = Number(match[1]);
+    if (!Number.isInteger(score) || score < 0 || score > 100) return null;
+    return score;
+  }
+  function chooseDefendedText(original, settled, criteria) {
+    if (acceptWebChatResult(settled, criteria).ok) return settled;
+    if (acceptWebChatResult(original, criteria).ok) return original;
+    if (statedDefenceOverall(settled) != null) return settled;
+    return original;
+  }
 
   // src/services/webChat/paperText.ts
   var PAPER_TEXT_ORIGIN = "https://morgansmart-alt.github.io/open-ai-peer-review";
@@ -4099,12 +4115,28 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
           onProgress: (text) => hooks.onProgress?.(text, { step: text.replace(/\.$/, ""), status: "sending" }),
           send: (prompt, label, expect) => sendFollowUp(document, provider, prompt, hooks, label ?? "author defence", expect ?? "text")
         });
+        let defendedText = defence.defendedText;
+        if (defendedText) {
+          try {
+            const settledDefence = await settleChatJson(
+              defendedText,
+              (prompt) => sendFollowUp(document, provider, prompt, hooks, "corrected score after defence", "json"),
+              (text) => hooks.onProgress?.(text, { step: "Score after author defence", status: "sending" }),
+              (text) => {
+                const checked = acceptWebChatResult(text, criteria);
+                return checked.ok ? { ok: true } : { ok: false, errors: checked.errors };
+              }
+            );
+            defendedText = chooseDefendedText(defendedText, settledDefence.text, criteria);
+          } catch {
+          }
+        }
         report({
           type: "air-web-chat-done",
           requestId: message.requestId,
           ok: true,
           text: settled.text,
-          defendedText: defence.defendedText,
+          defendedText,
           transcript: defence.transcript,
           stopped: defence.stopped,
           chatModel: observedModel(),

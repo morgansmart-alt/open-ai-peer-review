@@ -17,7 +17,7 @@ import { planDelivery, splitText } from "./webChat/deliver.ts"
 import { diagnose, queryDeep } from "./webChat/dom.ts"
 import { buildWebChatPacket, WEB_CHAT_FILE_CHARS } from "./webChat/packet.ts"
 import { originAllowed, validatePacket, WEB_CHAT_LABEL } from "./webChat/protocol.ts"
-import { renderReviewApp, type ReviewActions, type ReviewModel } from "./webChat/reviewView.ts"
+import { recordStep, renderReviewApp, type ReviewActions, type ReviewModel } from "./webChat/reviewView.ts"
 import { runTurn } from "./webChat/runTurn.ts"
 import { exportBundle, packetForLocalPaper, parseExport, resultCard, sourceRecordFromText, storedLocalReview, textFromPdfDocument } from "./webChat/standalone.ts"
 
@@ -455,6 +455,39 @@ describe("extension panel", () => {
     )
     expect(app.querySelector("#step-log")?.textContent).toContain("5:21:03 PM · defence round 1 of 2 · waiting")
     expect(app.querySelector("#step-log")?.textContent).toContain("5:21:04 PM · Stop · idle")
+    expect(app.querySelector("#copy-log")?.textContent).toBe("Copy log")
+    let collapsed = recordStep([], { at: "1", step: "defence round 1 of 2", status: "ready", detail: "Box holds 527 raw, 480 normalised." })
+    for (let i = 0; i < 320; i += 1) {
+      collapsed = recordStep(collapsed, { at: String(i), step: "defence round 1 of 2", status: "reading", detail: `candidate assistant, ${i} characters` })
+    }
+    collapsed = recordStep(collapsed, { at: "end", step: "Summary", status: "score", detail: "Rounds 2/2 · blind 84 · after defence 84" })
+    expect(collapsed.some((entry) => entry.detail?.includes("527 raw"))).toBe(true)
+    expect(collapsed.filter((entry) => entry.status === "reading")).toHaveLength(1)
+    expect(collapsed.at(-1)?.detail).toContain("after defence 84")
+    renderReviewApp(
+      app,
+      model({
+        fileName: "note.txt",
+        status: "Rounds 2/2 · blind 84 · after defence 84",
+        result: {
+          title: "CODATA",
+          overall: 84,
+          recommendation: "accept",
+          summary: "The constants are tabulated for this version of the record.",
+          mismatch: null,
+          label: "free web-chat, uncalibrated",
+          defendedOverall: 84,
+          defendedLabel: "after author defence",
+          roundsLabel: "Defence rounds 2/2",
+          sheetNote: "The after-defence reply named an overall score without a full score sheet. That number is shown.",
+        },
+      }),
+      actions(),
+    )
+    expect(app.querySelector("#defence-round-count")?.textContent).toBe("Defence rounds 2/2")
+    expect(app.querySelector("#after-defence")?.textContent).toContain("84")
+    expect(app.querySelector("#status")?.textContent).toContain("after defence 84")
+    expect(app.querySelector("#defence-sheet")?.textContent).toContain("full score sheet")
 
     const packet = packetForLocalPaper({
       requestId: "web-local",

@@ -2950,6 +2950,29 @@ ${output}
   }
 
   // src/services/webChat/reviewView.ts
+  var LOG_CAP = 300;
+  function isProgress(entry) {
+    return entry.status === "reading" || entry.status === "waiting";
+  }
+  function recordStep(log, entry, cap = LOG_CAP) {
+    const next = log.slice();
+    if (isProgress(entry)) {
+      const index = next.findIndex((item) => item.step === entry.step && isProgress(item));
+      if (index >= 0) next[index] = entry;
+      else next.push(entry);
+    } else next.push(entry);
+    if (next.length <= cap) return next;
+    const overflow = next.length - cap;
+    let dropped = 0;
+    const kept = next.filter((item) => {
+      if (isProgress(item) && dropped < overflow) {
+        dropped += 1;
+        return false;
+      }
+      return true;
+    });
+    return kept.slice(-cap);
+  }
   var SITE_LINKS = [
     { href: "https://grok.com/", label: "Grok" },
     { href: "https://gemini.google.com/app", label: "Gemini" },
@@ -3097,6 +3120,13 @@ ${output}
       for (const entry of model.stepLog) {
         el(log, "li", `${entry.at} \xB7 ${entry.step} \xB7 ${entry.status}${entry.detail ? ` \xB7 ${entry.detail}` : ""}`);
       }
+      const copy = el(form, "button", "Copy log", "quiet");
+      copy.type = "button";
+      copy.id = "copy-log";
+      copy.addEventListener("click", () => {
+        const text2 = (model.stepLog ?? []).map((entry) => `${entry.at} \xB7 ${entry.step} \xB7 ${entry.status}${entry.detail ? ` \xB7 ${entry.detail}` : ""}`).join("\n");
+        void navigator.clipboard?.writeText(text2);
+      });
     }
     if (model.status) {
       const status2 = el(form, "p", model.status, "status");
@@ -3113,12 +3143,21 @@ ${output}
       el(card, "p", model.result.label, "label");
       el(card, "h2", model.result.title);
       el(card, "p", `Blind score ${Math.round(model.result.overall)} out of 100 \xB7 ${model.result.recommendation}`, "score");
+      if (model.result.roundsLabel) {
+        const rounds2 = el(card, "p", model.result.roundsLabel, "score");
+        rounds2.id = "defence-round-count";
+      }
       if (model.result.model) {
         const line = el(card, "p", `Model: ${model.result.model}`, "note");
         line.id = "chat-model";
       }
       if (model.result.defendedOverall != null) {
-        el(card, "p", `${model.result.defendedLabel || "after author defence"} ${Math.round(model.result.defendedOverall)} out of 100`, "score");
+        const after = el(card, "p", `${model.result.defendedLabel || "after author defence"} ${Math.round(model.result.defendedOverall)} out of 100`, "score");
+        after.id = "after-defence";
+      }
+      if (model.result.sheetNote) {
+        const sheet = el(card, "p", model.result.sheetNote, "note");
+        sheet.id = "defence-sheet";
       }
       if (model.result.notice) {
         const defenceFailed = model.result.notice.includes("Defence step failed:");
@@ -3185,21 +3224,72 @@ ${output}
 
   // src/services/webChat/defence.ts
   var DEFENDED_LABEL = "after author defence";
-  function defendedFromReply(raw) {
-    const accepted = acceptWebChatResult(raw, officialCriteria);
-    if (!accepted.ok) return { ok: false, error: accepted.errors[0] || "The defended score was not usable JSON." };
-    const describedOk = accepted.report.scoringCheck?.mismatch !== true;
-    if (!describedOk) return { ok: false, error: "The defended score clashes with its own weighted total." };
-    return {
-      ok: true,
-      defended: {
-        label: DEFENDED_LABEL,
-        overallScore: accepted.report.overallScore,
-        recommendation: accepted.report.recommendation,
-        summary: accepted.report.summary,
-        scores: accepted.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score }))
-      }
-    };
+  function statedDefenceOverall(raw) {
+    const scored = lastScoreJson(raw);
+    const fromJson = scored && typeof scored.value === "object" && scored.value ? Number(scored.value.overallScore) : NaN;
+    if (Number.isInteger(fromJson) && fromJson >= 0 && fromJson <= 100) return fromJson;
+    const match = raw.match(/overall(?:\s+score)?\s+(?:remains|stays|stayed|is|was|of|:)\s*(?:at\s+)?(\d{1,3})\b/i);
+    if (!match) return null;
+    const score = Number(match[1]);
+    if (!Number.isInteger(score) || score < 0 || score > 100) return null;
+    return score;
+  }
+  function partialDefended(raw, overall) {
+    const scored = lastScoreJson(raw);
+    const row = scored && typeof scored.value === "object" && scored.value ? scored.value : {};
+    const summaryRaw = typeof row.summary === "string" ? row.summary.trim() : "";
+    const summary = summaryRaw.length >= 40 ? summaryRaw.slice(0, 4e3) : "The chat stated an overall score after author defence. The reply did not include a full score sheet.";
+    const recommendation = typeof row.recommendation === "string" ? row.recommendation.trim().slice(0, 80) : "";
+    const scores = Array.isArray(row.scores) ? row.scores.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const record = item;
+      const criterionId = typeof record.criterionId === "string" ? record.criterionId.trim() : "";
+      const score = Number(record.score);
+      return criterionId && Number.isInteger(score) ? [{ criterionId, score }] : [];
+    }) : [];
+    return { label: DEFENDED_LABEL, overallScore: overall, recommendation, summary, scores };
+  }
+  function defendedFromReply(raw, criteria = officialCriteria) {
+    const accepted = acceptWebChatResult(raw, criteria);
+    const clashes = accepted.ok && accepted.report.scoringCheck?.mismatch === true;
+    if (accepted.ok && !clashes) {
+      return {
+        ok: true,
+        defended: {
+          label: DEFENDED_LABEL,
+          overallScore: accepted.report.overallScore,
+          recommendation: accepted.report.recommendation,
+          summary: accepted.report.summary,
+          scores: accepted.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score }))
+        }
+      };
+    }
+    const stated = statedDefenceOverall(raw);
+    if (stated == null) {
+      const error2 = accepted.ok ? "The defended score clashes with its own weighted total." : accepted.errors[0] || "The defended score was not usable JSON.";
+      return { ok: false, error: error2 };
+    }
+    return { ok: true, partial: true, defended: partialDefended(raw, stated) };
+  }
+
+  // src/services/webChat/runSummary.ts
+  function defenceRoundCounts(transcript) {
+    const turns = transcript ?? [];
+    const completed = turns.filter((turn) => turn.kind === "reply").length;
+    const requested = turns.reduce((max, turn) => Math.max(max, turn.round || 0), 0);
+    return { completed, requested };
+  }
+  function defenceRoundsLabel(transcript) {
+    const rounds = defenceRoundCounts(transcript);
+    if (rounds.requested <= 0) return "";
+    return `Defence rounds ${rounds.completed}/${rounds.requested}`;
+  }
+  function runSummary(input) {
+    if (input.requested <= 0) {
+      return input.after == null ? "Done. The blind score is below." : "Done. The blind score and the score after author defence are below.";
+    }
+    const after = input.after == null ? "after defence not read" : `after defence ${input.after}`;
+    return `Rounds ${input.completed}/${input.requested} \xB7 blind ${input.blind} \xB7 ${after}`;
   }
 
   // src/services/webChat/publication.ts
@@ -3460,6 +3550,8 @@ ${JSON.stringify(report)}`),
       label: WEB_CHAT_LABEL,
       defendedOverall: review.defended?.overallScore ?? null,
       defendedLabel: review.defended?.label ?? "",
+      roundsLabel: defenceRoundsLabel(review.defenceTranscript),
+      sheetNote: review.defenceNote ?? "",
       model: review.modelId,
       scores: review.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score })),
       feedback: feedback ? labels.map((item) => ({ label: item.label, text: feedback[item.key]?.trim() || "none" })) : [],
@@ -3680,7 +3772,7 @@ ${JSON.stringify(report)}`),
   var pendingPaper = null;
   function rememberStep(step, stepStatus, detail = "") {
     const at = (/* @__PURE__ */ new Date()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    return [...stepLog, { at, step, status: stepStatus, ...detail ? { detail } : {} }].slice(-40);
+    return recordStep(stepLog, { at, step, status: stepStatus, ...detail ? { detail } : {} });
   }
   function storageGet(key) {
     return new Promise((resolve) => {
@@ -3927,7 +4019,8 @@ ${JSON.stringify(report)}`),
     }
   });
   async function finish(raw, defendedRaw, transcript, stopped, chatModel, notice) {
-    const accepted = acceptWebChatResult(raw, readingCriteria(officialCriteria, profileId, false));
+    const criteria = readingCriteria(officialCriteria, profileId, false);
+    const accepted = acceptWebChatResult(raw, criteria);
     if (!accepted.ok) {
       busy = false;
       status = "";
@@ -3935,7 +4028,7 @@ ${JSON.stringify(report)}`),
       paint();
       return;
     }
-    const defended = defendedRaw ? defendedFromReply(defendedRaw) : null;
+    const defended = defendedRaw ? defendedFromReply(defendedRaw, criteria) : null;
     const stored = await storedLocalReview({
       providerId,
       criteria: officialCriteria,
@@ -3945,15 +4038,26 @@ ${JSON.stringify(report)}`),
       publication: publication ? { title: publication.title, doi: publication.doi, url: publication.url, authors: publication.authors } : void 0
     });
     stored.defenceTranscript = transcript;
-    if (defended?.ok) stored.defended = defended.defended;
+    if (defended?.ok) {
+      stored.defended = defended.defended;
+      if (defended.partial) stored.defenceNote = "The after-defence reply named an overall score without a full score sheet. That number is shown.";
+    }
     const provider = webChatProvider(providerId);
     stored.modelId = webChatModelId(provider?.modelLabel ?? providerId, chatModel);
     const failure = notice?.includes("Defence step failed:") ? notice.slice(notice.indexOf("Defence step failed:")) : "";
     if (notice?.trim()) stored.sourceNote = notice.trim();
     reviews = appendResult(reviews, stored);
     await storageSet(RESULT_STORAGE_KEY, reviews);
+    const rounds = defenceRoundCounts(transcript);
+    const summaryLine = runSummary({
+      completed: rounds.completed,
+      requested: rounds.requested,
+      blind: Math.round(resultCard(stored).overall),
+      after: defended?.ok ? defended.defended.overallScore : null
+    });
+    stepLog = rememberStep("Summary", "score", summaryLine);
     busy = false;
-    status = failure ? failure : stopped ? "Stopped. The blind score is kept. The chat tab stays open." : defended?.ok ? "Done. The blind score and the score after author defence are below." : "Done. The blind score is below.";
+    status = failure ? failure : stopped ? "Stopped. The blind score is kept. The chat tab stays open." : summaryLine;
     error = "";
     paint();
   }

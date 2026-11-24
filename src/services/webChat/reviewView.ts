@@ -11,6 +11,8 @@ export interface ReviewCard {
   label: string
   defendedOverall?: number | null
   defendedLabel?: string
+  roundsLabel?: string
+  sheetNote?: string
   scores?: { criterionId: string; score: number }[]
   feedback?: { label: string; text: string }[]
   model?: string
@@ -42,6 +44,33 @@ export interface StepLogEntry {
   step: string
   status: string
   detail?: string
+}
+
+const LOG_CAP = 300
+
+function isProgress(entry: StepLogEntry): boolean {
+  return entry.status === "reading" || entry.status === "waiting"
+}
+
+/** Reading polls update one line. Sent, verify, round, and score lines stay. */
+export function recordStep(log: StepLogEntry[], entry: StepLogEntry, cap = LOG_CAP): StepLogEntry[] {
+  const next = log.slice()
+  if (isProgress(entry)) {
+    const index = next.findIndex((item) => item.step === entry.step && isProgress(item))
+    if (index >= 0) next[index] = entry
+    else next.push(entry)
+  } else next.push(entry)
+  if (next.length <= cap) return next
+  const overflow = next.length - cap
+  let dropped = 0
+  const kept = next.filter((item) => {
+    if (isProgress(item) && dropped < overflow) {
+      dropped += 1
+      return false
+    }
+    return true
+  })
+  return kept.slice(-cap)
 }
 
 export interface ReviewModel {
@@ -238,6 +267,15 @@ export function renderReviewApp(root: HTMLElement, model: ReviewModel, actions: 
     for (const entry of model.stepLog) {
       el(log, "li", `${entry.at} · ${entry.step} · ${entry.status}${entry.detail ? ` · ${entry.detail}` : ""}`)
     }
+    const copy = el(form, "button", "Copy log", "quiet")
+    copy.type = "button"
+    copy.id = "copy-log"
+    copy.addEventListener("click", () => {
+      const text = (model.stepLog ?? [])
+        .map((entry) => `${entry.at} · ${entry.step} · ${entry.status}${entry.detail ? ` · ${entry.detail}` : ""}`)
+        .join("\n")
+      void navigator.clipboard?.writeText(text)
+    })
   }
   if (model.status) {
     const status = el(form, "p", model.status, "status")
@@ -255,12 +293,21 @@ export function renderReviewApp(root: HTMLElement, model: ReviewModel, actions: 
     el(card, "p", model.result.label, "label")
     el(card, "h2", model.result.title)
     el(card, "p", `Blind score ${Math.round(model.result.overall)} out of 100 · ${model.result.recommendation}`, "score")
+    if (model.result.roundsLabel) {
+      const rounds = el(card, "p", model.result.roundsLabel, "score")
+      rounds.id = "defence-round-count"
+    }
     if (model.result.model) {
       const line = el(card, "p", `Model: ${model.result.model}`, "note")
       line.id = "chat-model"
     }
     if (model.result.defendedOverall != null) {
-      el(card, "p", `${model.result.defendedLabel || "after author defence"} ${Math.round(model.result.defendedOverall)} out of 100`, "score")
+      const after = el(card, "p", `${model.result.defendedLabel || "after author defence"} ${Math.round(model.result.defendedOverall)} out of 100`, "score")
+      after.id = "after-defence"
+    }
+    if (model.result.sheetNote) {
+      const sheet = el(card, "p", model.result.sheetNote, "note")
+      sheet.id = "defence-sheet"
     }
     if (model.result.notice) {
       const defenceFailed = model.result.notice.includes("Defence step failed:")

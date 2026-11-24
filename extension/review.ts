@@ -5,8 +5,9 @@ import { acceptWebChatResult } from "../src/services/webChat/accept.ts"
 import { webChatModelId } from "../src/services/webChat/chatModel.ts"
 import { WEB_CHAT_PDF_PAGES } from "../src/services/webChat/packet.ts"
 import { EXTENSION_SOURCE, PAGE_SOURCE, PROTOCOL_VERSION } from "../src/services/webChat/protocol.ts"
-import { renderReviewApp, type ReviewModel, type StepLogEntry } from "../src/services/webChat/reviewView.ts"
+import { recordStep, renderReviewApp, type ReviewModel, type StepLogEntry } from "../src/services/webChat/reviewView.ts"
 import { defendedFromReply } from "../src/services/webChat/defence.ts"
+import { defenceRoundCounts, runSummary } from "../src/services/webChat/runSummary.ts"
 import { resolvePublication, type PublicationPreview } from "../src/services/webChat/publication.ts"
 import { submissionFromReview } from "../src/services/webChat/submission.ts"
 import { postWebChatSubmission } from "../src/services/webChat/submit.ts"
@@ -46,7 +47,7 @@ let pendingPaper: { filename: string; text: string; note?: string } | null = nul
 
 function rememberStep(step: string, stepStatus: string, detail = ""): StepLogEntry[] {
   const at = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-  return [...stepLog, { at, step, status: stepStatus, ...(detail ? { detail } : {}) }].slice(-40)
+  return recordStep(stepLog, { at, step, status: stepStatus, ...(detail ? { detail } : {}) })
 }
 
 function storageGet(key: string): Promise<unknown> {
@@ -308,7 +309,8 @@ chrome.runtime.onMessage.addListener((message: { source?: string; type?: string;
 })
 
 async function finish(raw: string, defendedRaw: string | null, transcript: { round: number; kind: string; text: string }[], stopped: boolean, chatModel?: string, notice?: string): Promise<void> {
-  const accepted = acceptWebChatResult(raw, readingCriteria(officialCriteria, profileId, false))
+  const criteria = readingCriteria(officialCriteria, profileId, false)
+  const accepted = acceptWebChatResult(raw, criteria)
   if (!accepted.ok) {
     busy = false
     status = ""
@@ -316,7 +318,7 @@ async function finish(raw: string, defendedRaw: string | null, transcript: { rou
     paint()
     return
   }
-  const defended = defendedRaw ? defendedFromReply(defendedRaw) : null
+  const defended = defendedRaw ? defendedFromReply(defendedRaw, criteria) : null
   const stored = await storedLocalReview({
     providerId,
     criteria: officialCriteria,
@@ -328,21 +330,30 @@ async function finish(raw: string, defendedRaw: string | null, transcript: { rou
       : undefined,
   })
   stored.defenceTranscript = transcript
-  if (defended?.ok) stored.defended = defended.defended
+  if (defended?.ok) {
+    stored.defended = defended.defended
+    if (defended.partial) stored.defenceNote = "The after-defence reply named an overall score without a full score sheet. That number is shown."
+  }
   const provider = webChatProvider(providerId)
   stored.modelId = webChatModelId(provider?.modelLabel ?? providerId, chatModel)
   const failure = notice?.includes("Defence step failed:") ? notice.slice(notice.indexOf("Defence step failed:")) : ""
   if (notice?.trim()) stored.sourceNote = notice.trim()
   reviews = appendResult(reviews, stored)
   await storageSet(RESULT_STORAGE_KEY, reviews)
+  const rounds = defenceRoundCounts(transcript)
+  const summaryLine = runSummary({
+    completed: rounds.completed,
+    requested: rounds.requested,
+    blind: Math.round(resultCard(stored).overall),
+    after: defended?.ok ? defended.defended.overallScore : null,
+  })
+  stepLog = rememberStep("Summary", "score", summaryLine)
   busy = false
   status = failure
     ? failure
     : stopped
       ? "Stopped. The blind score is kept. The chat tab stays open."
-      : defended?.ok
-        ? "Done. The blind score and the score after author defence are below."
-        : "Done. The blind score is below."
+      : summaryLine
   error = ""
   paint()
 }

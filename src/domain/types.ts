@@ -235,6 +235,8 @@ export interface StoredReview {
   }
   /** Local only. Never copied into a leaderboard payload. */
   defenceTranscript?: { round: number; kind: string; text: string }[]
+  /** Local only. The after-defence reply named an overall without a full score sheet. */
+  defenceNote?: string
   report: ReviewReport
   outputHash: string
   createdAt: string
