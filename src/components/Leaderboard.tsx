@@ -70,7 +70,7 @@ export function Leaderboard() {
         </h2>
         <p className="max-w-xl text-xs text-ink-soft">
           Cells are medians on a 0–100 scale. Older 0–10 readings are multiplied by 10, and AIR v0.1 readings are stretched from 1–5. Order leans toward 50 until several readings exist. A reading whose own scores disagree is left out of the median.
-          Sort by impact, feasibility, physics, simulation, estimated value, global goals, or idea. Those scores open inside the row.{" "}
+          Sort by impact, feasibility, physics, simulation, estimated value, global goals, idea, or the human review score. Records with no human review sort last on that ranking. Those scores open inside the row.{" "}
           <Link to="/method" className="underline">
             How this is calculated
           </Link>
@@ -132,8 +132,10 @@ export function Leaderboard() {
                       </button>
                     </th>
                   ))}
-                <th scope="col" className="px-2 py-3" title="Human reviews. Not included in the AI median.">
-                  Human
+                <th scope="col" className="px-2 py-3" title="Human reviews. Not included in the AI median." aria-sort={method.id === "human" ? "descending" : "none"}>
+                  <button type="button" className={cx("underline-offset-2 hover:underline", method.id === "human" && "font-semibold text-teal-deep")} onClick={() => setMethodId("human")}>
+                    Human
+                  </button>
                 </th>
                 <th scope="col" className="px-3 py-3">Trust</th>
               </tr>
@@ -239,7 +241,7 @@ function RowBody({
             {column.value !== null && <div className="text-[11px] text-ink-soft">{column.count}</div>}
           </td>
         ))}
-        <td className="px-2 py-3 text-sm" title="Human reviews. Not included in the AI median.">
+        <td className={cx("px-2 py-3 text-sm", methodId === "human" && "bg-teal/5")} title="Human reviews. Not included in the AI median.">
           <ScoreValue value={row.humanMedian} title={row.humanCount ? `${row.humanCount} human review${row.humanCount === 1 ? "" : "s"}` : "No human review"} />
           {row.humanMedian !== null && <div className="text-[11px] text-ink-soft">{row.humanCount}</div>}
           {row.humanMismatchCount > 0 && <div className="text-[11px] text-ink-soft">Mismatch</div>}

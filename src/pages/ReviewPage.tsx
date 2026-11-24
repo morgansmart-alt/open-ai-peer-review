@@ -15,14 +15,13 @@ import { resolvedModel } from "../services/providers.ts"
 import { FREE_BROWSER_MODEL, FREE_BROWSER_SIZE, FREE_LABEL, runFreeScreening } from "../services/freeReview.ts"
 import { runReview } from "../services/review.ts"
 import { downloadArrayBuffer, extractDocument, type ExtractedDocument } from "../services/extractText.ts"
+import { FilePicker } from "../components/FilePicker.tsx"
+import { fileSelectionFor, rememberFileSelection } from "../services/fileSelection.ts"
 import {
-  defaultFileSelection,
   extensionOf,
   fetchZenodoRecord,
   filesAreRestricted,
-  formatBytes,
   formatRecordStamp,
-  isTextualFile,
   type ZenodoFile,
   type ZenodoRecord,
 } from "../services/zenodo.ts"
@@ -122,7 +121,7 @@ export function ReviewPage() {
     try {
       const next = parsed.kind === "zenodo" ? await fetchZenodoRecord(parsed.recordId) : await resolvePublishedDoi(parsed.doi)
       setRecord(next)
-      setSelected(defaultFileSelection(next.files))
+      setSelected(fileSelectionFor(next.id, next.files))
       setDownloadNote(next.files.length === 0 ? "No open file was linked for this DOI. Drop the PDF below. Publishing still needs the DOI." : null)
       setStatus(null)
     } catch (caught) {
@@ -143,7 +142,7 @@ export function ReviewPage() {
       if (!file || have.has(file.key)) continue
       setStatus(`Reading ${index + 1} of ${wanted.length}: ${file.key}`)
       try {
-        const bytes = localBytes.current.get(file.key) ?? (file.downloadUrl ? await downloadArrayBuffer(file.downloadUrl) : null)
+        const bytes = localBytes.current.get(file.key) ?? (file.downloadUrl ? await downloadArrayBuffer(file.downloadUrl, record.access) : null)
         if (!bytes) throw new Error(`${file.key} has no download link. Drop the file from your computer.`)
         const extracted = await extractDocument(file.key, bytes, setStatus)
         next.push(extracted)
@@ -479,39 +478,17 @@ export function ReviewPage() {
                 <Banner tone="error">Files on this record are restricted or embargoed. AIR can still read the public description, not the files.</Banner>
               </div>
             )}
-            <fieldset className="file-fieldset mt-4" disabled={restricted}>
-              <legend className="text-sm font-medium">Files to read</legend>
-              <p className="mt-1 text-xs text-ink-soft">
-                The main manuscript and the small supplements are preselected when they fit. A zip stays unticked. A paper that fits the model's context is sent in full.
-              </p>
-              <p className="mt-1 text-xs font-medium text-ink">
-                {selected.length} of {record.files.length} files · {formatBytes(record.files.filter((file) => selected.includes(file.key)).reduce((total, file) => total + file.size, 0))} selected
-              </p>
-              <div className="file-scroll mt-2">
-              <ul className="space-y-1 text-sm">
-                {record.files.map((file) => {
-                  const textual = isTextualFile(file)
-                  return (
-                    <li key={file.key}>
-                      <label className="flex items-start gap-2">
-                        <input
-                          type="checkbox"
-                          disabled={!textual}
-                          checked={selected.includes(file.key)}
-                          onChange={(event) =>
-                            setSelected((current) => (event.target.checked ? [...current, file.key] : current.filter((key) => key !== file.key)))
-                          }
-                        />
-                        <span className="min-w-0 break-words">
-                          {file.key} <span className="text-ink-soft">· {file.size > 0 ? formatBytes(file.size) : "size unknown"}{textual ? "" : " · not read as text"}</span>
-                        </span>
-                      </label>
-                    </li>
-                  )
-                })}
-              </ul>
-              </div>
-            </fieldset>
+            <FilePicker
+              className="mt-4"
+              files={record.files}
+              selected={selected}
+              disabled={restricted}
+              hint="The main manuscript comes first, then supplements, other PDFs, and text sources, while they fit under 12 files and 8 MB. A zip stays unticked. Images are not read as text. A paper that fits the model's context is sent in full."
+              onChange={(keys) => {
+                setSelected(keys)
+                rememberFileSelection(record.id, keys)
+              }}
+            />
             <div className="mt-5">
               <PrivateLinksField rows={linkDrafts} onChange={setLinkDrafts} />
             </div>

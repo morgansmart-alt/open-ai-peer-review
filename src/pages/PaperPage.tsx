@@ -14,6 +14,7 @@ import { ReviewWorkspace } from "../components/ReviewWorkspace.tsx"
 import { MoltbookPanel } from "../components/MoltbookPanel.tsx"
 import { VersionBar } from "../components/VersionBar.tsx"
 import { WorkList } from "../components/WorkList.tsx"
+import { FilePicker } from "../components/FilePicker.tsx"
 import { Banner, btnPrimary, btnQuiet, ExternalLink, fieldClass, formatWhen } from "../components/ui.tsx"
 import { isPrivateShareLink, loadRoundLink, loadSubmissionLinks, parseConversationLink, publicContextCount, saveRoundLink, saveNodeLink } from "../domain/conversationLinks.ts"
 import { ladderTier } from "../domain/fidelity.ts"
@@ -21,6 +22,7 @@ import { LineChart } from "../components/charts.tsx"
 import { sha256Hex, uid } from "../services/hash.ts"
 import { prepareRecheck } from "../services/recheck.ts"
 import { runIndependent, runSourceCheck, type VerdictDraft } from "../services/review.ts"
+import { fileSelectionFor, rememberFileSelection } from "../services/fileSelection.ts"
 import { loadVersionDocuments } from "../services/versionText.ts"
 import { downloadReceipt, lookupReceipt, savePrivateContext } from "../services/privateContext.ts"
 import { resolvedModel } from "../services/providers.ts"
@@ -46,6 +48,7 @@ export function PaperPage() {
   const [error, setError] = useState<string | null>(null)
   const [versions, setVersions] = useState<ZenodoVersion[]>([])
   const [documents, setDocuments] = useState<{ filename: string; text: string }[]>([])
+  const [selectedFiles, setSelectedFiles] = useState<string[]>([])
   const [loadingText, setLoadingText] = useState(false)
   const [recheckNote, setRecheckNote] = useState<string | null>(null)
   const [recheckBusy, setRecheckBusy] = useState(false)
@@ -54,15 +57,19 @@ export function PaperPage() {
     if (sample) {
       setRecord(sampleRecord(sample))
       setDocuments([{ filename: "sample.txt", text: `${sample.abstract}\n\n${sample.passage}` }])
+      setSelectedFiles([])
       return
     }
     let cancelled = false
     setError(null)
     setVersions([])
+    setDocuments([])
     void fetchZenodoRecord(lookupId)
       .then((next) => {
         if (cancelled) return
         setRecord(next)
+        setSelectedFiles(fileSelectionFor(next.id, next.files))
+        setDocuments([])
         void fetchRecordVersions(next.conceptId)
           .then((found) => {
             if (!cancelled) setVersions(found)
@@ -97,7 +104,7 @@ export function PaperPage() {
     if (!record || sample) return
     setLoadingText(true)
     setError(null)
-    const next = await loadVersionDocuments(record)
+    const next = await loadVersionDocuments(record, selectedFiles)
     if (next.length === 0 && record.files.some((file) => isTextualFile(file))) setError("Could not read this version’s files.")
     setDocuments(next)
     setLoadingText(false)
@@ -108,13 +115,18 @@ export function PaperPage() {
     const profile = air.profiles.find((item) => item.id === "grok") ?? air.profiles[0]
     if (!profile) return "No assessor is configured."
     try {
+      const sameTarget = targetRecordId === record.id
+      const reusable =
+        sameTarget && selectedFiles.length > 0 && selectedFiles.every((key) => documents.some((doc) => doc.filename === key && doc.text.trim()))
+          ? documents.filter((doc) => selectedFiles.includes(doc.filename))
+          : []
       const prepared = await prepareRecheck({
         current: record,
-        loadedDocuments: documents,
+        loadedDocuments: reusable,
         targetRecordId,
         issueRecordVersion: issue.recordVersion,
         fetchRecord: fetchZenodoRecord,
-        loadDocuments: loadVersionDocuments,
+        loadDocuments: (target) => loadVersionDocuments(target, target.id === record.id ? selectedFiles : undefined),
       })
       if (prepared.target.id === record.id) setDocuments(prepared.documents)
       const searched = publicationPlainText(prepared.documents, prepared.target.description)
@@ -143,7 +155,7 @@ export function PaperPage() {
         related,
       })
       const settled = settleCheckResult(draft.result === "ADDRESSED" && draft.citations.length === 0 ? "NOT_ADDRESSED" : draft.result, draft.citations, searched)
-      const status = statusFromCheck(settled.result, issue.rounds.length, issue.recordVersion, prepared.checkedVersionId)
+      const status = statusFromCheck(settled.result, issue.rounds, issue.recordVersion, prepared.checkedVersionId)
       const unverified = settled.result !== draft.result
       const error = await air.addRound(
         issue.id,
@@ -247,6 +259,21 @@ export function PaperPage() {
               </button>
             )}
           </div>
+          {!sample && record.files.length > 0 && (
+            <FilePicker
+              compact
+              className="mt-6"
+              files={record.files}
+              selected={selectedFiles}
+              legend="Files for a re-check of this version"
+              hint="A re-check of this version reads only the files you leave ticked. Another version is never searched with this list. The manuscript is ticked first, then supplements, other PDFs, and text, while they fit. Your last choice for this record is kept on this browser."
+              onChange={(keys) => {
+                setSelectedFiles(keys)
+                setDocuments([])
+                rememberFileSelection(record.id, keys)
+              }}
+            />
+          )}
           <AuthorBox record={record} />
           <VersionBar currentId={record.id} versions={versions} lineage={lineage} />
           <WorkList

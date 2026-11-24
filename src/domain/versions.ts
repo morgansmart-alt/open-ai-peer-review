@@ -56,7 +56,7 @@ type RoundSlice = Pick<IssueRound, "kind" | "recordVersionChecked">
  * A rebuttal or counter stays in the window of the latest check, or the opening version.
  * Each window holds at most six rounds. A later version starts a fresh window.
  */
-export function roundWindowVersion(issueVersion: string, rounds: RoundSlice[], index: number): string {
+export function roundWindowVersion(issueVersion: string, rounds: readonly RoundSlice[], index: number): string {
   let active = issueVersion
   for (let walk = 0; walk <= index; walk += 1) {
     const item = rounds[walk]
@@ -72,7 +72,7 @@ export function roundWindowVersion(issueVersion: string, rounds: RoundSlice[], i
   return active
 }
 
-function windowCount(issueVersion: string, rounds: RoundSlice[], version: string): number {
+function windowCount(issueVersion: string, rounds: readonly RoundSlice[], version: string): number {
   return rounds.filter((_, index) => roundWindowVersion(issueVersion, rounds, index) === version).length
 }
 

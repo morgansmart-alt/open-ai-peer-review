@@ -1,5 +1,5 @@
 import type { AuthorClaim, AuthorRole, IssueRound, IssueStatus, IssueThread, MajorIssue, NodeSubmission, SourceResult, StoredReview } from "./types.ts"
-import { canAppendRound, ROUND_LIMIT, samePublication } from "./versions.ts"
+import { canAppendRound, ROUND_LIMIT, roundWindowVersion, samePublication } from "./versions.ts"
 
 export { canAppendRound, ROUND_LIMIT }
 
@@ -7,16 +7,30 @@ export function claimKey(doi: string, recordVersion: string, criterionId: string
   return `${doi}@@${recordVersion}@@${criterionId}@@${claim.trim().toLowerCase()}`
 }
 
+type RoundWindowSlice = Pick<IssueRound, "kind" | "recordVersionChecked">
+
+/**
+ * Rounds already inside one version window.
+ * A number is that window's count, not the thread total.
+ * An array is counted with the same rules as `air_round_window_version`:
+ * a source check or re-check names its window, and a later version starts again.
+ */
+export function roundsInVersionWindow(issueVersion: string, rounds: readonly RoundWindowSlice[], checkedVersion: string): number {
+  if (!checkedVersion) return rounds.length
+  return rounds.filter((_, index) => roundWindowVersion(issueVersion, rounds, index) === checkedVersion).length
+}
+
 export function statusFromCheck(
   result: SourceResult,
-  existingRounds: number,
+  existingRounds: number | readonly RoundWindowSlice[],
   issueVersion: string,
   checkedVersion: string,
 ): IssueStatus {
   if (result === "ADDRESSED" && checkedVersion && !samePublication(issueVersion, checkedVersion)) return "fixed-in-new-version"
   if (result === "ADDRESSED") return "addressed-in-publication"
   if (result === "PARTIALLY_ADDRESSED") return "partially-addressed"
-  if (existingRounds + 1 >= 3 || existingRounds + 1 >= ROUND_LIMIT) return "unresolved"
+  const inWindow = typeof existingRounds === "number" ? existingRounds : roundsInVersionWindow(issueVersion, existingRounds, checkedVersion)
+  if (inWindow + 1 >= 3 || inWindow + 1 >= ROUND_LIMIT) return "unresolved"
   return "open"
 }
 

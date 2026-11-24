@@ -93,6 +93,10 @@ body {
   padding-bottom: 0.75rem;
 }
 
+.file-scroll-compact {
+  max-height: 14rem;
+}
+
 @media print {
   .no-print {
     display: none !important;
