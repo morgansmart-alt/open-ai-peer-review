@@ -4,6 +4,7 @@ import { sha256Hex, uid } from "../hash.ts"
 import { scoringMismatch } from "../../domain/scoring.ts"
 import { draftWebChatReview, scrubPrivateUrls } from "./accept.ts"
 import { buildWebChatPacket } from "./packet.ts"
+import { paperTextRecordId } from "./paperText.ts"
 import { hasAirFeedback } from "../airFeedback.ts"
 import { WEB_CHAT_LABEL, type WebChatPacket } from "./protocol.ts"
 
@@ -81,6 +82,7 @@ export function packetForLocalPaper(options: {
     criterionProfile: options.criterionProfile,
     record,
     documents: [{ filename: options.filename, text: options.text }],
+    useTextPage: Boolean(paperTextRecordId(record)),
   })
 }
 

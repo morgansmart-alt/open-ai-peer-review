@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AIR web-chat review",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Review a PDF in a chat you are already signed into. Click the icon, pick a file, and click Review my paper.",
   "action": {
     "default_title": "Review a paper",

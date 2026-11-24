@@ -142,12 +142,12 @@
     modelLabel: "Grok on x.com",
     startUrl: "https://x.com/i/grok",
     origins: ["https://x.com/i/grok*"],
-    pasteLimit: 32e3,
+    pasteLimit: 1e5,
     fileCharLimit: 4e5,
     maxFiles: 4,
     comfortableTurns: 6,
     fileUpload: true,
-    limits: "Grok on X is at x.com/i/grok. AIR tries a file up to about 400,000 characters, then pastes 32,000 characters at a time. X rate-limits long threads. That limit was not measured here.",
+    limits: "Grok on X is at x.com/i/grok. AIR sends one message when the paper and the instructions fit in about 100,000 characters, attaches a file when the site accepts one, and otherwise pastes in parts. X rate-limits long threads. That limit was not measured here.",
     selectors: {
       composer: [
         'textarea[aria-label="Ask anything"]',
@@ -1850,7 +1850,7 @@ ${parsed2.errors.join("\n")}`);
       "Be specific and kind. Every criticism needs a way to resolve it.",
       "Quote only passages that appear in the text you were given. Do not invent page numbers, results, or citations.",
       `Score every criterion with an integer from ${criteria.scale.min} to ${criteria.scale.max}.`,
-      "You may add an optional air_feedback object about AIR itself: unclear criteria, a misfitting profile, missing files or context, a prompt problem, a rubric suggestion, or a correction to your own scoring process. Omit it when you have none. It must not change any score.",
+      'Include air_feedback about AIR itself. Give at least one concrete, honest item: an unclear or misfitting criterion, a profile that does not fit, missing context or files, a prompt problem, a rubric suggestion, or a correction to your own scoring. If a field does not apply, write "none" and the reason, for example "none: the data profile matched this record". Never use an empty string. This note must not change any score.',
       criteria.scale.max >= 100 ? "The board is out of 100. AIR weights the criterion scores itself. If you include overallScore, keep it within 10 points of that weighted total. recommendation must match the band: accept or encourage from 80 (accept means sound as it stands; encourage means the idea is ready to build on), revise from 60, major-revision from 40, otherwise not-ready." : "",
       criteria.criteria.some((criterion) => criterion.id === "estimated-value") ? "" : "This profile does not score estimated project value. Omit valueEstimate. Use accept when the work is sound as it stands.",
       "Image pixels are not read. When the text says Figures not read, say so on availability. Do not treat an unseen figure as missing data unless the claim needs the image itself.",
@@ -1924,12 +1924,12 @@ ${parsed2.errors.join("\n")}`);
       questionsForAuthors: ["string"],
       suggestedNextSteps: ["string"],
       air_feedback: {
-        criteria: "optional. A criterion or its wording was unclear or did not fit this paper.",
-        profile: "optional. The paper-type profile misfit the work.",
-        missingContext: "optional. A file or piece of context needed to score was missing.",
-        prompt: "optional. The instructions were ambiguous.",
-        rubric: "optional. A concrete rubric change.",
-        scoringProcess: "optional. A correction to how you scored. Do not change the scores to match this note."
+        criteria: 'A concrete note, or "none" with a reason. Never an empty string.',
+        profile: 'A concrete note, or "none" with a reason. Never an empty string.',
+        missingContext: 'A concrete note, or "none" with a reason. Never an empty string.',
+        prompt: 'A concrete note, or "none" with a reason. Never an empty string.',
+        rubric: 'A concrete note, or "none" with a reason. Never an empty string.',
+        scoringProcess: 'A concrete note, or "none" with a reason. Never an empty string. Do not change the scores to match this note.'
       }
     };
     const guide = criteria.criteria.map((criterion) => {
@@ -1957,10 +1957,36 @@ ${parsed2.errors.join("\n")}`);
       conversationPromptBlock(conversations),
       "",
       "Use majorIssues only for failure modes a reviser must face. Leave it empty if nothing rises to that level.",
+      'Fill air_feedback. At least one field must be a concrete observation, or "none" plus a reason. Do not return empty strings.',
       "",
       "Record text:",
       packet
     ].join("\n");
+  }
+
+  // src/services/webChat/paperText.ts
+  var PAPER_TEXT_ORIGIN = "https://morgansmart-alt.github.io/open-ai-peer-review";
+  function paperTextRecordId(record) {
+    const id = (record.id ?? "").trim();
+    if (/^\d+$/.test(id)) return id;
+    const doi = (record.doi ?? "").replace(/^https?:\/\/doi\.org\//i, "");
+    return doi.match(/zenodo\.(\d+)$/i)?.[1] ?? "";
+  }
+  function paperTextPath(recordId) {
+    return `/paper/${encodeURIComponent(recordId)}/text`;
+  }
+  function paperTextUrl(recordId, origin = PAPER_TEXT_ORIGIN) {
+    const base = origin.replace(/\/$/, "");
+    return `${base}${paperTextPath(recordId)}`;
+  }
+  function isPublicPaperTextUrl(url) {
+    try {
+      const parsed2 = new URL(url);
+      if (parsed2.origin !== "https://morgansmart-alt.github.io") return false;
+      return /\/open-ai-peer-review\/paper\/[^/]+\/text\/?$/.test(parsed2.pathname);
+    } catch {
+      return false;
+    }
   }
 
   // src/services/webChat/packet.ts
@@ -1977,6 +2003,8 @@ ${parsed2.errors.join("\n")}`);
     if (files.length === 0 && options.record.description.trim()) {
       files.push({ filename: "description.txt", text: options.record.description.slice(0, WEB_CHAT_FILE_CHARS) });
     }
+    const publicId = paperTextRecordId(options.record);
+    const textUrl = options.textUrl ?? (options.useTextPage && publicId ? paperTextUrl(publicId) : "");
     return {
       version: 1,
       requestId: options.requestId,
@@ -1989,7 +2017,8 @@ ${parsed2.errors.join("\n")}`);
         options.conversations ?? []
       ),
       files,
-      ...options.criterionProfile ? { criterionProfile: options.criterionProfile } : {}
+      ...options.criterionProfile ? { criterionProfile: options.criterionProfile } : {},
+      ...textUrl && isPublicPaperTextUrl(textUrl) ? { textUrl } : {}
     };
   }
 
@@ -2387,7 +2416,8 @@ ${parsed2.errors.join("\n")}`);
       criteria: options.criteria,
       criterionProfile: options.criterionProfile,
       record,
-      documents: [{ filename: options.filename, text: options.text }]
+      documents: [{ filename: options.filename, text: options.text }],
+      useTextPage: Boolean(paperTextRecordId(record))
     });
   }
   function stripChatShareLinks(value) {

@@ -24,7 +24,7 @@ export function reviewSystemPrompt(criteria: CriteriaSet): string {
     "Be specific and kind. Every criticism needs a way to resolve it.",
     "Quote only passages that appear in the text you were given. Do not invent page numbers, results, or citations.",
     `Score every criterion with an integer from ${criteria.scale.min} to ${criteria.scale.max}.`,
-    "You may add an optional air_feedback object about AIR itself: unclear criteria, a misfitting profile, missing files or context, a prompt problem, a rubric suggestion, or a correction to your own scoring process. Omit it when you have none. It must not change any score.",
+    "Include air_feedback about AIR itself. Give at least one concrete, honest item: an unclear or misfitting criterion, a profile that does not fit, missing context or files, a prompt problem, a rubric suggestion, or a correction to your own scoring. If a field does not apply, write \"none\" and the reason, for example \"none: the data profile matched this record\". Never use an empty string. This note must not change any score.",
     criteria.scale.max >= 100
       ? "The board is out of 100. AIR weights the criterion scores itself. If you include overallScore, keep it within 10 points of that weighted total. recommendation must match the band: accept or encourage from 80 (accept means sound as it stands; encourage means the idea is ready to build on), revise from 60, major-revision from 40, otherwise not-ready."
       : "",
@@ -116,12 +116,12 @@ export function reviewUserPrompt(record: ZenodoRecord, criteria: CriteriaSet, pa
     questionsForAuthors: ["string"],
     suggestedNextSteps: ["string"],
     air_feedback: {
-      criteria: "optional. A criterion or its wording was unclear or did not fit this paper.",
-      profile: "optional. The paper-type profile misfit the work.",
-      missingContext: "optional. A file or piece of context needed to score was missing.",
-      prompt: "optional. The instructions were ambiguous.",
-      rubric: "optional. A concrete rubric change.",
-      scoringProcess: "optional. A correction to how you scored. Do not change the scores to match this note.",
+      criteria: "A concrete note, or \"none\" with a reason. Never an empty string.",
+      profile: "A concrete note, or \"none\" with a reason. Never an empty string.",
+      missingContext: "A concrete note, or \"none\" with a reason. Never an empty string.",
+      prompt: "A concrete note, or \"none\" with a reason. Never an empty string.",
+      rubric: "A concrete note, or \"none\" with a reason. Never an empty string.",
+      scoringProcess: "A concrete note, or \"none\" with a reason. Never an empty string. Do not change the scores to match this note.",
     },
   }
   const guide = criteria.criteria
@@ -154,6 +154,7 @@ export function reviewUserPrompt(record: ZenodoRecord, criteria: CriteriaSet, pa
     conversationPromptBlock(conversations),
     "",
     "Use majorIssues only for failure modes a reviser must face. Leave it empty if nothing rises to that level.",
+    "Fill air_feedback. At least one field must be a concrete observation, or \"none\" plus a reason. Do not return empty strings.",
     "",
     "Record text:",
     packet,

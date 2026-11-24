@@ -39,24 +39,36 @@ export function queryFirst(root: ParentNode, selectors: string[]): Element | nul
 const COMPOSER_HINTS = ["message grok", "ask", "what do you want to know", "message"]
 const SEND_WORDS = ["send", "submit", "grok", "ask"]
 
+function ignoredElement(node: Element): boolean {
+  const id = (node.id || "").toLowerCase()
+  const className = classNameOf(node).toLowerCase()
+  const tag = node.tagName.toLowerCase()
+  const label = `${node.getAttribute("aria-label") ?? ""} ${node.getAttribute("title") ?? ""}`.toLowerCase()
+  const blob = `${id} ${className} ${tag} ${(node.getAttribute("data-extension") || "").toLowerCase()} ${label}`
+  return (
+    id === "air-web-chat-banner" ||
+    node.hasAttribute("data-air-ignore") ||
+    blob.includes("stl-forge") ||
+    blob.includes("stlforge") ||
+    blob.includes("stl_forge") ||
+    blob.includes("stl forge") ||
+    tag.includes("forge")
+  )
+}
+
 /** Our banner and other extension overlays, including STL Forge, are not the chat. */
 export function isIgnoredRegion(el: Element): boolean {
-  let node: Element | null = el
-  while (node) {
-    const id = (node.id || "").toLowerCase()
-    const className = classNameOf(node).toLowerCase()
-    if (
-      id === "air-web-chat-banner" ||
-      node.hasAttribute("data-air-ignore") ||
-      id.includes("stl-forge") ||
-      id.includes("stlforge") ||
-      className.includes("stl-forge") ||
-      className.includes("stlforge") ||
-      (node.getAttribute("data-extension") || "").toLowerCase().includes("stl")
-    ) {
-      return true
+  let node: Node | null = el
+  const seen = new Set<Node>()
+  while (node && !seen.has(node)) {
+    seen.add(node)
+    if (node instanceof Element && ignoredElement(node)) return true
+    const parent: Node | null = node.parentNode
+    if (parent instanceof ShadowRoot) {
+      node = parent.host
+      continue
     }
-    node = node.parentElement
+    node = parent
   }
   return false
 }
@@ -215,6 +227,7 @@ export function describeButtons(root: ParentNode, limit = 6): string {
   }
   if (nodes.length === 0) return "Buttons: none."
   const text = nodes
+    .filter((el) => !isIgnoredRegion(el))
     .slice(0, limit)
     .map((el) => {
       const tag = el.tagName.toLowerCase()
@@ -303,6 +316,77 @@ export function assistantText(root: ParentNode, selectors: string[], composer?: 
   }
   const text = consider(pool.filter(looksLikeAssistant))
   return text
+}
+
+function walkReplyText(node: Node, composer: Element | null, chunks: string[]): void {
+  if (node instanceof Element) {
+    if (isIgnoredRegion(node)) return
+    if (composer && (node === composer || composer.contains(node))) return
+    if (node.shadowRoot) walkReplyText(node.shadowRoot, composer, chunks)
+  }
+  if (node.nodeType === Node.TEXT_NODE) {
+    const text = node.textContent ?? ""
+    if (text.trim()) chunks.push(text)
+    return
+  }
+  for (const child of node.childNodes) walkReplyText(child, composer, chunks)
+}
+
+/** Text the reviewer can see, without the composer or another extension's overlay. */
+export function visibleReplyText(root: ParentNode, composer: Element | null): string {
+  const chunks: string[] = []
+  const scope = root instanceof Document ? (root.body ?? root.documentElement) : root
+  walkReplyText(scope, composer, chunks)
+  return chunks.join("\n")
+}
+
+function matchingBrace(text: string, start: number): number {
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === "\\") escaped = true
+      else if (char === "\"") inString = false
+      continue
+    }
+    if (char === "\"") inString = true
+    else if (char === "{") depth += 1
+    else if (char === "}") {
+      depth -= 1
+      if (depth === 0) return index
+    }
+  }
+  return -1
+}
+
+/** The last JSON object in the text whose overallScore is a number. The prompt schema is not a number. */
+export function reviewJsonBlock(text: string): string {
+  if (!text.includes("overallScore")) return ""
+  const windowText = text.length > 400_000 ? text.slice(-200_000) : text
+  let last = ""
+  for (let index = 0; index < windowText.length; index += 1) {
+    if (windowText[index] !== "{") continue
+    const end = matchingBrace(windowText, index)
+    if (end < 0) continue
+    const slice = windowText.slice(index, end + 1)
+    if (/"overallScore"\s*:\s*-?\d+/.test(slice)) {
+      try {
+        const value = JSON.parse(slice) as { overallScore?: unknown }
+        if (typeof value.overallScore === "number") last = slice
+      } catch {
+        // A later object may still be the review.
+      }
+    }
+    index = end
+  }
+  return last
+}
+
+export function reviewJsonOnPage(root: ParentNode, composer: Element | null): string {
+  return reviewJsonBlock(visibleReplyText(root, composer))
 }
 
 export function stopControlActive(root: ParentNode, selectors: string[]): boolean {
@@ -502,19 +586,28 @@ function userTurnHas(doc: ParentNode, composer: Element, probe: string): boolean
   })
 }
 
+const ACK_PATTERN = /\bRECEIVED(?:\s+(?:FILES|INSTRUCTIONS))?\s+\d+\b/i
+
+function ackLabel(text: string): string {
+  const compact = text.replace(/\s+/g, " ").trim()
+  const match = compact.match(ACK_PATTERN)
+  if (!match?.[0]) return ""
+  if (compact.length > match[0].length + 30) return ""
+  return match[0].replace(/\s+/g, " ").toUpperCase()
+}
+
 export function ackReply(root: ParentNode, composer: Element | null): string {
   let nodes: Element[] = []
   try {
-    nodes = queryAllDeep(root, "div, p, span")
+    nodes = queryAllDeep(root, "div, p, span, article")
   } catch {
     return ""
   }
   const hits = nodes.filter((el) => {
-    if (isIgnoredRegion(el) || (composer && (el === composer || composer.contains(el)))) return false
-    const text = (el.textContent ?? "").trim()
-    return text.length < 40 && /^RECEIVED \d+$/i.test(text)
+    if (isIgnoredRegion(el) || (composer && (el === composer || composer.contains(el) || el.contains(composer)))) return false
+    return Boolean(ackLabel(el.textContent ?? ""))
   })
-  return hits[hits.length - 1]?.textContent?.trim() ?? ""
+  return ackLabel(hits[hits.length - 1]?.textContent ?? "")
 }
 
 export function replyActionsVisible(root: ParentNode): boolean {

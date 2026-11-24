@@ -295,6 +295,180 @@ describe("live chat composers", () => {
     expect(findComposer(document, provider.selectors.composer)?.id).toBe("box")
   })
 
+  it("finishes a grok.com reply when the JSON is on the page, and ignores STL Forge", async () => {
+    document.body.innerHTML = `
+      <main>
+        <textarea id="composer" aria-label="Message Grok"></textarea>
+        <button id="send" type="submit" aria-label="Send">Send</button>
+        <button id="stop" aria-label="Stop">Stop</button>
+        <div id="reply" class="assistant-message"></div>
+      </main>
+      <div id="stl-forge">
+        <button type="button">Send</button>
+        <button type="button">Auto</button>
+        <div>STL Forge overlay {"overallScore": 1}</div>
+      </div>
+    `
+    const provider = webChatProvider("grok")
+    if (!provider) throw new Error("missing grok")
+    document.getElementById("send")?.addEventListener("click", () => {
+      const text = (document.getElementById("composer") as HTMLTextAreaElement).value
+      ;(document.getElementById("composer") as HTMLTextAreaElement).value = ""
+      document.getElementById("reply")!.textContent = text.includes("Do not review yet.")
+        ? "RECEIVED 1"
+        : '{"summary":"The record is sound.","overallScore":86}'
+    })
+    const packet = buildWebChatPacket({
+      requestId: "grok-json",
+      providerId: "grok",
+      criteria: officialCriteria,
+      record,
+      documents: [{ filename: "paper.md", text: "Measured yield in one season." }],
+    })
+    const result = await runTurn(document, { ...provider, fileUpload: false, pasteLimit: 200_000 }, packet, {
+      aborted: () => false,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      pollMs: 5,
+      stableMs: 0,
+      stepTimeoutMs: 1500,
+      replyStartTimeoutMs: 400,
+      submitStableMs: 0,
+      submitReadyMs: 30,
+      sendVerifyMs: 30,
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.text).toContain('"overallScore":86')
+    expect(result.text).not.toContain("STL Forge")
+    expect(result.text).not.toContain('"overallScore": 1')
+  })
+
+  it("names a short reply timeout and leaves out overlay buttons", async () => {
+    document.body.innerHTML = `
+      <main>
+        <textarea id="composer" aria-label="Message Grok"></textarea>
+        <button id="send" type="submit" aria-label="Send">Send</button>
+        <div id="reply">The model wrote a paragraph about the record and then stopped without a score.</div>
+      </main>
+      <div id="stl-forge"><button type="button">Send</button><div>STL Forge overlay controls</div></div>
+    `
+    const provider = webChatProvider("grok")
+    if (!provider) throw new Error("missing grok")
+    document.getElementById("send")?.addEventListener("click", () => {
+      ;(document.getElementById("composer") as HTMLTextAreaElement).value = ""
+      ;(document.getElementById("send") as HTMLButtonElement).disabled = true
+    })
+    const packet = buildWebChatPacket({
+      requestId: "grok-timeout",
+      providerId: "grok",
+      criteria: officialCriteria,
+      record,
+      documents: [{ filename: "paper.md", text: "Measured yield in one season." }],
+    })
+    const hooks = {
+      aborted: () => false,
+      sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+      pollMs: 5,
+      stableMs: 0,
+      stepTimeoutMs: 80,
+      replyStartTimeoutMs: 400,
+      submitStableMs: 0,
+      submitReadyMs: 20,
+      sendVerifyMs: 20,
+    }
+    const seen = await runTurn(document, { ...provider, fileUpload: false }, packet, hooks)
+    expect(seen.ok).toBe(false)
+    if (seen.ok) return
+    expect(seen.message).toContain("reply seen, JSON not parsed")
+    expect(seen.message).not.toContain("Buttons:")
+    expect(seen.message).not.toContain("STL Forge")
+    document.body.innerHTML = `<main><textarea id="composer" aria-label="Message Grok"></textarea><button id="send" type="submit" aria-label="Send">Send</button></main>`
+    document.getElementById("send")?.addEventListener("click", () => {
+      ;(document.getElementById("composer") as HTMLTextAreaElement).value = ""
+      ;(document.getElementById("send") as HTMLButtonElement).disabled = true
+    })
+    const none = await runTurn(document, { ...provider, fileUpload: false }, packet, hooks)
+    expect(none.ok).toBe(false)
+    if (!none.ok) expect(none.message).toContain("no reply seen")
+  })
+
+  it("sends the next part after RECEIVED and keeps the record links on part 1", async () => {
+    document.body.innerHTML = `<main><textarea id="box" aria-label="Ask anything"></textarea><button id="send" type="button" aria-label="Send">Send</button><div id="reply"></div></main>`
+    const provider = webChatProvider("grok-x")
+    if (!provider) throw new Error("missing grok-x")
+    const sent: string[] = []
+    document.getElementById("send")?.addEventListener("click", () => {
+      const text = (document.getElementById("box") as HTMLTextAreaElement).value
+      sent.push(text)
+      ;(document.getElementById("box") as HTMLTextAreaElement).value = ""
+      document.getElementById("reply")!.textContent = text.includes("Do not review yet.") ? `RECEIVED ${sent.length}` : '{"overallScore":86}'
+    })
+    const packet = buildWebChatPacket({
+      requestId: "x-parts",
+      providerId: "grok-x",
+      criteria: officialCriteria,
+      record,
+      documents: [{ filename: "paper.md", text: `UNIQUEWORD ${"alpha ".repeat(3000)}` }],
+    })
+    const result = await runTurn(document, { ...provider, fileUpload: false, pasteLimit: 4000 }, packet, {
+      aborted: () => false,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      pollMs: 5,
+      stableMs: 0,
+      stepTimeoutMs: 2000,
+      replyStartTimeoutMs: 400,
+      submitStableMs: 0,
+      submitReadyMs: 20,
+      sendVerifyMs: 20,
+    })
+    expect(sent.length).toBeGreaterThan(1)
+    expect(sent[0]).toContain("This version:")
+    expect(sent[0]).toContain("https://doi.org/10.5281/zenodo.1")
+    expect(sent[0]).toContain("UNIQUEWORD")
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.text).toContain("86")
+  })
+
+  it("falls back to the paper text when the chat cannot open the public page", async () => {
+    document.body.innerHTML = `<main><textarea id="box" aria-label="Message Grok"></textarea><button id="send" type="submit" aria-label="Send">Send</button><div id="reply" class="assistant-message"></div></main>`
+    const provider = webChatProvider("grok")
+    if (!provider) throw new Error("missing grok")
+    const sent: string[] = []
+    document.getElementById("send")?.addEventListener("click", () => {
+      const text = (document.getElementById("box") as HTMLTextAreaElement).value
+      sent.push(text)
+      ;(document.getElementById("box") as HTMLTextAreaElement).value = ""
+      document.getElementById("reply")!.textContent = text.includes("public text page")
+        ? "I could not access the URL."
+        : text.includes("Do not review yet.")
+          ? `RECEIVED ${sent.length}`
+          : '{"overallScore":86}'
+    })
+    const packet = buildWebChatPacket({
+      requestId: "link-fallback",
+      providerId: "grok",
+      criteria: officialCriteria,
+      record,
+      documents: [{ filename: "paper.md", text: "UNIQUEYIELD in one season." }],
+      useTextPage: true,
+    })
+    const result = await runTurn(document, { ...provider, fileUpload: false, pasteLimit: 200_000 }, packet, {
+      aborted: () => false,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      pollMs: 5,
+      stableMs: 0,
+      stepTimeoutMs: 2000,
+      replyStartTimeoutMs: 400,
+      submitStableMs: 0,
+      submitReadyMs: 20,
+      sendVerifyMs: 20,
+    })
+    expect(sent[0]).toContain("/paper/1/text")
+    expect(sent[0]).not.toContain("UNIQUEYIELD")
+    expect(sent[1]).toContain("UNIQUEYIELD")
+    expect(result.ok).toBe(true)
+  })
+
   it("presses Enter once when Send has not been drawn", () => {
     document.body.innerHTML = `<main><div id="box" contenteditable="true" aria-label="Ask anything"></div></main>`
     const box = document.getElementById("box") as HTMLElement

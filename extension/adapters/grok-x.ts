@@ -8,13 +8,13 @@ const grokX: ProviderAdapter = {
   modelLabel: "Grok on x.com",
   startUrl: "https://x.com/i/grok",
   origins: ["https://x.com/i/grok*"],
-  pasteLimit: 32_000,
+  pasteLimit: 100_000,
   fileCharLimit: 400_000,
   maxFiles: 4,
   comfortableTurns: 6,
   fileUpload: true,
   limits:
-    "Grok on X is at x.com/i/grok. AIR tries a file up to about 400,000 characters, then pastes 32,000 characters at a time. X rate-limits long threads. That limit was not measured here.",
+    "Grok on X is at x.com/i/grok. AIR sends one message when the paper and the instructions fit in about 100,000 characters, attaches a file when the site accepts one, and otherwise pastes in parts. X rate-limits long threads. That limit was not measured here.",
   selectors: {
     composer: [
       'textarea[aria-label="Ask anything"]',

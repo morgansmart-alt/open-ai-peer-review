@@ -1,5 +1,6 @@
 import type { ProviderAdapter } from "../../../extension/adapters/index.ts"
 import { planDelivery, type DeliveryStep } from "./deliver.ts"
+import { couldNotReadPaper } from "./paperText.ts"
 import {
   assistantText,
   attachTextFiles,
@@ -16,7 +17,9 @@ import {
   queryFirst,
   replyActionsVisible,
   requestSubmitButton,
+  reviewJsonOnPage,
   sendLanded,
+  visibleReplyText,
   stopControlActive,
   writeComposer,
   composerText,
@@ -83,7 +86,14 @@ function stepDiagnostic(doc: Document): string {
   return `${describeButtons(doc)} ${describeCandidates(doc)}`
 }
 
-async function waitForReply(doc: Document, provider: ProviderAdapter, before: string, hooks: TurnHooks, composer: Element): Promise<string> {
+function replyTimeoutReason(doc: Document, composer: Element): string {
+  if (reviewJsonOnPage(doc, composer) || ackReply(doc, composer)) return "reply seen, JSON not parsed"
+  const visible = visibleReplyText(doc, composer).replace(/\s+/g, " ").trim()
+  if (visible.length > 40) return "reply seen, JSON not parsed"
+  return "no reply seen"
+}
+
+async function waitForReply(doc: Document, provider: ProviderAdapter, before: string, hooks: TurnHooks, composer: Element, beforeJson = ""): Promise<string> {
   const pollMs = hooks.pollMs ?? 400
   const stableMs = hooks.stableMs ?? 2000
   const timeoutMs = hooks.stepTimeoutMs ?? 4 * 60 * 1000
@@ -91,14 +101,39 @@ async function waitForReply(doc: Document, provider: ProviderAdapter, before: st
   const start = Date.now()
   let last = before
   let stableFor = 0
+  let lastJson = ""
+  let jsonStable = 0
+  let lastAck = ""
+  let ackStable = 0
   let started = false
   while (Date.now() - start < timeoutMs) {
     if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.")
-    const text = assistantText(doc, provider.selectors.assistant, composer) || ackReply(doc, composer)
+    const json = reviewJsonOnPage(doc, composer)
+    const freshJson = json && json !== beforeJson ? json : ""
+    const ack = ackReply(doc, composer)
+    const assistant = assistantText(doc, provider.selectors.assistant, composer)
     const stopping = stopControlActive(doc, provider.selectors.stop)
-    const finishedAck = /^RECEIVED \d+$/i.test(text.trim())
-    if (text && text !== before) started = true
-    if (started && !stopping && (finishedAck || replyActionsVisible(doc))) return text
+    if (freshJson || ack || (assistant && assistant !== before)) started = true
+    if (freshJson) {
+      if (freshJson === lastJson && jsonStable >= stableMs) return freshJson
+      if (freshJson !== lastJson) {
+        lastJson = freshJson
+        jsonStable = 0
+      } else jsonStable += pollMs
+    } else {
+      lastJson = ""
+      jsonStable = 0
+    }
+    if (ack && !freshJson) {
+      if (ack === lastAck && ackStable >= stableMs) return ack
+      if (ack !== lastAck) {
+        lastAck = ack
+        ackStable = 0
+      } else ackStable += pollMs
+    } else if (!ack) {
+      lastAck = ""
+      ackStable = 0
+    }
     if (!started && !stopping && Date.now() - start >= startLimit) {
       const send = findSubmit(doc, provider.selectors.submit, composer)
       if (send) {
@@ -108,16 +143,17 @@ async function waitForReply(doc: Document, provider: ProviderAdapter, before: st
         )
       }
     }
-    if (text && text !== before && text === last && !stopping && stableFor >= stableMs) return text
-    if (text !== last) {
-      last = text
+    const settled = Boolean(assistant) && assistant !== before && assistant === last && !stopping && stableFor >= stableMs
+    if (!freshJson && !ack && (settled || (started && !stopping && replyActionsVisible(doc) && assistant && assistant !== before))) return assistant
+    if (assistant !== last) {
+      last = assistant
       stableFor = 0
     } else {
       stableFor += pollMs
     }
     await hooks.sleep(pollMs)
   }
-  throw new TurnError("timeout", `Reply step on ${provider.label} did not finish in time. ${stepDiagnostic(doc)} ${describeMessages(doc)}`)
+  throw new TurnError("timeout", `Reply step on ${provider.label} did not finish in time. ${replyTimeoutReason(doc, composer)}.`)
 }
 
 async function waitForEnabledSubmit(doc: Document, provider: ProviderAdapter, composer: Element, hooks: TurnHooks): Promise<Element | null> {
@@ -210,10 +246,11 @@ async function sendStep(doc: Document, provider: ProviderAdapter, step: Delivery
   const composer = findComposer(doc, provider.selectors.composer)
   if (!composer) throw new TurnError("selector-miss", selectorMiss(provider, describeCandidates(doc)))
   const before = assistantText(doc, provider.selectors.assistant, composer)
+  const beforeJson = reviewJsonOnPage(doc, composer)
   writeComposer(composer, step.text)
   const method = await commitSend(doc, provider, composer, before, hooks)
   hooks.onProgress?.(`Send step on ${provider.label}. Method that sent: ${method}.`)
-  return waitForReply(doc, provider, before, hooks, composer)
+  return waitForReply(doc, provider, before, hooks, composer, beforeJson)
 }
 
 /** One more message in the chat that is already open. Waits until streaming stops. */
@@ -230,23 +267,37 @@ export async function runTurn(doc: Document, provider: ProviderAdapter, packet: 
       return { ok: false, code: "selector-miss", message: selectorMiss(provider, describeCandidates(doc)) }
     }
     let providerForPlan = provider
-    let planned = planDelivery(packet, providerForPlan)
+    let activePacket = packet
+    let planned = planDelivery(activePacket, providerForPlan)
     if (planned.warning) hooks.onProgress?.(planned.warning)
     let steps = planned.steps
     let fellBack = false
+    let linkFellBack = false
     for (let index = 0; index < steps.length; index += 1) {
       const step = steps[index]
       if (!step) continue
       hooks.onProgress?.(`Sending part ${step.index} of ${step.total} on ${provider.label}. Stay on this tab.`)
       try {
         const reply = await sendStep(doc, provider, step, hooks)
+        if (step.link && !linkFellBack && couldNotReadPaper(reply)) {
+          linkFellBack = true
+          hooks.onProgress?.(`${provider.label} could not open the paper page. Sending the paper in the chat instead.`)
+          const { textUrl: dropped, ...rest } = activePacket
+          void dropped
+          activePacket = rest
+          planned = planDelivery(activePacket, providerForPlan)
+          steps = planned.steps
+          if (planned.warning) hooks.onProgress?.(planned.warning)
+          index = -1
+          continue
+        }
         if (step.final) return { ok: true, text: reply, steps: steps.length }
       } catch (error) {
         if (error instanceof TurnError && error.code === "upload-miss" && !fellBack) {
           fellBack = true
           hooks.onProgress?.(`${provider.label} did not accept the file. Pasting the paper in parts instead.`)
           providerForPlan = { ...provider, fileUpload: false }
-          planned = planDelivery(packet, providerForPlan)
+          planned = planDelivery(activePacket, providerForPlan)
           steps = planned.steps
           if (planned.warning) hooks.onProgress?.(planned.warning)
           index = -1

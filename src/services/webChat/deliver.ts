@@ -1,4 +1,5 @@
 import type { ProviderAdapter } from "../../../extension/adapters/index.ts"
+import { linkReadingPrompt } from "./paperText.ts"
 import type { WebChatFile, WebChatPacket } from "./protocol.ts"
 
 export interface DeliveryStep {
@@ -8,6 +9,8 @@ export interface DeliveryStep {
   index: number
   total: number
   final: boolean
+  /** A short message that asks the chat to open the public text page. */
+  link?: boolean
 }
 
 export interface DeliveryPlan {
@@ -60,11 +63,36 @@ function paperPart(index: number, total: number, chunk: string): string {
 
 const PAPER_HEADER = 220
 
-function instructionSteps(text: string, pasteLimit: number): DeliveryStep[] {
+/** Public record lines already written into the review instructions. */
+export function sourceBanner(instructions: string): string {
+  return instructions
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^(Source record\b|This version:|DOI:|Concept record\b|Concept DOI:)/.test(line))
+    .join("\n")
+}
+
+function withBanner(banner: string, text: string): string {
+  if (!banner.trim()) return text
+  if (text.includes("This version:") || text.includes("DOI: https://doi.org/")) return text
+  return `${banner}\n\n${text}`
+}
+
+function stamp(banner: string, text: string, limit: number): string {
+  const next = withBanner(banner, text)
+  return next.length <= limit ? next : text
+}
+
+function stampSteps(steps: DeliveryStep[], banner: string, limit: number): DeliveryStep[] {
+  return steps.map((step) => ({ ...step, text: stamp(banner, step.text, limit) }))
+}
+
+function instructionSteps(text: string, pasteLimit: number, banner: string): DeliveryStep[] {
+  const room = Math.max(500, pasteLimit - (banner.length > 0 ? banner.length + 2 : 0))
   if (text.length <= pasteLimit) {
     return [{ kind: "paste", text, files: [], index: 1, total: 1, final: true }]
   }
-  const parts = splitText(text, Math.max(500, pasteLimit - PAPER_HEADER))
+  const parts = splitText(text, Math.max(500, room - PAPER_HEADER))
   return parts.map((part, index) => {
     const final = index === parts.length - 1
     return {
@@ -129,7 +157,34 @@ export function planDelivery(packet: WebChatPacket, provider: ProviderAdapter): 
   const closing = files.length
     ? `${finalText}\n\nThe paper is in the attached files or in the earlier messages labelled AIR PAPER. Score that text. Return one JSON object and nothing else.`
     : finalText
+  const banner = sourceBanner(packet.instructions)
+  const paper = paperBody(files)
+  const combined = [paper, closing].filter(Boolean).join("\n\n")
   const canUpload = provider.fileUpload && provider.fileCharLimit > 0 && provider.maxFiles > 0 && files.length > 0
+
+  if (packet.textUrl) {
+    return {
+      steps: [
+        {
+          kind: "paste",
+          text: linkReadingPrompt(packet.textUrl, packet.system, packet.instructions),
+          files: [],
+          index: 1,
+          total: 1,
+          final: true,
+          link: true,
+        },
+      ],
+      warning: null,
+    }
+  }
+
+  if (provider.id === "grok-x" && combined.length > 0 && combined.length <= provider.pasteLimit) {
+    return {
+      steps: [{ kind: "paste", text: combined, files: [], index: 1, total: 1, final: true }],
+      warning: warn(provider, 1, files),
+    }
+  }
 
   if (canUpload) {
     const batches = fileBatches(files, provider.fileCharLimit, provider.maxFiles)
@@ -151,16 +206,20 @@ export function planDelivery(packet: WebChatPacket, provider: ProviderAdapter): 
       })
     })
     if (!instructionsFit || steps.every((step) => !step.final)) {
-      steps.push(...instructionSteps(closing, provider.pasteLimit).map((step) => ({ ...step, final: step.final })))
+      steps.push(...instructionSteps(closing, provider.pasteLimit, banner).map((step) => ({ ...step, final: step.final })))
       // instructionSteps marks its own last item final; earlier upload steps stay non-final.
       // If instructionSteps produced a final and uploads also marked one final, clear the upload final.
     }
-    const numbered = numberSteps(steps).map((step, index, all) => ({ ...step, final: index === all.length - 1 }))
+    const numbered = stampSteps(
+      numberSteps(steps).map((step, index, all) => ({ ...step, final: index === all.length - 1 })),
+      banner,
+      provider.pasteLimit,
+    )
     return { steps: numbered, warning: warn(provider, numbered.length, files) }
   }
 
-  const paper = paperBody(files)
-  const chunkSize = Math.max(500, provider.pasteLimit - PAPER_HEADER)
+  const bannerRoom = banner.length > 0 ? banner.length + 2 : 0
+  const chunkSize = Math.max(500, provider.pasteLimit - PAPER_HEADER - bannerRoom)
   const chunks = paper ? splitText(paper, chunkSize) : []
   const paperSteps: DeliveryStep[] = chunks.map((chunk, index) => ({
     kind: "paste",
@@ -170,10 +229,14 @@ export function planDelivery(packet: WebChatPacket, provider: ProviderAdapter): 
     total: 1,
     final: false,
   }))
-  const steps = numberSteps([...paperSteps, ...instructionSteps(closing, provider.pasteLimit)]).map((step, index, all) => ({
-    ...step,
-    final: index === all.length - 1,
-  }))
+  const steps = stampSteps(
+    numberSteps([...paperSteps, ...instructionSteps(closing, provider.pasteLimit, banner)]).map((step, index, all) => ({
+      ...step,
+      final: index === all.length - 1,
+    })),
+    banner,
+    provider.pasteLimit,
+  )
   return { steps, warning: warn(provider, steps.length, files) }
 }
 

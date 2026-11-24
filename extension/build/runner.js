@@ -142,12 +142,12 @@
     modelLabel: "Grok on x.com",
     startUrl: "https://x.com/i/grok",
     origins: ["https://x.com/i/grok*"],
-    pasteLimit: 32e3,
+    pasteLimit: 1e5,
     fileCharLimit: 4e5,
     maxFiles: 4,
     comfortableTurns: 6,
     fileUpload: true,
-    limits: "Grok on X is at x.com/i/grok. AIR tries a file up to about 400,000 characters, then pastes 32,000 characters at a time. X rate-limits long threads. That limit was not measured here.",
+    limits: "Grok on X is at x.com/i/grok. AIR sends one message when the paper and the instructions fit in about 100,000 characters, attaches a file when the site accepts one, and otherwise pastes in parts. X rate-limits long threads. That limit was not measured here.",
     selectors: {
       composer: [
         'textarea[aria-label="Ask anything"]',
@@ -1507,6 +1507,25 @@ ${parsed.errors.join("\n")}`);
     return { transcript, defendedText, stopped: false };
   }
 
+  // src/services/webChat/paperText.ts
+  function linkReadingPrompt(url, system, instructions) {
+    return [
+      "Open this public text page and read the full paper. No sign-in is required.",
+      url,
+      "",
+      "Score that paper with the rubric below. Return one JSON object and nothing else.",
+      "",
+      system,
+      "",
+      instructions
+    ].join("\n");
+  }
+  var ACCESS_FAILURE = /could not (?:access|open|read|fetch|browse|reach)|couldn't (?:access|open|read|fetch|browse)|cannot (?:access|open|read|browse)|can't (?:access|open|read)|unable to (?:access|open|read|fetch|reach)|no access to (?:the |that )?(?:url|page|link)|page not found|sign in to (?:view|read|continue)|login required|failed to (?:load|fetch|open)|403 forbidden|404\b/i;
+  function couldNotReadPaper(reply) {
+    if (/"overallScore"\s*:\s*-?\d+/.test(reply)) return false;
+    return ACCESS_FAILURE.test(reply);
+  }
+
   // src/services/webChat/deliver.ts
   function splitText(text, size) {
     const clean = text.replace(/\r\n/g, "\n");
@@ -1548,11 +1567,29 @@ ${file.text}`).join("\n\n");
     ].join("\n");
   }
   var PAPER_HEADER = 220;
-  function instructionSteps(text, pasteLimit) {
+  function sourceBanner(instructions) {
+    return instructions.split("\n").map((line) => line.trim()).filter((line) => /^(Source record\b|This version:|DOI:|Concept record\b|Concept DOI:)/.test(line)).join("\n");
+  }
+  function withBanner(banner, text) {
+    if (!banner.trim()) return text;
+    if (text.includes("This version:") || text.includes("DOI: https://doi.org/")) return text;
+    return `${banner}
+
+${text}`;
+  }
+  function stamp(banner, text, limit) {
+    const next = withBanner(banner, text);
+    return next.length <= limit ? next : text;
+  }
+  function stampSteps(steps, banner, limit) {
+    return steps.map((step) => ({ ...step, text: stamp(banner, step.text, limit) }));
+  }
+  function instructionSteps(text, pasteLimit, banner) {
+    const room = Math.max(500, pasteLimit - (banner.length > 0 ? banner.length + 2 : 0));
     if (text.length <= pasteLimit) {
       return [{ kind: "paste", text, files: [], index: 1, total: 1, final: true }];
     }
-    const parts = splitText(text, Math.max(500, pasteLimit - PAPER_HEADER));
+    const parts = splitText(text, Math.max(500, room - PAPER_HEADER));
     return parts.map((part, index) => {
       const final = index === parts.length - 1;
       return {
@@ -1607,7 +1644,32 @@ ${file.text}`).join("\n\n");
     const closing = files.length ? `${finalText}
 
 The paper is in the attached files or in the earlier messages labelled AIR PAPER. Score that text. Return one JSON object and nothing else.` : finalText;
+    const banner = sourceBanner(packet.instructions);
+    const paper = paperBody(files);
+    const combined = [paper, closing].filter(Boolean).join("\n\n");
     const canUpload = provider.fileUpload && provider.fileCharLimit > 0 && provider.maxFiles > 0 && files.length > 0;
+    if (packet.textUrl) {
+      return {
+        steps: [
+          {
+            kind: "paste",
+            text: linkReadingPrompt(packet.textUrl, packet.system, packet.instructions),
+            files: [],
+            index: 1,
+            total: 1,
+            final: true,
+            link: true
+          }
+        ],
+        warning: null
+      };
+    }
+    if (provider.id === "grok-x" && combined.length > 0 && combined.length <= provider.pasteLimit) {
+      return {
+        steps: [{ kind: "paste", text: combined, files: [], index: 1, total: 1, final: true }],
+        warning: warn(provider, 1, files)
+      };
+    }
     if (canUpload) {
       const batches = fileBatches(files, provider.fileCharLimit, provider.maxFiles);
       const instructionsFit = closing.length <= provider.pasteLimit;
@@ -1628,13 +1690,17 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
         });
       });
       if (!instructionsFit || steps2.every((step) => !step.final)) {
-        steps2.push(...instructionSteps(closing, provider.pasteLimit).map((step) => ({ ...step, final: step.final })));
+        steps2.push(...instructionSteps(closing, provider.pasteLimit, banner).map((step) => ({ ...step, final: step.final })));
       }
-      const numbered = numberSteps(steps2).map((step, index, all) => ({ ...step, final: index === all.length - 1 }));
+      const numbered = stampSteps(
+        numberSteps(steps2).map((step, index, all) => ({ ...step, final: index === all.length - 1 })),
+        banner,
+        provider.pasteLimit
+      );
       return { steps: numbered, warning: warn(provider, numbered.length, files) };
     }
-    const paper = paperBody(files);
-    const chunkSize = Math.max(500, provider.pasteLimit - PAPER_HEADER);
+    const bannerRoom = banner.length > 0 ? banner.length + 2 : 0;
+    const chunkSize = Math.max(500, provider.pasteLimit - PAPER_HEADER - bannerRoom);
     const chunks = paper ? splitText(paper, chunkSize) : [];
     const paperSteps = chunks.map((chunk, index) => ({
       kind: "paste",
@@ -1644,10 +1710,14 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       total: 1,
       final: false
     }));
-    const steps = numberSteps([...paperSteps, ...instructionSteps(closing, provider.pasteLimit)]).map((step, index, all) => ({
-      ...step,
-      final: index === all.length - 1
-    }));
+    const steps = stampSteps(
+      numberSteps([...paperSteps, ...instructionSteps(closing, provider.pasteLimit, banner)]).map((step, index, all) => ({
+        ...step,
+        final: index === all.length - 1
+      })),
+      banner,
+      provider.pasteLimit
+    );
     return { steps, warning: warn(provider, steps.length, files) };
   }
   function warn(provider, turns, files) {
@@ -1693,15 +1763,26 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
   }
   var COMPOSER_HINTS = ["message grok", "ask", "what do you want to know", "message"];
   var SEND_WORDS = ["send", "submit", "grok", "ask"];
+  function ignoredElement(node) {
+    const id = (node.id || "").toLowerCase();
+    const className = classNameOf(node).toLowerCase();
+    const tag = node.tagName.toLowerCase();
+    const label = `${node.getAttribute("aria-label") ?? ""} ${node.getAttribute("title") ?? ""}`.toLowerCase();
+    const blob = `${id} ${className} ${tag} ${(node.getAttribute("data-extension") || "").toLowerCase()} ${label}`;
+    return id === "air-web-chat-banner" || node.hasAttribute("data-air-ignore") || blob.includes("stl-forge") || blob.includes("stlforge") || blob.includes("stl_forge") || blob.includes("stl forge") || tag.includes("forge");
+  }
   function isIgnoredRegion(el) {
     let node = el;
-    while (node) {
-      const id = (node.id || "").toLowerCase();
-      const className = classNameOf(node).toLowerCase();
-      if (id === "air-web-chat-banner" || node.hasAttribute("data-air-ignore") || id.includes("stl-forge") || id.includes("stlforge") || className.includes("stl-forge") || className.includes("stlforge") || (node.getAttribute("data-extension") || "").toLowerCase().includes("stl")) {
-        return true;
+    const seen = /* @__PURE__ */ new Set();
+    while (node && !seen.has(node)) {
+      seen.add(node);
+      if (node instanceof Element && ignoredElement(node)) return true;
+      const parent = node.parentNode;
+      if (parent instanceof ShadowRoot) {
+        node = parent.host;
+        continue;
       }
-      node = node.parentElement;
+      node = parent;
     }
     return false;
   }
@@ -1833,7 +1914,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       nodes = [];
     }
     if (nodes.length === 0) return "Buttons: none.";
-    const text = nodes.slice(0, limit).map((el) => {
+    const text = nodes.filter((el) => !isIgnoredRegion(el)).slice(0, limit).map((el) => {
       const tag = el.tagName.toLowerCase();
       const type = el.getAttribute("type") ?? "";
       const label = el.getAttribute("aria-label") ?? "";
@@ -1905,6 +1986,69 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     }
     const text = consider(pool.filter(looksLikeAssistant));
     return text;
+  }
+  function walkReplyText(node, composer, chunks) {
+    if (node instanceof Element) {
+      if (isIgnoredRegion(node)) return;
+      if (composer && (node === composer || composer.contains(node))) return;
+      if (node.shadowRoot) walkReplyText(node.shadowRoot, composer, chunks);
+    }
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent ?? "";
+      if (text.trim()) chunks.push(text);
+      return;
+    }
+    for (const child of node.childNodes) walkReplyText(child, composer, chunks);
+  }
+  function visibleReplyText(root, composer) {
+    const chunks = [];
+    const scope = root instanceof Document ? root.body ?? root.documentElement : root;
+    walkReplyText(scope, composer, chunks);
+    return chunks.join("\n");
+  }
+  function matchingBrace(text, start) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < text.length; index += 1) {
+      const char = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') inString = true;
+      else if (char === "{") depth += 1;
+      else if (char === "}") {
+        depth -= 1;
+        if (depth === 0) return index;
+      }
+    }
+    return -1;
+  }
+  function reviewJsonBlock(text) {
+    if (!text.includes("overallScore")) return "";
+    const windowText = text.length > 4e5 ? text.slice(-2e5) : text;
+    let last = "";
+    for (let index = 0; index < windowText.length; index += 1) {
+      if (windowText[index] !== "{") continue;
+      const end = matchingBrace(windowText, index);
+      if (end < 0) continue;
+      const slice = windowText.slice(index, end + 1);
+      if (/"overallScore"\s*:\s*-?\d+/.test(slice)) {
+        try {
+          const value = JSON.parse(slice);
+          if (typeof value.overallScore === "number") last = slice;
+        } catch {
+        }
+      }
+      index = end;
+    }
+    return last;
+  }
+  function reviewJsonOnPage(root, composer) {
+    return reviewJsonBlock(visibleReplyText(root, composer));
   }
   function stopControlActive(root, selectors) {
     const extra = ["button", "[role='button']"];
@@ -2070,19 +2214,26 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       return text.length < 8e3 && text.includes(probe);
     });
   }
+  var ACK_PATTERN = /\bRECEIVED(?:\s+(?:FILES|INSTRUCTIONS))?\s+\d+\b/i;
+  function ackLabel(text) {
+    const compact = text.replace(/\s+/g, " ").trim();
+    const match = compact.match(ACK_PATTERN);
+    if (!match?.[0]) return "";
+    if (compact.length > match[0].length + 30) return "";
+    return match[0].replace(/\s+/g, " ").toUpperCase();
+  }
   function ackReply(root, composer) {
     let nodes = [];
     try {
-      nodes = queryAllDeep(root, "div, p, span");
+      nodes = queryAllDeep(root, "div, p, span, article");
     } catch {
       return "";
     }
     const hits = nodes.filter((el) => {
-      if (isIgnoredRegion(el) || composer && (el === composer || composer.contains(el))) return false;
-      const text = (el.textContent ?? "").trim();
-      return text.length < 40 && /^RECEIVED \d+$/i.test(text);
+      if (isIgnoredRegion(el) || composer && (el === composer || composer.contains(el) || el.contains(composer))) return false;
+      return Boolean(ackLabel(el.textContent ?? ""));
     });
-    return hits[hits.length - 1]?.textContent?.trim() ?? "";
+    return ackLabel(hits[hits.length - 1]?.textContent ?? "");
   }
   function replyActionsVisible(root) {
     let nodes = [];
@@ -2214,7 +2365,13 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
   function stepDiagnostic(doc) {
     return `${describeButtons(doc)} ${describeCandidates(doc)}`;
   }
-  async function waitForReply(doc, provider, before, hooks, composer) {
+  function replyTimeoutReason(doc, composer) {
+    if (reviewJsonOnPage(doc, composer) || ackReply(doc, composer)) return "reply seen, JSON not parsed";
+    const visible = visibleReplyText(doc, composer).replace(/\s+/g, " ").trim();
+    if (visible.length > 40) return "reply seen, JSON not parsed";
+    return "no reply seen";
+  }
+  async function waitForReply(doc, provider, before, hooks, composer, beforeJson = "") {
     const pollMs = hooks.pollMs ?? 400;
     const stableMs = hooks.stableMs ?? 2e3;
     const timeoutMs = hooks.stepTimeoutMs ?? 4 * 60 * 1e3;
@@ -2222,14 +2379,39 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     const start = Date.now();
     let last = before;
     let stableFor = 0;
+    let lastJson = "";
+    let jsonStable = 0;
+    let lastAck = "";
+    let ackStable = 0;
     let started = false;
     while (Date.now() - start < timeoutMs) {
       if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.");
-      const text = assistantText(doc, provider.selectors.assistant, composer) || ackReply(doc, composer);
+      const json = reviewJsonOnPage(doc, composer);
+      const freshJson = json && json !== beforeJson ? json : "";
+      const ack = ackReply(doc, composer);
+      const assistant = assistantText(doc, provider.selectors.assistant, composer);
       const stopping = stopControlActive(doc, provider.selectors.stop);
-      const finishedAck = /^RECEIVED \d+$/i.test(text.trim());
-      if (text && text !== before) started = true;
-      if (started && !stopping && (finishedAck || replyActionsVisible(doc))) return text;
+      if (freshJson || ack || assistant && assistant !== before) started = true;
+      if (freshJson) {
+        if (freshJson === lastJson && jsonStable >= stableMs) return freshJson;
+        if (freshJson !== lastJson) {
+          lastJson = freshJson;
+          jsonStable = 0;
+        } else jsonStable += pollMs;
+      } else {
+        lastJson = "";
+        jsonStable = 0;
+      }
+      if (ack && !freshJson) {
+        if (ack === lastAck && ackStable >= stableMs) return ack;
+        if (ack !== lastAck) {
+          lastAck = ack;
+          ackStable = 0;
+        } else ackStable += pollMs;
+      } else if (!ack) {
+        lastAck = "";
+        ackStable = 0;
+      }
       if (!started && !stopping && Date.now() - start >= startLimit) {
         const send = findSubmit(doc, provider.selectors.submit, composer);
         if (send) {
@@ -2239,16 +2421,17 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
           );
         }
       }
-      if (text && text !== before && text === last && !stopping && stableFor >= stableMs) return text;
-      if (text !== last) {
-        last = text;
+      const settled = Boolean(assistant) && assistant !== before && assistant === last && !stopping && stableFor >= stableMs;
+      if (!freshJson && !ack && (settled || started && !stopping && replyActionsVisible(doc) && assistant && assistant !== before)) return assistant;
+      if (assistant !== last) {
+        last = assistant;
         stableFor = 0;
       } else {
         stableFor += pollMs;
       }
       await hooks.sleep(pollMs);
     }
-    throw new TurnError("timeout", `Reply step on ${provider.label} did not finish in time. ${stepDiagnostic(doc)} ${describeMessages(doc)}`);
+    throw new TurnError("timeout", `Reply step on ${provider.label} did not finish in time. ${replyTimeoutReason(doc, composer)}.`);
   }
   async function waitForEnabledSubmit(doc, provider, composer, hooks) {
     const timeoutMs = hooks.submitReadyMs ?? 5e3;
@@ -2336,10 +2519,11 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     const composer = findComposer(doc, provider.selectors.composer);
     if (!composer) throw new TurnError("selector-miss", selectorMiss(provider, describeCandidates(doc)));
     const before = assistantText(doc, provider.selectors.assistant, composer);
+    const beforeJson = reviewJsonOnPage(doc, composer);
     writeComposer(composer, step.text);
     const method = await commitSend(doc, provider, composer, before, hooks);
     hooks.onProgress?.(`Send step on ${provider.label}. Method that sent: ${method}.`);
-    return waitForReply(doc, provider, before, hooks, composer);
+    return waitForReply(doc, provider, before, hooks, composer, beforeJson);
   }
   async function sendFollowUp(doc, provider, text, hooks) {
     const step = { kind: "paste", text, files: [], index: 1, total: 1, final: true };
@@ -2353,23 +2537,37 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
         return { ok: false, code: "selector-miss", message: selectorMiss(provider, describeCandidates(doc)) };
       }
       let providerForPlan = provider;
-      let planned = planDelivery(packet, providerForPlan);
+      let activePacket = packet;
+      let planned = planDelivery(activePacket, providerForPlan);
       if (planned.warning) hooks.onProgress?.(planned.warning);
       let steps = planned.steps;
       let fellBack = false;
+      let linkFellBack = false;
       for (let index = 0; index < steps.length; index += 1) {
         const step = steps[index];
         if (!step) continue;
         hooks.onProgress?.(`Sending part ${step.index} of ${step.total} on ${provider.label}. Stay on this tab.`);
         try {
           const reply = await sendStep(doc, provider, step, hooks);
+          if (step.link && !linkFellBack && couldNotReadPaper(reply)) {
+            linkFellBack = true;
+            hooks.onProgress?.(`${provider.label} could not open the paper page. Sending the paper in the chat instead.`);
+            const { textUrl: dropped, ...rest } = activePacket;
+            void dropped;
+            activePacket = rest;
+            planned = planDelivery(activePacket, providerForPlan);
+            steps = planned.steps;
+            if (planned.warning) hooks.onProgress?.(planned.warning);
+            index = -1;
+            continue;
+          }
           if (step.final) return { ok: true, text: reply, steps: steps.length };
         } catch (error) {
           if (error instanceof TurnError && error.code === "upload-miss" && !fellBack) {
             fellBack = true;
             hooks.onProgress?.(`${provider.label} did not accept the file. Pasting the paper in parts instead.`);
             providerForPlan = { ...provider, fileUpload: false };
-            planned = planDelivery(packet, providerForPlan);
+            planned = planDelivery(activePacket, providerForPlan);
             steps = planned.steps;
             if (planned.warning) hooks.onProgress?.(planned.warning);
             index = -1;
