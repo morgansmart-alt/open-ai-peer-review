@@ -171,7 +171,17 @@
         'button[data-testid="grok-send"]'
       ],
       stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]', 'button[aria-label*="Stop generating"]'],
-      assistant: ['[data-testid="assistant-message"]', '[data-testid="grok-message"]', '[class*="assistant-message"]', '[data-message-author="assistant"]'],
+      assistant: [
+        '[data-testid="grokResponse"]',
+        '[data-testid="grok-response"]',
+        '[data-testid="GrokResponse"]',
+        '[data-testid="grok-message"]',
+        '[data-testid*="grokMessage"]',
+        '[data-testid="assistant-message"]',
+        '[data-message-author="assistant"]',
+        '[class*="assistant-message"]',
+        'article[data-testid*="grok"]'
+      ],
       fileInput: ['input[type="file"]'],
       login: ['a[href*="/login"]', 'a[href*="/i/flow/login"]', 'a[data-testid="login"]']
     }
@@ -2945,6 +2955,14 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     const text = consider(pool.filter(looksLikeAssistant));
     return text;
   }
+  var GROK_REPLY_SELECTORS = [
+    '[data-testid="grokResponse"]',
+    '[data-testid="grok-response"]',
+    '[data-testid="GrokResponse"]',
+    '[data-testid="grok-message"]',
+    '[data-testid*="grokMessage"]',
+    'article[data-testid*="grok"]'
+  ];
   function assistantNodes(root, selectors, composer) {
     const seen = /* @__PURE__ */ new Set();
     const collect = (nodes) => {
@@ -2957,26 +2975,32 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       });
       return usable.filter((el) => !usable.some((other) => other !== el && other.contains(el)));
     };
-    for (const selector of selectors) {
+    const selectorsToTry = [...selectors, ...GROK_REPLY_SELECTORS.filter((selector) => !selectors.includes(selector))];
+    for (const selector of selectorsToTry) {
       let nodes = [];
       try {
         nodes = queryAllDeep(root, selector);
       } catch {
         continue;
       }
-      const found = collect(nodes);
-      if (found.length) return found;
+      const found = collect(nodes).filter((el) => elementText(el).length > 0);
+      if (found.length) return { nodes: found, selector };
     }
     let pool = [];
     try {
-      pool = queryAllDeep(root, "[data-testid], [data-message-author], [data-message-author-role], [class*='assistant'], [class*='response']");
+      pool = queryAllDeep(chatRegion(root), "[data-testid], [data-message-author], [data-message-author-role], [class*='assistant'], [class*='response']");
     } catch {
       pool = [];
     }
-    return collect(pool.filter(looksLikeAssistant));
+    const fallback = collect(pool.filter(looksLikeAssistant)).filter((el) => elementText(el).length > 0);
+    return { nodes: fallback, selector: fallback.length ? "assistant-fallback" : "" };
+  }
+  function assistantSnapshot(root, selectors, composer) {
+    const found = assistantNodes(root, selectors, composer);
+    return { texts: found.nodes.map((el) => elementText(el)).filter((text) => text.length > 0), selector: found.selector };
   }
   function assistantMessages(root, selectors, composer) {
-    return assistantNodes(root, selectors, composer).map((el) => elementText(el)).filter((text) => text.length > 0);
+    return assistantSnapshot(root, selectors, composer).texts;
   }
   function replyAfter(before, now) {
     if (now.length > before.length) return now.slice(before.length).join("\n").trim();
@@ -3041,68 +3065,74 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
   }
   function clearEditable(el) {
     if (typeof el.focus === "function") el.focus();
+    const doc = el.ownerDocument;
     try {
-      const doc = el.ownerDocument;
       const selection = doc.getSelection?.();
       const range = doc.createRange();
       range.selectNodeContents(el);
       selection?.removeAllRanges();
       selection?.addRange(range);
-      doc.execCommand?.("delete", false);
+      if (typeof doc.execCommand === "function") doc.execCommand("delete", false);
+      else el.textContent = "";
     } catch {
+      el.textContent = "";
     }
+    if (!composerText(el)) return;
     el.textContent = "";
   }
-  function fillComposer(el, text) {
-    const tag = el.tagName;
-    if (tag === "TEXTAREA" || tag === "INPUT") {
-      setControlValue(el, text);
-    } else {
-      const editable = el;
-      clearEditable(editable);
-      let inserted = false;
+  function insertEditable(el, text) {
+    if (typeof el.focus === "function") el.focus();
+    clearEditable(el);
+    let accepted = false;
+    try {
+      const event = new InputEvent("beforeinput", { bubbles: true, cancelable: true, data: text, inputType: "insertText" });
+      accepted = !el.dispatchEvent(event);
+    } catch {
+      accepted = false;
+    }
+    if (accepted) return "beforeinput";
+    const doc = el.ownerDocument;
+    if (typeof doc.execCommand === "function") {
       try {
-        const doc = el.ownerDocument;
         const selection = doc.getSelection?.();
         const range = doc.createRange();
         range.selectNodeContents(el);
         selection?.removeAllRanges();
         selection?.addRange(range);
-        inserted = Boolean(doc.execCommand?.("insertText", false, text));
+        doc.execCommand("insertText", false, text);
       } catch {
-        inserted = false;
       }
-      let actual2 = composerText(el);
-      if (text && actual2 === text + text) {
-        editable.textContent = text;
-        dispatchInput(editable, text);
-        actual2 = composerText(el);
+      let actual = composerText(el);
+      if (text && actual === text + text) {
+        el.textContent = text;
+        dispatchInput(el, text);
+        actual = composerText(el);
       }
-      if (!inserted || !messageMatches(actual2, text)) {
-        editable.textContent = text;
-        dispatchInput(editable, text);
-      }
+      if (messageMatches(actual, text)) return accepted ? "beforeinput" : "insertText";
+      return "insertText";
     }
+    el.textContent = text;
+    dispatchInput(el, text);
+    return "text";
+  }
+  function fillComposer(el, text) {
+    const method = el.tagName === "TEXTAREA" || el.tagName === "INPUT" ? "value" : insertEditable(el, text);
+    if (method === "value") setControlValue(el, text);
     const actual = composerText(el);
     const ok = messageMatches(actual, text);
     const truncated = !ok && actual.trim().length > 0 && text.startsWith(actual);
-    return { ok, actual, truncated };
+    return { ok, actual, truncated, method };
   }
   function placeComposerText(el, text) {
-    let attempt = text;
-    for (let pass = 0; pass < 8 && attempt.length > 0; pass += 1) {
-      const placed = fillComposer(el, attempt);
-      if (placed.ok) return { ok: true, chunk: attempt };
-      if (placed.truncated && placed.actual.trim().length >= 20) {
-        const prefix = text.slice(0, placed.actual.length);
-        const exact = fillComposer(el, prefix);
-        if (exact.ok) return { ok: true, chunk: prefix };
-      }
-      const next = Math.floor(attempt.length / 2);
-      if (next < 20) break;
-      attempt = attempt.slice(0, next);
+    let placed = fillComposer(el, text);
+    if (!placed.ok) placed = fillComposer(el, text);
+    if (placed.ok) return { ok: true, chunk: text, method: placed.method };
+    if (placed.truncated && placed.actual.trim().length >= 20) {
+      const prefix = text.slice(0, placed.actual.length);
+      const exact = fillComposer(el, prefix);
+      if (exact.ok) return { ok: true, chunk: prefix, method: exact.method };
     }
-    return { ok: false, actual: composerText(el) };
+    return { ok: false, actual: placed.actual, method: placed.method };
   }
   var clickLock = /* @__PURE__ */ new WeakMap();
   function pressEnterSequence(el) {
@@ -3320,8 +3350,23 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
   function stepDiagnostic(doc) {
     return `${describeButtons(doc)} ${describeCandidates(doc)}`;
   }
-  function note(hooks, step, status, detail) {
-    hooks.onProgress?.(detail, { step, status });
+  function note(hooks, step, status, detail, diagnostic = "") {
+    hooks.onProgress?.(detail, { step, status, ...diagnostic ? { detail: diagnostic } : {} });
+  }
+  function replyDiagnostic(selector, length, lastChange) {
+    const when = lastChange === null ? "none" : `${Math.max(0, Math.round((Date.now() - lastChange) / 1e3))}s ago`;
+    return `selector ${selector || "none"}, ${length} characters, last change ${when}`;
+  }
+  async function focusComposer(el, hooks) {
+    const html = el;
+    const start = Date.now();
+    while (Date.now() - start <= 1e3) {
+      if (typeof html.focus === "function") html.focus();
+      const active = el.ownerDocument?.activeElement;
+      if (active === el || active != null && el.contains(active)) return true;
+      await hooks.sleep(Math.min(hooks.pollMs ?? 50, 50));
+    }
+    return false;
   }
   function replyTimeoutReason(reply, expect) {
     if (!reply) return "no reply seen";
@@ -3333,7 +3378,8 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     await hooks.keepAwake?.();
     const pollMs = hooks.pollMs ?? 400;
     const stableMs = hooks.stableMs ?? 2e3;
-    const timeoutMs = hooks.stepTimeoutMs ?? 4 * 60 * 1e3;
+    const timeoutMs = hooks.stepTimeoutMs ?? 9e4;
+    const silentMs = hooks.replySilentMs ?? 45e3;
     const startLimit = hooks.replyStartTimeoutMs ?? 2e4;
     const start = Date.now();
     let lastReply = "";
@@ -3343,15 +3389,26 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     let lastAck = "";
     let ackStable = 0;
     let started = false;
+    let lastChange = null;
+    let lastLog = 0;
+    let selector = "";
     while (Date.now() - start < timeoutMs) {
       if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.");
-      const reply2 = replyAfter(beforeMessages, assistantMessages(doc, provider.selectors.assistant, composer));
-      const json = expect === "json" ? reviewJsonBlock(reply2) : "";
+      const snapshot2 = assistantSnapshot(doc, provider.selectors.assistant, composer);
+      selector = snapshot2.selector;
+      const reply2 = replyAfter(beforeMessages, snapshot2.texts);
+      const json = reviewJsonBlock(reply2);
       const ack = ackReply(doc, composer);
       const streaming = stopControlActive(doc, provider.selectors.stop);
       const sendReady = Boolean(findSubmit(doc, provider.selectors.submit, composer));
       const idle = sendReady && !streaming;
       if (reply2 || ack) started = true;
+      if (reply2 !== lastReply) lastChange = Date.now();
+      const diagnostic2 = replyDiagnostic(selector, reply2.length, lastChange);
+      if (reply2 !== lastReply || Date.now() - lastLog >= 3e3) {
+        note(hooks, label, reply2 ? "reading" : "waiting", `Waiting for the reply: ${label}.`, diagnostic2);
+        lastLog = Date.now();
+      }
       if (expect === "json" && json) {
         if (json === lastJson && jsonStable >= stableMs && (!streaming || sendReady)) return json;
         if (json !== lastJson) {
@@ -3376,12 +3433,22 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
         if (sendReady) {
           throw new TurnError(
             "send-timeout",
-            `Send step on ${provider.label} did not start a reply. The Send button was still enabled. ${stepDiagnostic(doc)}`
+            `Send step on ${provider.label} did not start a reply. The Send button was still enabled. ${diagnostic2}. ${stepDiagnostic(doc)}`
           );
         }
       }
-      const settled = Boolean(reply2) && reply2 === lastReply && stableFor >= stableMs && (!streaming || idle || sendReady);
+      const settled = Boolean(reply2) && reply2 === lastReply && stableFor >= stableMs;
       if (expect === "text" && settled) return reply2;
+      if (settled && idle) return json || reply2;
+      if (!reply2 && Date.now() - start >= silentMs) {
+        const empty = replyDiagnostic(selector, 0, null);
+        if (attempt < 2) {
+          note(hooks, label, "error", `No reply container yet. Re-polling. ${empty}`);
+          await hooks.keepAwake?.();
+          return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1);
+        }
+        throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} timed out with no reply. ${empty}.`);
+      }
       if (reply2 !== lastReply) {
         lastReply = reply2;
         stableFor = 0;
@@ -3390,13 +3457,15 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       }
       await hooks.sleep(pollMs);
     }
-    const reply = replyAfter(beforeMessages, assistantMessages(doc, provider.selectors.assistant, composer));
+    const snapshot = assistantSnapshot(doc, provider.selectors.assistant, composer);
+    const reply = replyAfter(beforeMessages, snapshot.texts);
+    const diagnostic = replyDiagnostic(snapshot.selector, reply.length, lastChange);
     if (attempt < 2) {
-      note(hooks, label, "retry", `Reply step (${label}) timed out. Focusing the chat tab and waiting once more.`);
+      note(hooks, label, "error", `Reply step (${label}) timed out. Re-polling. ${diagnostic}`);
       await hooks.keepAwake?.();
       return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1);
     }
-    throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} did not finish in time. ${replyTimeoutReason(reply, expect)}.`);
+    throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} did not finish. ${diagnostic}. ${replyTimeoutReason(reply, expect)}.`);
   }
   async function waitForEnabledSubmit(doc, provider, composer, hooks) {
     const timeoutMs = hooks.submitReadyMs ?? 5e3;
@@ -3477,7 +3546,10 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     let pending = text;
     let part = 1;
     while (pending.length > 0) {
+      const focused = await focusComposer(composer, hooks);
+      note(hooks, label, focused ? "ready" : "error", focused ? `Composer focused. Inserting ${pending.length} characters.` : `Composer was not focused. Retrying the insert. ${pending.length} characters.`);
       const placed = placeComposerText(composer, pending);
+      note(hooks, label, placed.ok ? "ready" : "error", `Insert method ${placed.method}. Box holds ${placed.ok ? placed.chunk.length : placed.actual.length} characters.`);
       if (!placed.ok) {
         throw new TurnError(
           "insert-miss",
@@ -3707,7 +3779,8 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
         requestId: message.requestId,
         message: text,
         step: meta?.step ?? "Review",
-        status: meta?.status ?? "update"
+        status: meta?.status ?? "update",
+        detail: meta?.detail ?? ""
       }),
       sleep: (ms) => {
         if (document.hidden && Date.now() - lastFocus > 2e3) focusChat();

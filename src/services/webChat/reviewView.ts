@@ -41,6 +41,7 @@ export interface StepLogEntry {
   at: string
   step: string
   status: string
+  detail?: string
 }
 
 export interface ReviewModel {
@@ -235,7 +236,7 @@ export function renderReviewApp(root: HTMLElement, model: ReviewModel, actions: 
     const log = el(form, "ol", undefined, "note")
     log.id = "step-log"
     for (const entry of model.stepLog) {
-      el(log, "li", `${entry.at} · ${entry.step} · ${entry.status}`)
+      el(log, "li", `${entry.at} · ${entry.step} · ${entry.status}${entry.detail ? ` · ${entry.detail}` : ""}`)
     }
   }
   if (model.status) {

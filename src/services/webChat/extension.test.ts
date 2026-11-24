@@ -670,6 +670,7 @@ describe("live chat composers", () => {
       expect(box.textContent).toBe(placed.chunk)
     }
     if (original) document.execCommand = original
+    else delete (document as { execCommand?: unknown }).execCommand
   })
 
   it("finishes a defence round on the new prose reply and ignores the earlier score", async () => {
@@ -705,5 +706,106 @@ describe("live chat composers", () => {
     const rescored = await sendFollowUp(document, provider, "Score the paper again. Return JSON with overallScore.", hooks, "score after author defence", "json")
     expect(rescored).toContain('"overallScore":80')
     expect(rescored).not.toContain('"overallScore":86')
+  })
+
+  it("uses the insert X's editor accepts and retries once when the first insert is garbled", () => {
+    const box = document.createElement("div")
+    box.setAttribute("contenteditable", "true")
+    document.body.append(box)
+    let calls = 0
+    box.addEventListener("beforeinput", (event) => {
+      calls += 1
+      event.preventDefault()
+      box.textContent = calls === 1 ? "garbled" : ((event as InputEvent).data ?? "")
+    })
+    const placed = placeComposerText(box, "Open this public text page")
+    expect(calls).toBe(2)
+    expect(placed.ok).toBe(true)
+    if (placed.ok) {
+      expect(placed.method).toBe("beforeinput")
+      expect(placed.chunk).toBe("Open this public text page")
+    }
+    expect(box.textContent).toBe("Open this public text page")
+  })
+
+  it("completes from the latest Grok response once the composer is idle", async () => {
+    document.body.innerHTML = `<main>
+      <div id="box" contenteditable="true" role="textbox" aria-label="Ask anything"></div>
+      <button id="send" type="button" aria-label="Send">Send</button>
+      <div id="old" data-testid="grokResponse">{"overallScore":86,"summary":"Earlier score."}</div>
+      <div id="next" data-testid="grokResponse"></div>
+    </main>`
+    const provider = webChatProvider("grok-x")
+    if (!provider) throw new Error("missing grok-x")
+    const notes: string[] = []
+    document.getElementById("send")?.addEventListener("click", () => {
+      document.getElementById("box")!.textContent = ""
+      document.getElementById("next")!.textContent = "The record is public and the reply is finished."
+    })
+    const reply = await sendFollowUp(
+      document,
+      provider,
+      "Review the paper.",
+      {
+        aborted: () => false,
+        sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+        pollMs: 5,
+        stableMs: 0,
+        stepTimeoutMs: 800,
+        replyStartTimeoutMs: 300,
+        submitStableMs: 0,
+        submitReadyMs: 20,
+        sendVerifyMs: 20,
+        onProgress: (message, meta) => notes.push(`${message} ${meta?.detail ?? ""}`),
+      },
+      "review",
+      "json",
+    )
+    expect(reply).toContain("The record is public")
+    expect(reply).not.toContain('"overallScore":86')
+    expect(notes.join("\n")).toContain("selector [data-testid=\"grokResponse\"]")
+    expect(notes.join("\n")).toContain("characters")
+    expect(notes.join("\n")).toContain("last change")
+  })
+
+  it("reports a missing X reply and re-polls instead of hanging", async () => {
+    document.body.innerHTML = `<main><textarea id="box" aria-label="Ask anything"></textarea><button id="send" type="button" aria-label="Send">Send</button></main>`
+    const provider = webChatProvider("grok-x")
+    if (!provider) throw new Error("missing grok-x")
+    const notes: string[] = []
+    document.getElementById("send")?.addEventListener("click", () => {
+      ;(document.getElementById("box") as HTMLTextAreaElement).value = ""
+    })
+    const packet = buildWebChatPacket({
+      requestId: "x-silent",
+      providerId: "grok-x",
+      criteria: officialCriteria,
+      record,
+      documents: [{ filename: "paper.md", text: "A short public note." }],
+      useTextPage: true,
+    })
+    const livePage = `${"The public paper text is long enough to count as the record. ".repeat(12)}\nZenodo record: https://zenodo.org/records/1\nVersion DOI: https://doi.org/10.5281/zenodo.1`
+    const result = await runTurn(document, { ...provider, fileUpload: false }, packet, {
+      aborted: () => false,
+      sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+      pollMs: 5,
+      stableMs: 0,
+      stepTimeoutMs: 400,
+      replySilentMs: 40,
+      replyStartTimeoutMs: 1000,
+      submitStableMs: 0,
+      submitReadyMs: 20,
+      sendVerifyMs: 20,
+      loadTextPage: async () => ({ status: 200, body: livePage }),
+      onProgress: (message, meta) => notes.push(`${message} ${meta?.detail ?? ""}`),
+    })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    const log = notes.join("\n")
+    expect(log).toContain("Re-polling")
+    expect(log).toContain("selector none")
+    expect(log).toContain("0 characters")
+    expect(log).toContain("last change none")
+    expect(result.message).toContain("selector none")
   })
 })

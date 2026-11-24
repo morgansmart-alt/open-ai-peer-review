@@ -62,6 +62,7 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
         message: text,
         step: meta?.step ?? "Review",
         status: meta?.status ?? "update",
+        detail: meta?.detail ?? "",
       }),
     sleep: (ms) => {
       if (document.hidden && Date.now() - lastFocus > 2000) focusChat()

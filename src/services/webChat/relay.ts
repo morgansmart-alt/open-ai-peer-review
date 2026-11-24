@@ -19,11 +19,12 @@ export interface ProviderEvent {
   notice?: string
   step?: string
   status?: string
+  detail?: string
 }
 
 export type RelayDecision =
   | { kind: "ignore" }
-  | { kind: "progress"; requestId: string; message: string; airTabId: number; step: string; status: string }
+  | { kind: "progress"; requestId: string; message: string; airTabId: number; step: string; status: string; detail: string }
   | { kind: "result"; requestId: string; airTabId: number; text: string; defendedText: string | null; transcript: unknown; stopped: boolean; chatModel: string; notice: string }
   | { kind: "error"; requestId: string; airTabId: number; message: string }
 
@@ -48,6 +49,7 @@ export function relayFromProvider(job: RelayJob | null, senderTabId: number | un
       airTabId: job.airTabId,
       step: typeof message.step === "string" && message.step.trim() ? message.step.trim() : "Review",
       status: typeof message.status === "string" && message.status.trim() ? message.status.trim() : "update",
+      detail: typeof message.detail === "string" ? message.detail.trim() : "",
     }
   }
   if (message.type === "air-web-chat-done") {
@@ -79,6 +81,7 @@ export function extensionEnvelope(decision: Exclude<RelayDecision, { kind: "igno
       message: decision.message,
       step: decision.step,
       status: decision.status,
+      detail: decision.detail,
     }
   }
   if (decision.kind === "result") {

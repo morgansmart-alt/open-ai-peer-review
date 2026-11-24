@@ -171,7 +171,17 @@
         'button[data-testid="grok-send"]'
       ],
       stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]', 'button[aria-label*="Stop generating"]'],
-      assistant: ['[data-testid="assistant-message"]', '[data-testid="grok-message"]', '[class*="assistant-message"]', '[data-message-author="assistant"]'],
+      assistant: [
+        '[data-testid="grokResponse"]',
+        '[data-testid="grok-response"]',
+        '[data-testid="GrokResponse"]',
+        '[data-testid="grok-message"]',
+        '[data-testid*="grokMessage"]',
+        '[data-testid="assistant-message"]',
+        '[data-message-author="assistant"]',
+        '[class*="assistant-message"]',
+        'article[data-testid*="grok"]'
+      ],
       fileInput: ['input[type="file"]'],
       login: ['a[href*="/login"]', 'a[href*="/i/flow/login"]', 'a[data-testid="login"]']
     }
@@ -373,7 +383,8 @@
         message: typeof message.message === "string" ? message.message : "",
         airTabId: job.airTabId,
         step: typeof message.step === "string" && message.step.trim() ? message.step.trim() : "Review",
-        status: typeof message.status === "string" && message.status.trim() ? message.status.trim() : "update"
+        status: typeof message.status === "string" && message.status.trim() ? message.status.trim() : "update",
+        detail: typeof message.detail === "string" ? message.detail.trim() : ""
       };
     }
     if (message.type === "air-web-chat-done") {
@@ -403,7 +414,8 @@
         requestId: decision.requestId,
         message: decision.message,
         step: decision.step,
-        status: decision.status
+        status: decision.status,
+        detail: decision.detail
       };
     }
     if (decision.kind === "result") {
