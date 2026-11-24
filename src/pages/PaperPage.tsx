@@ -1,43 +1,54 @@
 import { useEffect, useState } from "react"
 import { Link, useParams } from "react-router-dom"
 import { keySlot } from "../domain/assessors.ts"
-import { canAppendRound, latestAuthorClaim, ROUND_LIMIT, statusFromCheck, statusLabel } from "../domain/issues.ts"
+import { canAppendRound, latestAuthorClaim, newerVersion, roleLabel, ROUND_LIMIT, statusFromCheck, statusLabel } from "../domain/issues.ts"
 import { buildRanking } from "../domain/ranking.ts"
 import { boardValue } from "../domain/scoring.ts"
 import { samplePaperById, type SamplePaper } from "../domain/samples.ts"
 import type { AttachmentMeta, AuthorRole, IssueThread, NodeSubmission, StoredReview, Verdict } from "../domain/types.ts"
+import { isCommunityAiRecord } from "../domain/moltbook.ts"
+import { carryForwardWorkList, isHumanReview, mergeLineage, publicationPlainText, scoreLineage, settleCheckResult, stableVersionId } from "../domain/versions.ts"
 import { useAir } from "../context/AirContext.tsx"
 import { ReportView } from "../components/ReportView.tsx"
+import { ReviewWorkspace } from "../components/ReviewWorkspace.tsx"
+import { MoltbookPanel } from "../components/MoltbookPanel.tsx"
+import { VersionBar } from "../components/VersionBar.tsx"
+import { WorkList } from "../components/WorkList.tsx"
 import { Banner, btnPrimary, btnQuiet, ExternalLink, fieldClass, formatWhen } from "../components/ui.tsx"
 import { isPrivateShareLink, loadRoundLink, loadSubmissionLinks, parseConversationLink, publicContextCount, saveRoundLink, saveNodeLink } from "../domain/conversationLinks.ts"
 import { ladderTier } from "../domain/fidelity.ts"
 import { LineChart } from "../components/charts.tsx"
 import { sha256Hex, uid } from "../services/hash.ts"
+import { prepareRecheck } from "../services/recheck.ts"
 import { runIndependent, runSourceCheck, type VerdictDraft } from "../services/review.ts"
-import { downloadArrayBuffer, extractDocument } from "../services/extractText.ts"
+import { loadVersionDocuments } from "../services/versionText.ts"
 import { downloadReceipt, lookupReceipt, savePrivateContext } from "../services/privateContext.ts"
 import { resolvedModel } from "../services/providers.ts"
 import {
-  defaultFileSelection,
-  formatRecordStamp,
   extensionOf,
   fetchRecordVersions,
   fetchRelatedSnippets,
   fetchZenodoRecord,
+  formatRecordStamp,
   isTextualFile,
+  parseRecordRef,
   type ZenodoRecord,
+  type ZenodoVersion,
 } from "../services/zenodo.ts"
 
 export function PaperPage() {
   const { recordId = "" } = useParams()
   const decoded = decodeURIComponent(recordId)
   const sample = samplePaperById(decoded)
+  const lookupId = sample ? decoded : (parseRecordRef(decoded)?.recordId ?? decoded)
   const air = useAir()
   const [record, setRecord] = useState<ZenodoRecord | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [newer, setNewer] = useState<{ id: string; label: string } | null>(null)
+  const [versions, setVersions] = useState<ZenodoVersion[]>([])
   const [documents, setDocuments] = useState<{ filename: string; text: string }[]>([])
   const [loadingText, setLoadingText] = useState(false)
+  const [recheckNote, setRecheckNote] = useState<string | null>(null)
+  const [recheckBusy, setRecheckBusy] = useState(false)
 
   useEffect(() => {
     if (sample) {
@@ -47,14 +58,14 @@ export function PaperPage() {
     }
     let cancelled = false
     setError(null)
-    void fetchZenodoRecord(decoded)
+    setVersions([])
+    void fetchZenodoRecord(lookupId)
       .then((next) => {
         if (cancelled) return
         setRecord(next)
         void fetchRecordVersions(next.conceptId)
-          .then((versions) => {
-            const later = versions.find((version) => version.publicationDate > next.publicationDate && version.id !== next.id)
-            if (later) setNewer({ id: `${later.id}@${later.publicationDate}`, label: `${later.doi} (${later.publicationDate})` })
+          .then((found) => {
+            if (!cancelled) setVersions(found)
           })
           .catch(() => undefined)
       })
@@ -64,29 +75,119 @@ export function PaperPage() {
     return () => {
       cancelled = true
     }
-  }, [decoded, sample])
+  }, [lookupId, sample])
 
-  const reviews = air.db.reviews.filter((review) => review.recordId === decoded)
-  const row = buildRanking(air.db).find((item) => item.recordId === decoded)
-  const issues = air.db.issues.filter((issue) => reviews.some((review) => review.doi === issue.doi && review.recordVersion === issue.recordVersion) || (record && issue.doi === record.doi))
+  const reviews = record ? air.db.reviews.filter((review) => review.recordId === record.id || review.doi === record.doi) : []
+  const aiReviews = reviews.filter((review) => !isHumanReview(review) && !isCommunityAiRecord(review))
+  const humanReviews = reviews.filter((review) => isHumanReview(review) && !isCommunityAiRecord(review))
+  const ranking = buildRanking(air.db)
+  const row = ranking.find((item) => item.recordId === record?.id)
+  const laterRef = record ? newerVersion(versions, record.id) : null
+  const later = laterRef ? (versions.find((version) => version.id === laterRef.id) ?? null) : null
+  const conceptDois = record
+    ? [...new Set([record.doi, ...versions.map((version) => version.doi), ...air.db.reviews.filter((review) => review.conceptRecordId === record.conceptId).map((review) => review.doi)])]
+    : []
+  const carried = record
+    ? carryForwardWorkList({ issues: air.db.issues, current: { doi: record.doi, recordVersion: record.recordVersion }, conceptDois })
+    : { outstanding: [], closed: [] }
+  const openedHere = air.db.issues.filter((issue) => record && issue.doi === record.doi && issue.recordVersion === record.recordVersion)
+  const lineage = record ? mergeLineage(scoreLineage(ranking, record.conceptId), versions.map((version) => ({ id: version.id, doi: version.doi, publicationDate: version.publicationDate, recordVersion: version.stableId }))) : []
 
   async function loadFiles() {
     if (!record || sample) return
     setLoadingText(true)
     setError(null)
-    const picked = record.files.filter((file) => isTextualFile(file) && defaultFileSelection(record.files).includes(file.key))
-    const next: { filename: string; text: string }[] = []
-    for (const file of picked) {
-      try {
-        const bytes = await downloadArrayBuffer(file.downloadUrl)
-        const extracted = await extractDocument(file.key, bytes)
-        if (extracted.text) next.push({ filename: file.key, text: extracted.text })
-      } catch (caught) {
-        setError(caught instanceof Error ? caught.message : "Could not read a file.")
-      }
-    }
+    const next = await loadVersionDocuments(record)
+    if (next.length === 0 && record.files.some((file) => isTextualFile(file))) setError("Could not read this version’s files.")
     setDocuments(next)
     setLoadingText(false)
+  }
+
+  async function recheck(issue: IssueThread, targetRecordId: string): Promise<string> {
+    if (!record) return "Load the record first."
+    const profile = air.profiles.find((item) => item.id === "grok") ?? air.profiles[0]
+    if (!profile) return "No assessor is configured."
+    try {
+      const prepared = await prepareRecheck({
+        current: record,
+        loadedDocuments: documents,
+        targetRecordId,
+        issueRecordVersion: issue.recordVersion,
+        fetchRecord: fetchZenodoRecord,
+        loadDocuments: loadVersionDocuments,
+      })
+      if (prepared.target.id === record.id) setDocuments(prepared.documents)
+      const searched = publicationPlainText(prepared.documents, prepared.target.description)
+      const related = air.settings.demoMode ? [] : await fetchRelatedSnippets(prepared.target).catch(() => [])
+      const privateLinks = [
+        ...loadSubmissionLinks(record.doi, record.recordVersion),
+        ...issue.rounds.flatMap((round) => {
+          const saved = loadRoundLink(round.id)
+          return saved ? [saved] : []
+        }),
+      ]
+      const draft = await runSourceCheck({
+        ctx: {
+          profile,
+          settings: air.providerSettings,
+          criteria: air.criteria,
+          record: prepared.target,
+          documents: prepared.documents,
+          conversationLinks: privateLinks,
+          demo: air.settings.demoMode || !air.providerSettings.keys[keySlot(profile)],
+        },
+        claim: issue.claim,
+        quotedPassage: issue.quotedPassage,
+        reason: issue.reason,
+        criterionId: issue.criterionId,
+        related,
+      })
+      const settled = settleCheckResult(draft.result === "ADDRESSED" && draft.citations.length === 0 ? "NOT_ADDRESSED" : draft.result, draft.citations, searched)
+      const status = statusFromCheck(settled.result, issue.rounds.length, issue.recordVersion, prepared.checkedVersionId)
+      const unverified = settled.result !== draft.result
+      const error = await air.addRound(
+        issue.id,
+        {
+          id: uid("round"),
+          kind: issue.rounds.some((round) => round.kind === "source-check" || round.kind === "recheck") ? "recheck" : "source-check",
+          authorLabel: air.settings.nodeName || profile.name,
+          authorRole: "ai-recheck",
+          result: settled.result,
+          citations: settled.citations,
+          body: unverified
+            ? `${draft.explanation} No quotation from this version’s text could be verified, so the issue is not marked addressed. A private chat link cannot close it.`
+            : draft.explanation,
+          recordVersionChecked: prepared.checkedVersionId,
+          createdAt: new Date().toISOString(),
+        },
+        status,
+      )
+      return error ?? `${settled.result.replaceAll("_", " ")}. Checked ${prepared.checkedVersionId}. Status is now ${statusLabel(status)}.`
+    } catch (caught) {
+      return caught instanceof Error ? caught.message : "The check failed."
+    }
+  }
+
+  async function recheckOne(issue: IssueThread, targetRecordId: string) {
+    setRecheckBusy(true)
+    setRecheckNote(null)
+    const message = await recheck(issue, targetRecordId)
+    setRecheckNote(message)
+    setRecheckBusy(false)
+  }
+
+  async function recheckAll(issues: IssueThread[]) {
+    if (!record) return
+    setRecheckBusy(true)
+    const notes: string[] = []
+    for (let index = 0; index < issues.length; index += 1) {
+      const issue = issues[index]
+      if (!issue) continue
+      setRecheckNote(`Re-checking ${index + 1} of ${issues.length}.`)
+      notes.push(await recheck(issue, record.id))
+    }
+    setRecheckNote(notes.join(" "))
+    setRecheckBusy(false)
   }
 
   return (
@@ -108,14 +209,14 @@ export function PaperPage() {
             {formatRecordStamp(record)}
           </p>
           <p data-testid="tier-ladder" className="mt-3 text-sm">
-            Tier: {ladderTier(reviews, air.db.nodes.filter((node) => reviews.some((review) => review.id === node.reviewId))) === "corroborated"
+            Tier: {ladderTier(aiReviews, air.db.nodes.filter((node) => aiReviews.some((review) => review.id === node.reviewId))) === "corroborated"
               ? "Independently corroborated (2+ models agree)"
-              : ladderTier(reviews, air.db.nodes.filter((node) => reviews.some((review) => review.id === node.reviewId))) === "in-depth"
+              : ladderTier(aiReviews, air.db.nodes.filter((node) => aiReviews.some((review) => review.id === node.reviewId))) === "in-depth"
                 ? "In-depth bring-your-own-key review"
                 : "Free screening"}
-            . Model names on independent checks are self-reported and cannot be proved.
+            . Model names on independent checks are self-reported and cannot be proved. Human reviews and community AI replies are labelled separately and do not change this tier.
           </p>
-          <LineChart values={air.db.nodes.filter((node) => reviews.some((review) => review.id === node.reviewId)).map((node) => (node.verdict === "pass" ? 1 : 0))} />
+          <LineChart values={air.db.nodes.filter((node) => aiReviews.some((review) => review.id === node.reviewId)).map((node) => (node.verdict === "pass" ? 1 : 0))} />
           {row && <p className="mt-3 text-sm">{row.fidelity.label}. These are AI assessments, not formal peer review.</p>}
           {row?.fidelity.disputed && (
             <div className="mt-3">
@@ -127,7 +228,15 @@ export function PaperPage() {
               </Banner>
             </div>
           )}
-          {newer && <p className="mt-3 text-sm text-gold">A newer Zenodo version is available: {newer.label}. Re-check open issues against it.</p>}
+          {later && (
+            <p className="mt-3 text-sm text-gold">
+              A newer Zenodo version is available:{" "}
+              <Link className="underline" to={`/paper/${encodeURIComponent(later.id)}`}>
+                {later.doi} ({later.publicationDate || "undated"})
+              </Link>
+              . Open it to continue from the outstanding issues. A re-check loads that version’s files.
+            </p>
+          )}
           <div className="mt-4 flex flex-wrap gap-2">
             <Link className={btnPrimary} to={`/review?doi=${encodeURIComponent(record.doi)}`}>
               Read this record
@@ -139,11 +248,22 @@ export function PaperPage() {
             )}
           </div>
           <AuthorBox record={record} />
+          <VersionBar currentId={record.id} versions={versions} lineage={lineage} />
+          <WorkList
+            record={record}
+            outstanding={carried.outstanding}
+            closed={carried.closed}
+            busy={recheckBusy}
+            note={recheckNote}
+            onRecheck={(issue) => void recheckOne(issue, record.id)}
+            onRecheckAll={() => void recheckAll(carried.outstanding)}
+          />
+          <ReviewWorkspace record={record} documents={documents.length ? documents : [{ filename: "description", text: record.description }]} />
           <section className="mt-8">
-            <h2 className="font-serif text-2xl">Readings</h2>
-            {reviews.length === 0 && <p className="mt-2 text-sm text-ink-soft">No reading has been published for this record in the current board.</p>}
+            <h2 className="font-serif text-2xl">AI readings</h2>
+            {aiReviews.length === 0 && <p className="mt-2 text-sm text-ink-soft">No AI reading has been published for this version.</p>}
             <div className="mt-3 space-y-3">
-              {reviews
+              {aiReviews
                 .slice()
                 .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
                 .map((review) => (
@@ -179,12 +299,69 @@ export function PaperPage() {
             </div>
           </section>
           <section className="mt-8">
-            <h2 className="font-serif text-2xl">Issue threads</h2>
-            <p className="mt-1 text-sm text-ink-soft">Each failure stays attached to this version. Addressed issues stop counting against the rank. Unresolved ones still nudge it.</p>
+            <h2 className="font-serif text-2xl">Human reviews</h2>
+            <p className="mt-1 text-sm text-ink-soft">These scores are not part of the AI panel median. Possible is not marked proven.</p>
+            {humanReviews.length === 0 && <p className="mt-2 text-sm text-ink-soft">No human review has been published for this version.</p>}
             <div className="mt-3 space-y-3">
-              {issues.length === 0 && <p className="text-sm text-ink-soft">No failure has been opened.</p>}
-              {issues.map((issue) => (
-                <IssueCard key={issue.id} issue={issue} record={record} documents={documents} newer={newer} />
+              {humanReviews
+                .slice()
+                .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+                .map((review) => (
+                  <details key={review.id} className="rounded-2xl border border-line bg-white/50 p-3">
+                    <summary className="cursor-pointer text-sm">
+                      Human reviewer · {boardValue(review.report.overallScore, review.report, review.criteriaVersion).toFixed(0)} / 100 · {formatWhen(review.createdAt)}
+                      {review.customCriteria ? " · unranked" : ""}
+                    </summary>
+                    <div className="mt-3">
+                      <ReportView
+                        report={review.report}
+                        criteria={air.criteria}
+                        meta={{
+                          assessorName: "Human reviewer",
+                          modelId: review.modelId,
+                          provider: review.provider,
+                          doi: review.doi,
+                          recordVersion: review.recordVersion,
+                          createdAt: review.createdAt,
+                          criteriaVersion: review.criteriaVersion,
+                          customCriteria: review.customCriteria,
+                          mock: review.mock,
+                          outputHash: review.outputHash,
+                          stored: review,
+                        }}
+                      />
+                    </div>
+                  </details>
+                ))}
+            </div>
+          </section>
+          <MoltbookPanel
+            record={{
+              id: record.id,
+              doi: record.doi,
+              conceptDoi: record.conceptDoi,
+              title: record.title,
+              recordVersion: record.recordVersion,
+              creators: record.creators,
+            }}
+            allowQueue={!sample}
+          />
+          <section className="mt-8">
+            <h2 className="font-serif text-2xl">Issue threads on this version</h2>
+            <p className="mt-1 text-sm text-ink-soft">
+              Each failure stays attached to the version where it was opened. A re-check against a later version appends a round and searches that version’s text. Addressed issues stop counting against the rank.
+            </p>
+            <div className="mt-3 space-y-3">
+              {openedHere.length === 0 && carried.outstanding.length === 0 && <p className="text-sm text-ink-soft">No failure has been opened on this version.</p>}
+              {[...openedHere, ...carried.outstanding.filter((issue) => !openedHere.some((item) => item.id === issue.id))].map((issue) => (
+                <IssueCard
+                  key={issue.id}
+                  issue={issue}
+                  record={record}
+                  later={later}
+                  busy={recheckBusy}
+                  onRecheck={(targetId) => void recheckOne(issue, targetId)}
+                />
               ))}
             </div>
           </section>
@@ -255,89 +432,39 @@ function AuthorBox({ record }: { record: ZenodoRecord }) {
 function IssueCard({
   issue,
   record,
-  documents,
-  newer,
+  later,
+  busy,
+  onRecheck,
 }: {
   issue: IssueThread
   record: ZenodoRecord
-  documents: { filename: string; text: string }[]
-  newer: { id: string; label: string } | null
+  later: ZenodoVersion | null
+  busy: boolean
+  onRecheck: (targetRecordId: string) => void
 }) {
   const air = useAir()
   const [note, setNote] = useState("")
   const [chatUrl, setChatUrl] = useState("")
   const [chatNote, setChatNote] = useState("")
-  const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [receipt, setReceipt] = useState<string | null>(null)
   const [receiptCheck, setReceiptCheck] = useState("")
   const [receiptResult, setReceiptResult] = useState<string | null>(null)
   const claim = latestAuthorClaim(air.db.claims, record.doi)
   const role = authorRole(claim?.listedOnRecord ?? false, Boolean(claim))
-
-  async function check(version: string) {
-    if (documents.length === 0 && !record.description) {
-      setMessage("Load the files first so the check has text to search.")
-      return
-    }
-    setBusy(true)
-    setMessage(null)
-    try {
-      const profile = air.profiles.find((item) => item.id === "grok") ?? air.profiles[0]
-      if (!profile) return
-      const related = air.settings.demoMode ? [] : await fetchRelatedSnippets(record).catch(() => [])
-      const privateLinks = [
-        ...loadSubmissionLinks(record.doi, record.recordVersion),
-        ...issue.rounds.flatMap((round) => {
-          const saved = loadRoundLink(round.id)
-          return saved ? [saved] : []
-        }),
-      ]
-      const draft = await runSourceCheck({
-        ctx: {
-          profile,
-          settings: air.providerSettings,
-          criteria: air.criteria,
-          record: version === record.recordVersion ? record : { ...record, recordVersion: version },
-          documents: documents.length ? documents : [{ filename: "description", text: record.description }],
-          conversationLinks: privateLinks,
-          demo: air.settings.demoMode || !air.providerSettings.keys[keySlot(profile)],
-        },
-        claim: issue.claim,
-        quotedPassage: issue.quotedPassage,
-        reason: issue.reason,
-        criterionId: issue.criterionId,
-        related,
-      })
-      const result = draft.result === "ADDRESSED" && draft.citations.length === 0 ? "NOT_ADDRESSED" : draft.result
-      const status = statusFromCheck(result, issue.rounds.length, issue.recordVersion, version)
-      const error = await air.addRound(
-        issue.id,
-        {
-          id: uid("round"),
-          kind: issue.rounds.some((round) => round.kind === "source-check") ? "recheck" : "source-check",
-          authorLabel: air.settings.nodeName || profile.name,
-          authorRole: "reader",
-          result,
-          citations: draft.citations,
-          body: draft.explanation,
-          recordVersionChecked: version,
-          createdAt: new Date().toISOString(),
-        },
-        status,
-      )
-      setMessage(error ?? `${draft.result.replaceAll("_", " ")}. Status is now ${statusLabel(status)}.`)
-    } catch (caught) {
-      setMessage(caught instanceof Error ? caught.message : "The check failed.")
-    } finally {
-      setBusy(false)
-    }
-  }
+  const onScreenVersion = record.recordVersion === issue.recordVersion ? issue.recordVersion : stableVersionId(record)
+  const sameVersionCheck = canAppendRound(issue, {
+    kind: issue.rounds.some((round) => round.kind === "source-check" || round.kind === "recheck") ? "recheck" : "source-check",
+    recordVersionChecked: onScreenVersion,
+  })
+  const laterCheck = later
+    ? canAppendRound(issue, { kind: "recheck", recordVersionChecked: later.stableId })
+    : false
 
   async function respond(kind: "rebuttal" | "counter") {
     if (!note.trim()) return
     if (!canAppendRound(issue)) {
-      setMessage(`This thread stops at ${ROUND_LIMIT} rounds.`)
+      setMessage(`This version already has ${ROUND_LIMIT} rounds. A re-check on a later version can start again.`)
       return
     }
     const parsed = chatUrl.trim() ? parseConversationLink(chatUrl, chatNote) : null
@@ -399,6 +526,7 @@ function IssueCard({
     <details className="rounded-2xl border border-line bg-white/50 p-3">
       <summary className="cursor-pointer text-sm">
         <span className="text-ink-soft">{statusLabel(issue.status)} · </span>
+        {issue.recordVersion !== record.recordVersion ? `Opened on ${issue.recordVersion} · ` : ""}
         {issue.claim}
       </summary>
       <div className="mt-3 space-y-2 text-sm">
@@ -407,8 +535,9 @@ function IssueCard({
           {issue.rounds.map((round) => (
             <li key={round.id} className="rounded-xl bg-paper px-3 py-2">
               <span className="text-xs text-ink-soft">
-                {round.kind} · {round.authorLabel} · {round.authorRole}
+                {round.kind} · {round.authorLabel} · {roleLabel(round.authorRole)}
                 {round.result ? ` · ${round.result}` : ""}
+                {round.recordVersionChecked ? ` · checked ${round.recordVersionChecked}` : ""}
               </span>
               <p>{round.body}</p>
               {publicContextCount(round.privateContextCount) && (
@@ -424,11 +553,11 @@ function IssueCard({
         </ol>
         {message && <p className="text-ink-soft">{message}</p>}
         <div className="no-print flex flex-wrap gap-2">
-          <button type="button" className={btnQuiet} disabled={busy || !canAppendRound(issue)} onClick={() => void check(record.recordVersion)}>
+          <button type="button" className={btnQuiet} disabled={busy || !sameVersionCheck} onClick={() => onRecheck(record.id)}>
             Check against this version
           </button>
-          {newer && (
-            <button type="button" className={btnQuiet} disabled={busy || !canAppendRound(issue)} onClick={() => void check(newer.id)}>
+          {later && (
+            <button type="button" className={btnQuiet} disabled={busy || !laterCheck} onClick={() => onRecheck(later.id)}>
               Re-check against the newer version
             </button>
           )}
@@ -589,6 +718,7 @@ function IndependentForm({
       failureModes: draft.verdict === "fail" ? draft.failureModes : [],
       attachment,
       createdAt: new Date().toISOString(),
+      humanEdited: true,
       mock: air.settings.demoMode || review.mock,
     }
     const error = await air.publishCheck(node)
@@ -599,7 +729,7 @@ function IndependentForm({
     <div className="no-print mt-4 rounded-2xl border border-dashed border-line p-3">
       <h3 className="text-sm font-medium">Independent review</h3>
       <p className="mt-1 text-xs text-ink-soft">
-        Run your own check of this reading with your key, edit the verdict, then submit it as this browser’s node. One verdict per node per reading.
+        Run your own check of this reading with your key, edit the verdict, then submit it as this browser’s node. The submitted check is labelled human-edited. One verdict per node per reading, and any one node is capped at 40% of the badge. It is not an AI median.
       </p>
       {existing && <p className="mt-2 text-xs text-gold">This node has already checked this reading.</p>}
       <label className="mt-2 block text-xs text-ink-soft">

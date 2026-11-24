@@ -1,3 +1,5 @@
+import { stableVersionId } from "../domain/versions.ts"
+
 export interface ZenodoCreator {
   name: string
   affiliation?: string
@@ -263,6 +265,9 @@ export interface ZenodoVersion {
   doi: string
   title: string
   publicationDate: string
+  version: string
+  /** Version DOI, or the Zenodo record id when the DOI is missing. */
+  stableId: string
 }
 
 export async function fetchRecordVersions(conceptId: string): Promise<ZenodoVersion[]> {
@@ -274,12 +279,15 @@ export async function fetchRecordVersions(conceptId: string): Promise<ZenodoVers
     const metadata = asRecord(record?.metadata)
     const id = text(record?.id)
     if (!id) return []
+    const doi = text(record?.doi) || text(metadata?.doi) || `10.5281/zenodo.${id}`
     return [
       {
         id,
-        doi: text(record?.doi) || text(metadata?.doi) || `10.5281/zenodo.${id}`,
+        doi,
         title: text(metadata?.title) || text(record?.title),
         publicationDate: text(metadata?.publication_date),
+        version: text(metadata?.version),
+        stableId: stableVersionId({ id, doi }),
       },
     ]
   })

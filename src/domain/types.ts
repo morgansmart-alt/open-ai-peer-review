@@ -69,12 +69,16 @@ export type OntologyClass =
 export type PhysicsClass = "CONSISTENT" | "EXTENDS" | "CHALLENGES"
 export type GoalLevel = "none" | "indirect" | "partial" | "direct"
 
+export type EvidenceLabel = "possible" | "proven"
+
 export interface CriterionScore {
   criterionId: string
   score: number
   rationale: string
   citations: Citation[]
   confidence?: Confidence
+  /** Possible is not proven. A proven label needs a quotation from the publication. */
+  evidence?: EvidenceLabel
 }
 
 export interface ValueRange {
@@ -179,13 +183,15 @@ export interface StoredReview {
   criteriaId: string
   criteriaVersion: string
   customCriteria: boolean
-  /** Free screenings stay off the ranked board. In-depth readings are ranked. */
-  tier?: "free-screening" | "in-depth" | "demo"
+  /** Free screenings stay off the ranked board. In-depth readings are ranked. Community AI never ranks. */
+  tier?: "free-screening" | "in-depth" | "demo" | "community-ai"
   report: ReviewReport
   outputHash: string
   createdAt: string
   /** How many private chat links were sent to the model. URLs are never stored here. */
   privateContextCount?: number
+  /** Human reviews are stored beside AI readings and never enter an AI median. Community AI is uncalibrated. Absent means an AI reading. */
+  origin?: "ai" | "human" | "community-ai"
 }
 
 export type Verdict = "pass" | "fail"
@@ -232,6 +238,8 @@ export interface NodeSubmission {
   promptHash?: string
   /** The visitor named this model. AIR cannot prove the provider actually used it. */
   selfReported?: boolean
+  /** A person edited this check before it was submitted. It still counts as one node, under the same weight cap. */
+  humanEdited?: boolean
   createdAt: string
   mock: boolean
 }
@@ -247,7 +255,7 @@ export type RoundKind = "claim" | "source-check" | "rebuttal" | "counter" | "rec
 
 export type SourceResult = "ADDRESSED" | "PARTIALLY_ADDRESSED" | "NOT_ADDRESSED"
 
-export type AuthorRole = "reviewer" | "node" | "author" | "author-self-declared" | "reader"
+export type AuthorRole = "reviewer" | "node" | "author" | "author-self-declared" | "reader" | "human-reviewer" | "ai-recheck"
 
 export interface IssueRound {
   id: string
@@ -266,7 +274,7 @@ export interface IssueThread {
   id: string
   doi: string
   recordVersion: string
-  source: "review-major" | "node-fail"
+  source: "review-major" | "node-fail" | "community-promotion"
   sourceId: string
   criterionId: string
   claim: string
@@ -329,6 +337,7 @@ export const STORED_REVIEW_KEYS = [
   "outputHash",
   "createdAt",
   "privateContextCount",
+  "origin",
 ] as const
 
 export function emptyDatabase(): AirDatabase {

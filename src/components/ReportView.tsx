@@ -92,6 +92,9 @@ export function ReportView({
         {publicContextCount(meta.stored?.privateContextCount) && (
           <p className="mt-3 text-sm">{publicContextCount(meta.stored?.privateContextCount)}. The addresses stay in the browser that sent them and are not part of this report.</p>
         )}
+        {meta.stored?.origin === "human" && (
+          <p className="mt-3 text-sm">Human review. This score is not part of the AI panel median. Possible is not proven.</p>
+        )}
         {meta.stored?.tier === "free-screening" && (
           <p className="mt-3 text-sm text-gold">Free quick review: a smaller model, lower fidelity, screening only. It is not ranked and cannot verify the work.</p>
         )}
@@ -138,6 +141,7 @@ export function ReportView({
                   <span className="tabular-nums">
                     {shown(score.score).toFixed(0)}/100
                     {score.confidence ? ` · ${score.confidence}` : ""}
+                    {score.evidence === "proven" ? " · Proven" : score.evidence === "possible" ? " · Possible" : ""}
                   </span>
                 </div>
                 <p className="mt-1 text-sm text-ink-soft">{score.rationale}</p>

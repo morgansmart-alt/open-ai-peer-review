@@ -4,6 +4,8 @@ import { computeReputations, fidelityFor, nodesForReviews, type FidelitySummary 
 import { issueCounts, issuePenalty } from "./issues.ts"
 import { ASSESSOR_SPREAD, BOARD_PRIOR, boardValue, rankedBoardScore, scoringMismatch } from "./scoring.ts"
 import type { AirDatabase, IssueThread, StoredReview } from "./types.ts"
+import { isCommunityAiRecord } from "./moltbook.ts"
+import { isHumanReview } from "./versions.ts"
 
 export const PRIOR = 3
 export { BOARD_PRIOR }
@@ -46,6 +48,7 @@ export interface RankRow {
   demo: boolean
   doi: string
   recordId: string
+  conceptRecordId: string
   recordVersion: string
   title: string
   creators: string[]
@@ -67,6 +70,10 @@ export interface RankRow {
   partialIssues: number
   addressedIssues: number
   mismatchCount: number
+  humanMedian: number | null
+  humanCount: number
+  humanMismatchCount: number
+  humanReviews: StoredReview[]
   assessorsDisagree: boolean
   reviews: StoredReview[]
   issues: IssueThread[]
@@ -95,12 +102,30 @@ function nudgeFor(rowPenalty: number, disputed: boolean): number {
   return Math.min(NUDGE_CAP, rowPenalty + (disputed ? DISPUTE_NUDGE : 0))
 }
 
+function humanStats(reviews: StoredReview[]): Pick<RankRow, "humanMedian" | "humanCount" | "humanMismatchCount" | "humanReviews"> {
+  const counted = reviews.filter((review) => !scoringMismatch(review).mismatch)
+  return {
+    humanMedian: median(counted.map((review) => boardValue(review.report.overallScore, review.report, review.criteriaVersion))),
+    humanCount: counted.length,
+    humanMismatchCount: reviews.length - counted.length,
+    humanReviews: reviews,
+  }
+}
+
 export function buildRanking(db: AirDatabase, now = Date.now()): RankRow[] {
   const reputations = computeReputations(db.nodes)
   const groups = new Map<string, StoredReview[]>()
+  const humanGroups = new Map<string, StoredReview[]>()
   for (const review of db.reviews) {
-    if (review.customCriteria || review.tier === "free-screening") continue
+    if (review.customCriteria || isCommunityAiRecord(review)) continue
     const key = paperKey(review.doi, review.recordVersion)
+    if (isHumanReview(review)) {
+      const list = humanGroups.get(key) ?? []
+      list.push(review)
+      humanGroups.set(key, list)
+      continue
+    }
+    if (review.tier === "free-screening") continue
     const list = groups.get(key) ?? []
     list.push(review)
     groups.set(key, list)
@@ -148,6 +173,7 @@ export function buildRanking(db: AirDatabase, now = Date.now()): RankRow[] {
       demo: reviews.every((review) => review.mock || review.sample),
       doi: first.doi,
       recordId: first.recordId,
+      conceptRecordId: first.conceptRecordId,
       recordVersion: first.recordVersion,
       title: first.title,
       creators: first.creators,
@@ -170,7 +196,48 @@ export function buildRanking(db: AirDatabase, now = Date.now()): RankRow[] {
       unresolvedIssues: counts.unresolved,
       partialIssues: counts.partial,
       addressedIssues: counts.addressed,
+      ...humanStats(humanGroups.get(key) ?? []),
       reviews: [...reviews].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+      issues,
+    })
+  }
+  for (const [key, humans] of humanGroups) {
+    if (groups.has(key)) continue
+    const first = humans[0]
+    if (!first) continue
+    const issues = db.issues.filter((issue) => issue.doi === first.doi && issue.recordVersion === first.recordVersion)
+    const counts = issueCounts(issues)
+    rows.push({
+      key,
+      sample: humans.every((review) => review.sample),
+      demo: false,
+      doi: first.doi,
+      recordId: first.recordId,
+      conceptRecordId: first.conceptRecordId,
+      recordVersion: first.recordVersion,
+      title: first.title,
+      creators: first.creators,
+      keywords: first.keywords,
+      publicationDate: first.publicationDate,
+      byAssessor: {},
+      panelMedian: null,
+      panelRankScore: null,
+      ideaMedian: null,
+      ideaRankScore: null,
+      subscores: {},
+      physicsClass: null,
+      criteriaVersions: [...new Set(humans.map((review) => review.criteriaVersion))],
+      reviewCount: 0,
+      mismatchCount: 0,
+      assessorsDisagree: false,
+      fidelity: fidelityFor([], reputations, now),
+      issuePenalty: round2(issuePenalty(issues)),
+      openIssues: counts.open,
+      unresolvedIssues: counts.unresolved,
+      partialIssues: counts.partial,
+      addressedIssues: counts.addressed,
+      ...humanStats(humans),
+      reviews: [],
       issues,
     })
   }

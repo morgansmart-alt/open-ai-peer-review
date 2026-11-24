@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react"
 import { listAssessors } from "../domain/assessors.ts"
 import { claimKey, issuesFromNode, issuesFromReview } from "../domain/issues.ts"
+import { canAppendRound, isHumanReview } from "../domain/versions.ts"
 import { officialCriteria } from "../domain/officialCriteria.ts"
 import { sampleDatabase } from "../domain/samples.ts"
 import type { AirDatabase, AssessorProfile, AuthorClaim, CriteriaSet, IssueRound, IssueStatus, IssueThread, NodeSubmission, ProviderSettings, StoredReview } from "../domain/types.ts"
@@ -34,6 +35,7 @@ interface AirContextValue {
   publishReading: (review: StoredReview) => Promise<string | null>
   publishCheck: (node: NodeSubmission) => Promise<string | null>
   addRound: (issueId: string, round: IssueRound, status: IssueStatus) => Promise<string | null>
+  openPromotedIssue: (issue: IssueThread) => Promise<string | null>
   claimRecord: (claim: AuthorClaim) => Promise<string | null>
 }
 
@@ -87,8 +89,8 @@ export function AirProvider({ children }: { children: ReactNode }) {
     async (review: StoredReview) => {
       const error = await publishReview(mode, review)
       if (error) return error
-      const label = profiles.find((profile) => profile.id === review.assessorId)?.name ?? review.assessorId
-      const incoming = issuesFromReview(review, label)
+      const label = isHumanReview(review) ? "Human reviewer" : (profiles.find((profile) => profile.id === review.assessorId)?.name ?? review.assessorId)
+      const incoming = issuesFromReview(review, label, isHumanReview(review) ? "human-reviewer" : "reviewer")
       const seen = new Set(db.issues.map((issue) => claimKey(issue.doi, issue.recordVersion, issue.criterionId, issue.claim)))
       const fresh = incoming.filter((issue) => !seen.has(claimKey(issue.doi, issue.recordVersion, issue.criterionId, issue.claim)))
       const issueError = await publishIssues(mode, fresh, review.mock)
@@ -131,6 +133,9 @@ export function AirProvider({ children }: { children: ReactNode }) {
     async (issueId: string, round: IssueRound, status: IssueStatus) => {
       const current = db.issues.find((issue) => issue.id === issueId)
       if (!current) return "That issue is no longer on the board."
+      if (!canAppendRound(current, { kind: round.kind, recordVersionChecked: round.recordVersionChecked })) {
+        return "This version already has six rounds. A re-check on a later version can start again."
+      }
       const next: IssueThread = { ...current, status, rounds: [...current.rounds, round], updatedAt: round.createdAt }
       const error = await saveIssue(mode === "supabase" && current.id.includes("sample") ? "local" : mode, next)
       if (!error && mode === "supabase" && !current.id.includes("sample")) {
@@ -145,6 +150,24 @@ export function AirProvider({ children }: { children: ReactNode }) {
       return error
     },
     [bump, db.issues, mode],
+  )
+
+  const openPromotedIssue = useCallback(
+    async (issue: IssueThread) => {
+      if (issue.source !== "community-promotion" || issue.status !== "open" || issue.quotedPassage !== "") {
+        return "A community reply cannot close an issue."
+      }
+      const error = await publishIssues(mode, [issue], false)
+      if (!error && mode === "supabase" && !issue.id.includes("sample")) {
+        setRemote((existing) => ({
+          ...existing,
+          issues: existing.issues.some((item) => item.id === issue.id) ? existing.issues : [...existing.issues, issue],
+        }))
+      }
+      bump()
+      return error
+    },
+    [bump, mode],
   )
 
   const claimRecord = useCallback(
@@ -188,6 +211,7 @@ export function AirProvider({ children }: { children: ReactNode }) {
     publishReading,
     publishCheck,
     addRound,
+    openPromotedIssue,
     claimRecord,
   }
 
