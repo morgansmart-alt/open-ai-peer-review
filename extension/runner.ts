@@ -4,6 +4,7 @@ import { readingCriteria } from "../src/domain/profiles.ts"
 import { acceptWebChatResult } from "../src/services/webChat/accept.ts"
 import { critiquesFromReport, DEFENCE_PAUSE_MS, runDefenceLoop } from "../src/services/webChat/defence.ts"
 import { sendFollowUp, runTurn, type TurnHooks } from "../src/services/webChat/runTurn.ts"
+import { detectChatModel } from "../src/services/webChat/chatModel.ts"
 import { EXTENSION_SOURCE, PROTOCOL_VERSION, type WebChatPacket } from "../src/services/webChat/protocol.ts"
 
 let aborted = false
@@ -45,6 +46,7 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
   aborted = false
   showBanner(provider.label)
   sendResponse({ ok: true, started: true })
+  const observedModel = () => detectChatModel(document, provider.id)
   const hooks: TurnHooks = {
     aborted: () => aborted,
     onProgress: (text) => report({ type: "air-web-chat-progress", requestId: message.requestId, message: text }),
@@ -58,12 +60,12 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
     const rounds = Math.min(3, Math.max(0, Math.round(Number(message.defenceRounds) || 0)))
     const criteria = readingCriteria(officialCriteria, message.packet.criterionProfile, false)
     if (!rounds) {
-      report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: result.text })
+      report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: result.text, chatModel: observedModel() })
       return
     }
     const accepted = acceptWebChatResult(result.text, criteria)
     if (!accepted.ok) {
-      report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: result.text, defendedText: null, transcript: [], stopped: false })
+      report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: result.text, defendedText: null, transcript: [], stopped: false, chatModel: observedModel() })
       return
     }
     const paperText = message.packet.files.map((file) => file.text).join("\n\n")
@@ -85,6 +87,7 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
         defendedText: defence.defendedText,
         transcript: defence.transcript,
         stopped: defence.stopped,
+        chatModel: observedModel(),
       })
     } catch (error) {
       report({
@@ -93,6 +96,7 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
         ok: true,
         text: result.text,
         message: error instanceof Error ? error.message : "The defence stopped early.",
+        chatModel: observedModel(),
       })
     }
   })

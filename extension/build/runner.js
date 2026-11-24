@@ -2386,6 +2386,67 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     }
   }
 
+  // src/services/webChat/chatModel.ts
+  var UNKNOWN_CHAT_MODEL = "unknown (site default)";
+  var GROK_MODES = ["heavy", "expert", "auto"];
+  function labelOf(el) {
+    return `${el.getAttribute("aria-label") ?? ""} ${(el.textContent ?? "").replace(/\s+/g, " ")}`.trim();
+  }
+  function controls(root) {
+    let nodes = [];
+    try {
+      nodes = queryAllDeep(root, "button, [role='button'], [data-testid*='model'], [aria-haspopup='listbox']");
+    } catch {
+      return [];
+    }
+    return nodes.filter((el) => !isIgnoredRegion(el) && !isHiddenControl(el));
+  }
+  function titled(label) {
+    return label.slice(0, 80);
+  }
+  function grokMode(label) {
+    const lower = label.toLowerCase();
+    if (/add files|voice|send|submit|stop|upload/.test(lower)) return null;
+    const mode = GROK_MODES.find((word) => new RegExp(`\\b${word}\\b`, "i").test(label));
+    if (!mode) return null;
+    if (!/model/.test(lower) && !/^(auto|expert|heavy)$/i.test(label.trim())) return null;
+    return mode.charAt(0).toUpperCase() + mode.slice(1);
+  }
+  function geminiName(label) {
+    const match = label.match(/gemini(?:\s+\d+(?:\.\d+)?)?(?:\s+(?:pro|flash|thinking|nano|ultra))+/i) || label.match(/\b\d+(?:\.\d+)?\s+(?:pro|flash|thinking)\b/i);
+    if (!match) return null;
+    if (/send|upload|stop|attach/i.test(label)) return null;
+    return titled(match[0].replace(/\s+/g, " ").trim());
+  }
+  function chatgptName(label) {
+    if (/send|upload|stop|attach|voice/i.test(label)) return null;
+    const match = label.match(/\b(?:gpt[-\s]?\d+(?:\.\d+)?[a-z]?|chatgpt\s+\w[\w.\-]*|o[134](?:-[\w.]+)?|4o(?:-[\w.]+)?)\b/i);
+    if (!match) return null;
+    return titled(match[0].replace(/\s+/g, " ").trim());
+  }
+  function detectChatModel(root, providerId) {
+    const buttons = controls(root);
+    if (providerId === "grok" || providerId === "grok-x") {
+      for (const button of buttons) {
+        const mode = grokMode(labelOf(button));
+        if (mode) return mode;
+      }
+    }
+    if (providerId === "gemini") {
+      for (const button of buttons) {
+        const name = geminiName(labelOf(button));
+        if (name) return name;
+      }
+    }
+    if (providerId === "chatgpt") {
+      for (const button of buttons) {
+        const name = chatgptName(labelOf(button));
+        if (name) return name;
+      }
+    }
+    return UNKNOWN_CHAT_MODEL;
+  }
+
   // extension/runner.ts
   var aborted = false;
   function showBanner(label) {
@@ -2422,6 +2483,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     aborted = false;
     showBanner(provider.label);
     sendResponse({ ok: true, started: true });
+    const observedModel = () => detectChatModel(document, provider.id);
     const hooks = {
       aborted: () => aborted,
       onProgress: (text) => report({ type: "air-web-chat-progress", requestId: message.requestId, message: text }),
@@ -2435,12 +2497,12 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       const rounds = Math.min(3, Math.max(0, Math.round(Number(message.defenceRounds) || 0)));
       const criteria = readingCriteria(officialCriteria, message.packet.criterionProfile, false);
       if (!rounds) {
-        report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: result.text });
+        report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: result.text, chatModel: observedModel() });
         return;
       }
       const accepted = acceptWebChatResult(result.text, criteria);
       if (!accepted.ok) {
-        report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: result.text, defendedText: null, transcript: [], stopped: false });
+        report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: result.text, defendedText: null, transcript: [], stopped: false, chatModel: observedModel() });
         return;
       }
       const paperText = message.packet.files.map((file) => file.text).join("\n\n");
@@ -2461,7 +2523,8 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
           text: result.text,
           defendedText: defence.defendedText,
           transcript: defence.transcript,
-          stopped: defence.stopped
+          stopped: defence.stopped,
+          chatModel: observedModel()
         });
       } catch (error) {
         report({
@@ -2469,7 +2532,8 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
           requestId: message.requestId,
           ok: true,
           text: result.text,
-          message: error instanceof Error ? error.message : "The defence stopped early."
+          message: error instanceof Error ? error.message : "The defence stopped early.",
+          chatModel: observedModel()
         });
       }
     });

@@ -10,6 +10,7 @@ type ExtensionPayload = {
   defendedText?: string | null
   transcript?: unknown
   stopped?: boolean
+  chatModel?: string
 }
 
 export interface WebChatRunResult {
@@ -17,6 +18,7 @@ export interface WebChatRunResult {
   defendedText: string | null
   transcript: unknown[]
   stopped: boolean
+  chatModel: string
 }
 
 function post(message: Record<string, unknown>): void {
@@ -58,7 +60,7 @@ export function runWebChatExtension(
       window.removeEventListener("message", onMessage)
       signal?.removeEventListener("abort", onAbort)
       if (error) reject(error)
-      else resolve(result ?? { text: "", defendedText: null, transcript: [], stopped: false })
+      else resolve(result ?? { text: "", defendedText: null, transcript: [], stopped: false, chatModel: "unknown (site default)" })
     }
     function onAbort() {
       post({ type: "air-web-chat-cancel", requestId: packet.requestId })
@@ -75,6 +77,7 @@ export function runWebChatExtension(
           defendedText: data.defendedText ?? null,
           transcript: Array.isArray(data.transcript) ? data.transcript : [],
           stopped: Boolean(data.stopped),
+          chatModel: data.chatModel?.trim() || "unknown (site default)",
         })
       }
       if (data.type === "air-web-chat-error") finish(new Error(data.message || "The web chat could not finish."))

@@ -377,7 +377,8 @@
           text: message.text,
           defendedText: message.defendedText ?? null,
           transcript: message.transcript ?? [],
-          stopped: Boolean(message.stopped)
+          stopped: Boolean(message.stopped),
+          chatModel: typeof message.chatModel === "string" && message.chatModel.trim() ? message.chatModel.trim() : "unknown (site default)"
         };
       }
       return { kind: "error", requestId: job.requestId, airTabId: job.airTabId, message: message.message || "The chat did not return a review." };
@@ -397,7 +398,8 @@
         text: decision.text,
         defendedText: decision.defendedText,
         transcript: decision.transcript,
-        stopped: decision.stopped
+        stopped: decision.stopped,
+        chatModel: decision.chatModel
       };
     }
     return { source: EXTENSION_SOURCE, version: PROTOCOL_VERSION, type: "air-web-chat-error", requestId: decision.requestId, message: decision.message };

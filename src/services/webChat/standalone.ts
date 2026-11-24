@@ -211,6 +211,7 @@ export function resultCard(review: StoredReview): {
   defendedLabel: string
   scores: { criterionId: string; score: number }[]
   feedback: { label: string; text: string }[]
+  model: string
 } {
   const check = scoringMismatch(review)
   const feedback = hasAirFeedback(review.report.airFeedback) ? review.report.airFeedback : undefined
@@ -231,6 +232,7 @@ export function resultCard(review: StoredReview): {
     label: WEB_CHAT_LABEL,
     defendedOverall: review.defended?.overallScore ?? null,
     defendedLabel: review.defended?.label ?? "",
+    model: review.modelId,
     scores: review.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score })),
     feedback: feedback ? labels.flatMap((item) => (feedback[item.key] ? [{ label: item.label, text: feedback[item.key] as string }] : [])) : [],
   }

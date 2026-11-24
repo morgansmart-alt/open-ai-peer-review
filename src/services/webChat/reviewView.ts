@@ -12,6 +12,7 @@ export interface ReviewCard {
   defendedLabel?: string
   scores?: { criterionId: string; score: number }[]
   feedback?: { label: string; text: string }[]
+  model?: string
 }
 
 export interface HistoryItem {
@@ -234,6 +235,10 @@ export function renderReviewApp(root: HTMLElement, model: ReviewModel, actions: 
     el(card, "p", model.result.label, "label")
     el(card, "h2", model.result.title)
     el(card, "p", `Blind score ${Math.round(model.result.overall)} out of 100 · ${model.result.recommendation}`, "score")
+    if (model.result.model) {
+      const line = el(card, "p", `Model: ${model.result.model}`, "note")
+      line.id = "chat-model"
+    }
     if (model.result.defendedOverall != null) {
       el(card, "p", `${model.result.defendedLabel || "after author defence"} ${Math.round(model.result.defendedOverall)} out of 100`, "score")
     }

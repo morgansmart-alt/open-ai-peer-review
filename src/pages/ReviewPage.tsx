@@ -18,6 +18,7 @@ import { acceptWebChatResult, draftWebChatReview, scrubPrivateUrls } from "../se
 import { runWebChatExtension, webChatPromptText } from "../services/webChat/client.ts"
 import { planDelivery } from "../services/webChat/deliver.ts"
 import { buildWebChatPacket } from "../services/webChat/packet.ts"
+import { webChatModelId } from "../services/webChat/chatModel.ts"
 import { isUncalibratedWebChat, WEB_CHAT_LABEL } from "../services/webChat/protocol.ts"
 import { parseExport } from "../services/webChat/standalone.ts"
 import { sha256Hex, uid } from "../services/hash.ts"
@@ -397,7 +398,7 @@ export function ReviewPage() {
         return
       }
       const createdAt = new Date().toISOString()
-      const modelId = `${provider.modelLabel} (${WEB_CHAT_LABEL})`
+      const modelId = webChatModelId(provider.modelLabel, outcome.chatModel)
       const report = scrubPrivateUrls(accepted.report, collected.links.map((link) => link.url))
       const stored = draftWebChatReview({
         id: uid("review"),

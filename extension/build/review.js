@@ -1518,6 +1518,13 @@ ${parsed2.errors.join("\n")}`);
     };
   }
 
+  // src/services/webChat/chatModel.ts
+  var UNKNOWN_CHAT_MODEL = "unknown (site default)";
+  function webChatModelId(siteLabel, detected) {
+    const mode = (detected ?? "").trim() || UNKNOWN_CHAT_MODEL;
+    return `${siteLabel} \xB7 ${mode} (web chat, uncalibrated)`;
+  }
+
   // src/domain/conversationLinks.ts
   function conversationPromptBlock(links) {
     if (!links || links.length === 0) return "Private AI context links: none.";
@@ -2140,6 +2147,10 @@ ${parsed2.errors.join("\n")}`);
       el(card, "p", model.result.label, "label");
       el(card, "h2", model.result.title);
       el(card, "p", `Blind score ${Math.round(model.result.overall)} out of 100 \xB7 ${model.result.recommendation}`, "score");
+      if (model.result.model) {
+        const line = el(card, "p", `Model: ${model.result.model}`, "note");
+        line.id = "chat-model";
+      }
       if (model.result.defendedOverall != null) {
         el(card, "p", `${model.result.defendedLabel || "after author defence"} ${Math.round(model.result.defendedOverall)} out of 100`, "score");
       }
@@ -2470,6 +2481,7 @@ ${JSON.stringify(report)}`),
       label: WEB_CHAT_LABEL,
       defendedOverall: review.defended?.overallScore ?? null,
       defendedLabel: review.defended?.label ?? "",
+      model: review.modelId,
       scores: review.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score })),
       feedback: feedback ? labels.flatMap((item) => feedback[item.key] ? [{ label: item.label, text: feedback[item.key] }] : []) : []
     };
@@ -2900,10 +2912,10 @@ ${JSON.stringify(report)}`),
       return;
     }
     if (message.type === "air-web-chat-result") {
-      void finish(message.text ?? "", message.defendedText ?? null, message.transcript ?? [], Boolean(message.stopped));
+      void finish(message.text ?? "", message.defendedText ?? null, message.transcript ?? [], Boolean(message.stopped), message.chatModel);
     }
   });
-  async function finish(raw, defendedRaw, transcript, stopped) {
+  async function finish(raw, defendedRaw, transcript, stopped, chatModel) {
     const accepted = acceptWebChatResult(raw, readingCriteria(officialCriteria, profileId, false));
     if (!accepted.ok) {
       busy = false;
@@ -2923,6 +2935,8 @@ ${JSON.stringify(report)}`),
     });
     stored.defenceTranscript = transcript;
     if (defended?.ok) stored.defended = defended.defended;
+    const provider = webChatProvider(providerId);
+    stored.modelId = webChatModelId(provider?.modelLabel ?? providerId, chatModel);
     reviews = appendResult(reviews, stored);
     await storageSet(RESULT_STORAGE_KEY, reviews);
     busy = false;
