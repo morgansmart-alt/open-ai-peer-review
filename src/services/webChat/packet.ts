@@ -41,6 +41,7 @@ export function buildWebChatPacket(options: {
   }
   const publicId = paperTextRecordId(options.record)
   const textUrl = options.textUrl ?? (options.useTextPage && publicId ? paperTextUrl(publicId) : "")
+  const linked = Boolean(textUrl && isPublicPaperTextUrl(textUrl))
   return {
     version: 1,
     requestId: options.requestId,
@@ -49,8 +50,11 @@ export function buildWebChatPacket(options: {
     instructions: reviewUserPrompt(
       options.record,
       criteria,
-      "The paper is supplied separately as attached files or as earlier messages labelled AIR PAPER PART. Score that text. If a file is missing, say so. Do not invent passages.",
+      linked
+        ? "The paper is on the public text page named above. Read that page. Do not ask for an attachment."
+        : "The paper is supplied separately as attached files or as earlier messages labelled AIR PAPER PART. Score that text. If a file is missing, say so. Do not invent passages.",
       options.conversations ?? [],
+      linked ? { compact: true } : undefined,
     ),
     files,
     ...(options.criterionProfile ? { criterionProfile: options.criterionProfile } : {}),

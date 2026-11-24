@@ -2782,7 +2782,7 @@ ${output}
     if (lines.length === 1) return "";
     return lines.join("\n");
   }
-  function reviewUserPrompt(record, criteria, packet, conversations = []) {
+  function reviewUserPrompt(record, criteria, packet, conversations = [], options) {
     const schema = {
       summary: "string, 80-180 words",
       scores: criteria.criteria.map((criterion) => ({
@@ -2806,7 +2806,7 @@ ${output}
             overallBenefit: { low: "string", central: "string", high: "string", unit: "string" }
           }
         } : {},
-        goals: globalGoals.goals.map((goal) => ({ goalId: goal.id, level: "none | indirect | partial | direct", note: "string" }))
+        goals: options?.compact ? [{ goalId: "id from the documented goals", level: "none | indirect | partial | direct", note: "string" }] : globalGoals.goals.map((goal) => ({ goalId: goal.id, level: "none | indirect | partial | direct", note: "string" }))
       } : {},
       overallScore: criteria.scale.max >= 100 ? "integer 0-100, within 10 of the weighted criterion total" : `number from ${criteria.scale.min} to ${criteria.scale.max}`,
       recommendation: criteria.recommendationCategories.map((item) => item.id).join(" | "),
@@ -2825,10 +2825,11 @@ ${output}
       }
     };
     const guide = criteria.criteria.map((criterion) => {
-      const bands = criterion.bands?.map((band) => `${band.min}-${band.max}: ${band.label}`).join(" ") ?? "";
-      return `${criterion.id} (weight ${criterion.weight}): ${criterion.name}. ${criterion.description} Guidance: ${criterion.guidance} ${bands}`;
+      const bands = options?.compact ? "" : criterion.bands?.map((band) => `${band.min}-${band.max}: ${band.label}`).join(" ") ?? "";
+      const weightNote = criterion.id === "global-goals" ? ", bonus, not in the overall" : "";
+      return `${criterion.id} (weight ${criterion.weight}${weightNote}): ${criterion.name}. ${options?.compact ? "" : `${criterion.description} `}Guidance: ${criterion.guidance} ${bands}`.trim();
     }).join("\n");
-    const goalsGuide = criteria.reportSchema === "0.2" ? ["Documented goals you may score against. Do not add goals that are not in this list.", ...globalGoals.goals.map((goal) => `- ${goal.id}: ${goal.statement} (${goal.sourceUrl})`)].join("\n") : "";
+    const goalsGuide = criteria.reportSchema === "0.2" ? options?.compact ? "global-goals is optional recognition. Score it, and leave it out of overallScore. Use only goal ids from criteria/global-goals.json." : ["Documented goals you may score against. Do not add goals that are not in this list.", ...globalGoals.goals.map((goal) => `- ${goal.id}: ${goal.statement} (${goal.sourceUrl})`)].join("\n") : "";
     return [
       `Record: ${record.title}`,
       `DOI: ${record.doi}`,
@@ -2898,6 +2899,7 @@ ${output}
     }
     const publicId = paperTextRecordId(options.record);
     const textUrl = options.textUrl ?? (options.useTextPage && publicId ? paperTextUrl(publicId) : "");
+    const linked = Boolean(textUrl && isPublicPaperTextUrl(textUrl));
     return {
       version: 1,
       requestId: options.requestId,
@@ -2906,8 +2908,9 @@ ${output}
       instructions: reviewUserPrompt(
         options.record,
         criteria,
-        "The paper is supplied separately as attached files or as earlier messages labelled AIR PAPER PART. Score that text. If a file is missing, say so. Do not invent passages.",
-        options.conversations ?? []
+        linked ? "The paper is on the public text page named above. Read that page. Do not ask for an attachment." : "The paper is supplied separately as attached files or as earlier messages labelled AIR PAPER PART. Score that text. If a file is missing, say so. Do not invent passages.",
+        options.conversations ?? [],
+        linked ? { compact: true } : void 0
       ),
       files,
       ...options.criterionProfile ? { criterionProfile: options.criterionProfile } : {},

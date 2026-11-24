@@ -17,11 +17,15 @@ import {
   pressEnterSequence,
   queryFirst,
   requestSubmitButton,
-  placeComposerText,
+  addedText,
+  blockAfterPrompt,
+  confirmComposerText,
+  messageBlocks,
   replyAfter,
   reviewJsonBlock,
   sendLanded,
   stopControlActive,
+  visibleReplyText,
   composerText,
 } from "./dom.ts"
 import type { WebChatPacket } from "./protocol.ts"
@@ -100,9 +104,18 @@ function note(hooks: TurnHooks, step: string, status: string, detail: string, di
   hooks.onProgress?.(detail, { step, status, ...(diagnostic ? { detail: diagnostic } : {}) })
 }
 
-function replyDiagnostic(selector: string, length: number, lastChange: number | null): string {
+function replyDiagnostic(candidate: string, length: number, lastChange: number | null): string {
   const when = lastChange === null ? "none" : `${Math.max(0, Math.round((Date.now() - lastChange) / 1000))}s ago`
-  return `selector ${selector || "none"}, ${length} characters, last change ${when}`
+  return `candidate ${candidate || "none"}, ${length} characters, last change ${when}`
+}
+
+function regionReply(doc: Document, composer: Element, beforeRegion: string): { text: string; candidate: string } {
+  const now = visibleReplyText(doc, composer)
+  const added = addedText(beforeRegion, now)
+  if (added) return { text: added, candidate: "conversation-region" }
+  const block = blockAfterPrompt(messageBlocks(doc, composer), beforeRegion)
+  if (block) return { text: block, candidate: "message-block" }
+  return { text: "", candidate: "" }
 }
 
 async function focusComposer(el: Element, hooks: TurnHooks): Promise<boolean> {
@@ -132,6 +145,7 @@ async function waitForReply(
   label = "review",
   expect: ReplyExpect = "json",
   attempt = 1,
+  beforeRegion = "",
 ): Promise<string> {
   note(hooks, label, "waiting", `Waiting for the reply: ${label}.`)
   await hooks.keepAwake?.()
@@ -154,8 +168,10 @@ async function waitForReply(
   while (Date.now() - start < timeoutMs) {
     if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.")
     const snapshot = assistantSnapshot(doc, provider.selectors.assistant, composer)
-    selector = snapshot.selector
-    const reply = replyAfter(beforeMessages, snapshot.texts)
+    const fromSelector = replyAfter(beforeMessages, snapshot.texts)
+    const fromRegion = regionReply(doc, composer, beforeRegion)
+    const reply = fromSelector || fromRegion.text
+    selector = fromSelector ? snapshot.selector : fromRegion.candidate
     const json = reviewJsonBlock(reply)
     const ack = ackReply(doc, composer)
     const streaming = stopControlActive(doc, provider.selectors.stop)
@@ -204,7 +220,7 @@ async function waitForReply(
       if (attempt < 2) {
         note(hooks, label, "error", `No reply container yet. Re-polling. ${empty}`)
         await hooks.keepAwake?.()
-        return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1)
+        return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion)
       }
       throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} timed out with no reply. ${empty}.`)
     }
@@ -217,12 +233,14 @@ async function waitForReply(
     await hooks.sleep(pollMs)
   }
   const snapshot = assistantSnapshot(doc, provider.selectors.assistant, composer)
-  const reply = replyAfter(beforeMessages, snapshot.texts)
-  const diagnostic = replyDiagnostic(snapshot.selector, reply.length, lastChange)
+  const fromSelector = replyAfter(beforeMessages, snapshot.texts)
+  const fromRegion = regionReply(doc, composer, beforeRegion)
+  const reply = fromSelector || fromRegion.text
+  const diagnostic = replyDiagnostic(fromSelector ? snapshot.selector : fromRegion.candidate, reply.length, lastChange)
   if (attempt < 2) {
     note(hooks, label, "error", `Reply step (${label}) timed out. Re-polling. ${diagnostic}`)
     await hooks.keepAwake?.()
-    return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1)
+    return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion)
   }
   throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} did not finish. ${diagnostic}. ${replyTimeoutReason(reply, expect)}.`)
 }
@@ -319,9 +337,9 @@ async function sendComposerText(
   let part = 1
   while (pending.length > 0) {
     const focused = await focusComposer(composer, hooks)
-    note(hooks, label, focused ? "ready" : "error", focused ? `Composer focused. Inserting ${pending.length} characters.` : `Composer was not focused. Retrying the insert. ${pending.length} characters.`)
-    const placed = placeComposerText(composer, pending)
-    note(hooks, label, placed.ok ? "ready" : "error", `Insert method ${placed.method}. Box holds ${placed.ok ? placed.chunk.length : placed.actual.length} characters.`)
+    note(hooks, label, focused ? "ready" : "waiting", focused ? `Composer focused. Inserting ${pending.length} characters.` : `Composer was not focused. Inserting ${pending.length} characters and re-reading the box.`)
+    const placed = await confirmComposerText(composer, pending, { sleep: (ms) => hooks.sleep(ms), pollMs: Math.min(hooks.pollMs ?? 50, 50), timeoutMs: 2_000 })
+    note(hooks, label, placed.ok ? "ready" : "error", `Insert method ${placed.method}. Box holds ${placed.actual.length} characters.`)
     if (!placed.ok) {
       throw new TurnError(
         "insert-miss",
@@ -331,14 +349,15 @@ async function sendComposerText(
     const chunk = placed.chunk
     const rest = pending.slice(chunk.length).trim()
     const beforeMessages = assistantMessages(doc, provider.selectors.assistant, composer)
+    const beforeRegion = visibleReplyText(doc, composer)
     const beforeAssistant = beforeMessages[beforeMessages.length - 1] ?? ""
     note(hooks, label, "sending", `Sending ${label}${rest ? ` part ${part}` : ""} on ${provider.label}. ${chunk.length} characters verified in the message box.`)
     const method = await commitSend(doc, provider, composer, beforeAssistant, hooks)
     note(hooks, label, "sent", `Send step on ${provider.label}. Method that sent: ${method}.`)
-    if (!rest) return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect)
+    if (!rest) return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, 1, beforeRegion)
     part += 1
     pending = rest
-    await waitForReply(doc, provider, beforeMessages, hooks, composer, `${label} part ${part - 1}`, "text")
+    await waitForReply(doc, provider, beforeMessages, hooks, composer, `${label} part ${part - 1}`, "text", 1, beforeRegion)
   }
   throw new TurnError("insert-miss", `The message for ${label} was empty.`)
 }

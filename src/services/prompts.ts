@@ -78,7 +78,13 @@ export function sourceRecordBlock(record: ZenodoRecord): string {
   return lines.join("\n")
 }
 
-export function reviewUserPrompt(record: ZenodoRecord, criteria: CriteriaSet, packet: string, conversations: ConversationLink[] = []): string {
+export function reviewUserPrompt(
+  record: ZenodoRecord,
+  criteria: CriteriaSet,
+  packet: string,
+  conversations: ConversationLink[] = [],
+  options?: { compact?: boolean },
+): string {
   const schema = {
     summary: "string, 80-180 words",
     scores: criteria.criteria.map((criterion) => ({
@@ -105,7 +111,9 @@ export function reviewUserPrompt(record: ZenodoRecord, criteria: CriteriaSet, pa
                 },
               }
             : {}),
-          goals: globalGoals.goals.map((goal) => ({ goalId: goal.id, level: "none | indirect | partial | direct", note: "string" })),
+          goals: options?.compact
+            ? [{ goalId: "id from the documented goals", level: "none | indirect | partial | direct", note: "string" }]
+            : globalGoals.goals.map((goal) => ({ goalId: goal.id, level: "none | indirect | partial | direct", note: "string" })),
         }
       : {}),
     overallScore: criteria.scale.max >= 100 ? "integer 0-100, within 10 of the weighted criterion total" : `number from ${criteria.scale.min} to ${criteria.scale.max}`,
@@ -126,13 +134,16 @@ export function reviewUserPrompt(record: ZenodoRecord, criteria: CriteriaSet, pa
   }
   const guide = criteria.criteria
     .map((criterion) => {
-      const bands = criterion.bands?.map((band) => `${band.min}-${band.max}: ${band.label}`).join(" ") ?? ""
-      return `${criterion.id} (weight ${criterion.weight}): ${criterion.name}. ${criterion.description} Guidance: ${criterion.guidance} ${bands}`
+      const bands = options?.compact ? "" : (criterion.bands?.map((band) => `${band.min}-${band.max}: ${band.label}`).join(" ") ?? "")
+      const weightNote = criterion.id === "global-goals" ? ", bonus, not in the overall" : ""
+      return `${criterion.id} (weight ${criterion.weight}${weightNote}): ${criterion.name}. ${options?.compact ? "" : `${criterion.description} `}Guidance: ${criterion.guidance} ${bands}`.trim()
     })
     .join("\n")
   const goalsGuide =
     criteria.reportSchema === "0.2"
-      ? ["Documented goals you may score against. Do not add goals that are not in this list.", ...globalGoals.goals.map((goal) => `- ${goal.id}: ${goal.statement} (${goal.sourceUrl})`)].join("\n")
+      ? options?.compact
+        ? "global-goals is optional recognition. Score it, and leave it out of overallScore. Use only goal ids from criteria/global-goals.json."
+        : ["Documented goals you may score against. Do not add goals that are not in this list.", ...globalGoals.goals.map((goal) => `- ${goal.id}: ${goal.statement} (${goal.sourceUrl})`)].join("\n")
       : ""
   return [
     `Record: ${record.title}`,

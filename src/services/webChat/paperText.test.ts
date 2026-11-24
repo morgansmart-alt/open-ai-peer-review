@@ -103,7 +103,10 @@ describe("public paper text", () => {
     expect(plan.steps[0]?.text).toContain("https://doi.org/10.5281/zenodo.22826")
     expect(couldNotReadPaper("I could not access the URL.")).toBe(true)
     expect(couldNotReadPaper('{"overallScore":86,"summary":"fine"}')).toBe(false)
-    expect(linkReadingPrompt(paperTextUrl("22826"), packet.system, packet.instructions)).toContain("https://doi.org/10.5281/zenodo.22826")
+    const linked = linkReadingPrompt(paperTextUrl("22826"), packet.instructions)
+    expect(linked).toContain("https://doi.org/10.5281/zenodo.22826")
+    expect(linked).not.toContain("You are an AIR reviewer")
+    expect(linked.length).toBeLessThan(packet.system.length + packet.instructions.length)
   })
 
   it("asks for a concrete AIR note instead of an empty string", () => {

@@ -2456,14 +2456,12 @@ ${output}
     }
     return null;
   }
-  function linkReadingPrompt(url, system, instructions) {
+  function linkReadingPrompt(url, instructions) {
     return [
       "Open this public text page and read the full paper. No sign-in is required.",
       url,
       "",
-      "Score that paper with the rubric below. Return one JSON object and nothing else.",
-      "",
-      system,
+      "Score that paper with the instructions below. Return one JSON object and nothing else. Do not ask for an attachment.",
       "",
       instructions
     ].join("\n");
@@ -2621,7 +2619,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
         steps: [
           {
             kind: "paste",
-            text: linkReadingPrompt(packet.textUrl, packet.system, packet.instructions),
+            text: linkReadingPrompt(packet.textUrl, packet.instructions),
             files: [],
             index: 1,
             total: 1,
@@ -3003,12 +3001,64 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     return assistantSnapshot(root, selectors, composer).texts;
   }
   function replyAfter(before, now) {
-    if (now.length > before.length) return now.slice(before.length).join("\n").trim();
+    if (now.length > before.length) return now[now.length - 1]?.trim() ?? "";
     const previous = before[before.length - 1] ?? "";
     const latest = now[now.length - 1] ?? "";
     if (!latest || latest === previous) return "";
     if (previous && latest.startsWith(previous)) return latest.slice(previous.length).trim();
     return latest.trim();
+  }
+  function addedText(before, now) {
+    const prev = before.replace(/\u00a0/g, " ");
+    const next = now.replace(/\u00a0/g, " ");
+    if (!next.trim() || next.trim() === prev.trim()) return "";
+    if (next.startsWith(prev)) return next.slice(prev.length).trim();
+    const normPrev = normaliseComposerText(prev);
+    const normNext = normaliseComposerText(next);
+    if (normPrev && normNext.startsWith(normPrev) && normNext.length > normPrev.length + 10) return normNext.slice(normPrev.length).trim();
+    return "";
+  }
+  function messageBlocks(root, composer) {
+    const region = chatRegion(root);
+    let nodes = [];
+    try {
+      nodes = queryAllDeep(region, "article, [role='article'], div, p, li");
+    } catch {
+      nodes = [];
+    }
+    const usable = nodes.filter((el) => {
+      if (isIgnoredRegion(el)) return false;
+      if (composer && (el === composer || composer.contains(el) || el.contains(composer))) return false;
+      return elementText(el).length >= 40;
+    });
+    const leaves = usable.filter((el) => !usable.some((other) => other !== el && el.contains(other)));
+    return leaves.map((el) => elementText(el));
+  }
+  function blockAfterPrompt(blocks, beforeRegion) {
+    const fresh = blocks.filter((block) => {
+      const probe = block.replace(/\s+/g, " ").trim().slice(0, 80);
+      return probe.length >= 40 && !beforeRegion.includes(probe);
+    });
+    return fresh[fresh.length - 1] ?? "";
+  }
+  function walkReplyText(node, composer, chunks) {
+    if (node instanceof Element) {
+      if (isIgnoredRegion(node)) return;
+      if (composer && (node === composer || composer.contains(node))) return;
+      if (node.shadowRoot) walkReplyText(node.shadowRoot, composer, chunks);
+    }
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent ?? "";
+      if (text.trim()) chunks.push(text);
+      return;
+    }
+    for (const child of node.childNodes) walkReplyText(child, composer, chunks);
+  }
+  function visibleReplyText(root, composer) {
+    const chunks = [];
+    const scope = root instanceof Document ? root.body ?? root.documentElement : root;
+    walkReplyText(scope, composer, chunks);
+    return chunks.join("\n");
   }
   function reviewJsonBlock(text) {
     return lastScoreJson(text)?.text ?? "";
@@ -3052,9 +3102,23 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       el.dispatchEvent(new Event("input", { bubbles: true }));
     }
   }
+  function normaliseComposerText(value) {
+    return value.replace(/\u00a0/g, " ").replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{2,}/g, "\n").replace(/[ \t]{2,}/g, " ").trim();
+  }
+  function composerTextMatches(actual, intended) {
+    if (!intended.trim()) return !actual.trim();
+    const left = normaliseComposerText(actual);
+    const right = normaliseComposerText(intended);
+    if (left === right) return true;
+    if (left.length < 40 || right.length < 40) return false;
+    const start = right.slice(0, 48);
+    const end = right.slice(-48);
+    if (!left.startsWith(start) || !left.endsWith(end)) return false;
+    const ratio = Math.min(left.length, right.length) / Math.max(left.length, right.length);
+    return ratio >= 0.95;
+  }
   function messageMatches(actual, intended) {
-    const clean = (value) => value.replace(/\u00a0/g, " ").replace(/\r\n/g, "\n");
-    return clean(actual) === clean(intended);
+    return composerTextMatches(actual, intended);
   }
   function setControlValue(control, text) {
     const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(control), "value")?.set;
@@ -3123,16 +3187,23 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     const truncated = !ok && actual.trim().length > 0 && text.startsWith(actual);
     return { ok, actual, truncated, method };
   }
-  function placeComposerText(el, text) {
-    let placed = fillComposer(el, text);
-    if (!placed.ok) placed = fillComposer(el, text);
-    if (placed.ok) return { ok: true, chunk: text, method: placed.method };
-    if (placed.truncated && placed.actual.trim().length >= 20) {
-      const prefix = text.slice(0, placed.actual.length);
-      const exact = fillComposer(el, prefix);
-      if (exact.ok) return { ok: true, chunk: prefix, method: exact.method };
+  async function confirmComposerText(el, text, wait) {
+    const placed = fillComposer(el, text);
+    const timeoutMs = wait.timeoutMs ?? 2e3;
+    const pollMs = wait.pollMs ?? 50;
+    const start = Date.now();
+    let actual = composerText(el);
+    while (Date.now() - start <= timeoutMs) {
+      actual = composerText(el);
+      if (messageMatches(actual, text)) return { ok: true, chunk: text, method: placed.method, actual };
+      await wait.sleep(pollMs);
     }
-    return { ok: false, actual: placed.actual, method: placed.method };
+    actual = composerText(el);
+    if (messageMatches(actual, text)) return { ok: true, chunk: text, method: placed.method, actual };
+    if (placed.truncated && placed.actual.trim().length >= 20 && messageMatches(placed.actual, text.slice(0, placed.actual.length))) {
+      return { ok: true, chunk: text.slice(0, placed.actual.length), method: placed.method, actual: placed.actual };
+    }
+    return { ok: false, actual, method: placed.method };
   }
   var clickLock = /* @__PURE__ */ new WeakMap();
   function pressEnterSequence(el) {
@@ -3353,9 +3424,17 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
   function note(hooks, step, status, detail, diagnostic = "") {
     hooks.onProgress?.(detail, { step, status, ...diagnostic ? { detail: diagnostic } : {} });
   }
-  function replyDiagnostic(selector, length, lastChange) {
+  function replyDiagnostic(candidate, length, lastChange) {
     const when = lastChange === null ? "none" : `${Math.max(0, Math.round((Date.now() - lastChange) / 1e3))}s ago`;
-    return `selector ${selector || "none"}, ${length} characters, last change ${when}`;
+    return `candidate ${candidate || "none"}, ${length} characters, last change ${when}`;
+  }
+  function regionReply(doc, composer, beforeRegion) {
+    const now = visibleReplyText(doc, composer);
+    const added = addedText(beforeRegion, now);
+    if (added) return { text: added, candidate: "conversation-region" };
+    const block = blockAfterPrompt(messageBlocks(doc, composer), beforeRegion);
+    if (block) return { text: block, candidate: "message-block" };
+    return { text: "", candidate: "" };
   }
   async function focusComposer(el, hooks) {
     const html = el;
@@ -3373,7 +3452,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     if (expect === "json" && !reviewJsonBlock(reply)) return "reply seen, JSON not parsed";
     return "reply seen";
   }
-  async function waitForReply(doc, provider, beforeMessages, hooks, composer, label = "review", expect = "json", attempt = 1) {
+  async function waitForReply(doc, provider, beforeMessages, hooks, composer, label = "review", expect = "json", attempt = 1, beforeRegion = "") {
     note(hooks, label, "waiting", `Waiting for the reply: ${label}.`);
     await hooks.keepAwake?.();
     const pollMs = hooks.pollMs ?? 400;
@@ -3395,8 +3474,10 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     while (Date.now() - start < timeoutMs) {
       if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.");
       const snapshot2 = assistantSnapshot(doc, provider.selectors.assistant, composer);
-      selector = snapshot2.selector;
-      const reply2 = replyAfter(beforeMessages, snapshot2.texts);
+      const fromSelector2 = replyAfter(beforeMessages, snapshot2.texts);
+      const fromRegion2 = regionReply(doc, composer, beforeRegion);
+      const reply2 = fromSelector2 || fromRegion2.text;
+      selector = fromSelector2 ? snapshot2.selector : fromRegion2.candidate;
       const json = reviewJsonBlock(reply2);
       const ack = ackReply(doc, composer);
       const streaming = stopControlActive(doc, provider.selectors.stop);
@@ -3445,7 +3526,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
         if (attempt < 2) {
           note(hooks, label, "error", `No reply container yet. Re-polling. ${empty}`);
           await hooks.keepAwake?.();
-          return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1);
+          return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion);
         }
         throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} timed out with no reply. ${empty}.`);
       }
@@ -3458,12 +3539,14 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       await hooks.sleep(pollMs);
     }
     const snapshot = assistantSnapshot(doc, provider.selectors.assistant, composer);
-    const reply = replyAfter(beforeMessages, snapshot.texts);
-    const diagnostic = replyDiagnostic(snapshot.selector, reply.length, lastChange);
+    const fromSelector = replyAfter(beforeMessages, snapshot.texts);
+    const fromRegion = regionReply(doc, composer, beforeRegion);
+    const reply = fromSelector || fromRegion.text;
+    const diagnostic = replyDiagnostic(fromSelector ? snapshot.selector : fromRegion.candidate, reply.length, lastChange);
     if (attempt < 2) {
       note(hooks, label, "error", `Reply step (${label}) timed out. Re-polling. ${diagnostic}`);
       await hooks.keepAwake?.();
-      return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1);
+      return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion);
     }
     throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} did not finish. ${diagnostic}. ${replyTimeoutReason(reply, expect)}.`);
   }
@@ -3547,9 +3630,9 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     let part = 1;
     while (pending.length > 0) {
       const focused = await focusComposer(composer, hooks);
-      note(hooks, label, focused ? "ready" : "error", focused ? `Composer focused. Inserting ${pending.length} characters.` : `Composer was not focused. Retrying the insert. ${pending.length} characters.`);
-      const placed = placeComposerText(composer, pending);
-      note(hooks, label, placed.ok ? "ready" : "error", `Insert method ${placed.method}. Box holds ${placed.ok ? placed.chunk.length : placed.actual.length} characters.`);
+      note(hooks, label, focused ? "ready" : "waiting", focused ? `Composer focused. Inserting ${pending.length} characters.` : `Composer was not focused. Inserting ${pending.length} characters and re-reading the box.`);
+      const placed = await confirmComposerText(composer, pending, { sleep: (ms) => hooks.sleep(ms), pollMs: Math.min(hooks.pollMs ?? 50, 50), timeoutMs: 2e3 });
+      note(hooks, label, placed.ok ? "ready" : "error", `Insert method ${placed.method}. Box holds ${placed.actual.length} characters.`);
       if (!placed.ok) {
         throw new TurnError(
           "insert-miss",
@@ -3559,14 +3642,15 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       const chunk = placed.chunk;
       const rest = pending.slice(chunk.length).trim();
       const beforeMessages = assistantMessages(doc, provider.selectors.assistant, composer);
+      const beforeRegion = visibleReplyText(doc, composer);
       const beforeAssistant = beforeMessages[beforeMessages.length - 1] ?? "";
       note(hooks, label, "sending", `Sending ${label}${rest ? ` part ${part}` : ""} on ${provider.label}. ${chunk.length} characters verified in the message box.`);
       const method = await commitSend(doc, provider, composer, beforeAssistant, hooks);
       note(hooks, label, "sent", `Send step on ${provider.label}. Method that sent: ${method}.`);
-      if (!rest) return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect);
+      if (!rest) return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, 1, beforeRegion);
       part += 1;
       pending = rest;
-      await waitForReply(doc, provider, beforeMessages, hooks, composer, `${label} part ${part - 1}`, "text");
+      await waitForReply(doc, provider, beforeMessages, hooks, composer, `${label} part ${part - 1}`, "text", 1, beforeRegion);
     }
     throw new TurnError("insert-miss", `The message for ${label} was empty.`);
   }

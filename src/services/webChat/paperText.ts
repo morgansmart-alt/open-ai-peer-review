@@ -136,15 +136,16 @@ export function formatPaperText(
   return header.join("\n")
 }
 
-/** Short message. The paper stays on the public page instead of being pasted in parts. */
-export function linkReadingPrompt(url: string, system: string, instructions: string): string {
+/**
+ * The link route. The paper stays on the public page.
+ * The system prompt is not repeated here. The instructions are the compact rubric.
+ */
+export function linkReadingPrompt(url: string, instructions: string): string {
   return [
     "Open this public text page and read the full paper. No sign-in is required.",
     url,
     "",
-    "Score that paper with the rubric below. Return one JSON object and nothing else.",
-    "",
-    system,
+    "Score that paper with the instructions below. Return one JSON object and nothing else. Do not ask for an attachment.",
     "",
     instructions,
   ].join("\n")
