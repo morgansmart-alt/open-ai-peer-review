@@ -216,7 +216,7 @@ export function resultCard(review: StoredReview): {
   defendedLabel: string
   roundsLabel: string
   sheetNote: string
-  scores: { criterionId: string; score: number }[]
+  scores: { criterionId: string; score: number; uncited?: boolean }[]
   feedback: { label: string; text: string }[]
   model: string
   notice: string
@@ -245,7 +245,7 @@ export function resultCard(review: StoredReview): {
     roundsLabel: defenceRoundsLabel(review.defenceTranscript),
     sheetNote: review.defenceNote ?? "",
     model: review.modelId,
-    scores: review.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score })),
+    scores: review.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score, ...(score.uncited ? { uncited: true } : {}) })),
     feedback: feedback ? labels.map((item) => ({ label: item.label, text: feedback[item.key]?.trim() || "none" })) : [],
     notice: review.sourceNote ?? "",
   }

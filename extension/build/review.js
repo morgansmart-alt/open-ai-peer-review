@@ -1020,8 +1020,9 @@
         if (isBonusCriterion(criterion.id)) continue;
         return null;
       }
-      weight += criterion.weight;
-      total += criterion.weight * found.score;
+      const factor = found.uncited ? 0.5 : 1;
+      weight += criterion.weight * factor;
+      total += criterion.weight * factor * found.score;
     }
     if (weight <= 0) return null;
     return round2(total / weight);
@@ -2173,21 +2174,50 @@ ${output}
     "scoringcheck",
     "confidence"
   ]);
+  function isRecord2(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+  function parseScoreValue(value) {
+    if (typeof value === "number" && Number.isFinite(value)) return Math.round(value);
+    if (typeof value !== "string") return null;
+    const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*(?:\/\s*100)?$/);
+    if (!match) return null;
+    return Math.round(Number(match[1]));
+  }
   function scoreEntry(key, field) {
     if (SCORE_KEY_SKIP.has(key.toLowerCase().replace(/[_-]/g, ""))) return null;
-    if (typeof field === "number" && Number.isFinite(field)) return { criterionId: key, score: field };
-    if (field && typeof field === "object" && !Array.isArray(field) && "score" in field) return { criterionId: key, ...field };
-    return null;
+    const direct = parseScoreValue(field);
+    if (direct != null && (typeof field === "number" || typeof field === "string")) return { criterionId: key, score: direct };
+    if (!isRecord2(field)) return null;
+    const score = parseScoreValue(field.score);
+    if (score == null && !("score" in field)) return null;
+    const id = field.criterionId ?? field.id ?? field.name ?? field.label ?? key;
+    return { ...field, criterionId: String(id), ...score != null ? { score } : {} };
+  }
+  function scoreRows(value) {
+    if (!Array.isArray(value)) return [];
+    return value.flatMap((item) => {
+      if (!isRecord2(item)) return [];
+      const id = item.criterionId ?? item.id ?? item.name ?? item.label;
+      const score = parseScoreValue(item.score);
+      return [{ ...item, ...id ? { criterionId: String(id) } : {}, ...score != null ? { score } : {} }];
+    });
   }
   function normaliseScoreShape(value) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-    const row = { ...value };
-    if (row.scores && typeof row.scores === "object" && !Array.isArray(row.scores)) {
+    if (!isRecord2(value)) return value;
+    let row = { ...value };
+    for (const key of ["review", "result", "assessment", "report"]) {
+      const inner = row[key];
+      if (isRecord2(inner) && (inner.scores || inner.summary || inner.overallScore || inner.criteria)) row = { ...row, ...inner };
+    }
+    if (!Array.isArray(row.scores) && Array.isArray(row.criteria)) row.scores = row.criteria;
+    if (row.scores && isRecord2(row.scores)) {
       row.scores = Object.entries(row.scores).flatMap(([key, field]) => {
-        const entry = scoreEntry(key, field) ?? (typeof field === "number" ? { criterionId: key, score: field } : null);
+        const entry = scoreEntry(key, field);
         return entry ? [entry] : [];
       });
     }
+    if (Array.isArray(row.scores)) row.scores = scoreRows(row.scores);
     if (!Array.isArray(row.scores)) {
       const lifted = Object.entries(row).flatMap(([key, field]) => {
         const entry = scoreEntry(key, field);
@@ -2207,7 +2237,7 @@ ${output}
   }
 
   // src/services/validateReport.ts
-  function isRecord2(value) {
+  function isRecord3(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
   }
   function extractJsonValue(raw) {
@@ -2225,7 +2255,7 @@ ${output}
     }
     return value.flatMap((item) => {
       if (typeof item === "string") return [{ quote: item.slice(0, 500), location: "Record" }];
-      if (!isRecord2(item)) return [];
+      if (!isRecord3(item)) return [];
       const quote = clip2(item.quote ?? item.passage ?? item.text, 500);
       if (!quote) return [];
       return [{ quote, location: clip2(item.location ?? item.where ?? "Record", 160) || "Record" }];
@@ -2270,14 +2300,14 @@ ${output}
   }
   function validateReport(input, criteria) {
     const errors = [];
-    if (!isRecord2(input)) return { ok: false, errors: ["The model output was not a JSON object."] };
+    if (!isRecord3(input)) return { ok: false, errors: ["The model output was not a JSON object."] };
     const summary = clip2(input.summary, 4e3);
     if (summary.length < 40) errors.push("summary must be at least 40 characters.");
     const scoresRaw = Array.isArray(input.scores) ? input.scores : [];
     const scores = criteria.criteria.map((criterion) => {
       const bonus = isBonusCriterion(criterion.id);
-      const found = scoresRaw.find((item) => isRecord2(item) && criterionKey(clip2(item.criterionId ?? item.id, 80), criteria) === criterion.id);
-      if (!isRecord2(found)) {
+      const found = scoresRaw.find((item) => isRecord3(item) && criterionKey(clip2(item.criterionId ?? item.id, 80), criteria) === criterion.id);
+      if (!isRecord3(found)) {
         if (!bonus) errors.push(`Missing score for ${criterion.id}.`);
         return null;
       }
@@ -2287,15 +2317,20 @@ ${output}
         errors.push(`${criterion.id} score must be an integer from ${criteria.scale.min} to ${criteria.scale.max}.`);
       }
       const rationale = clip2(found.rationale ?? found.reason, 2e3);
-      if (!bonus && rationale.length < 20) errors.push(`${criterion.id} rationale is too short.`);
-      const citations = citationsFrom(found.citations ?? found.quotes, bonus ? [] : errors, criterion.id);
-      if (!bonus && citations.length === 0) errors.push(`${criterion.id} needs at least one citation.`);
+      const citations = citationsFrom(found.citations ?? found.quotes, [], criterion.id);
+      const uncited = !bonus && citations.length === 0;
       const confidenceRaw = clip2(found.confidence, 16).toLowerCase();
       const confidence = confidenceRaw === "low" || confidenceRaw === "med" || confidenceRaw === "medium" || confidenceRaw === "high" ? confidenceRaw : "";
-      if (!bonus && criteria.reportSchema === "0.2" && !confidence) errors.push(`${criterion.id} needs a confidence of low, medium, or high.`);
       const normalizedConfidence = confidence === "high" ? "high" : confidence === "medium" || confidence === "med" ? "medium" : confidence === "low" ? "low" : void 0;
       if (bonus && (!Number.isInteger(score) || score < criteria.scale.min || score > criteria.scale.max)) return null;
-      return { criterionId: criterion.id, score, rationale: rationale || (bonus ? "Bonus score. Not counted in the overall." : ""), citations, confidence: normalizedConfidence };
+      return {
+        criterionId: criterion.id,
+        score,
+        rationale: rationale || (bonus ? "Bonus score. Not counted in the overall." : "No rationale was given."),
+        citations,
+        confidence: normalizedConfidence ?? (criteria.reportSchema === "0.2" ? "medium" : void 0),
+        ...uncited ? { uncited: true } : {}
+      };
     });
     const recommendation = recommendationId(clip2(input.recommendation, 160), criteria);
     if (!recommendation) errors.push(`recommendation must be one of: ${criteria.recommendationCategories.map((item) => item.id).join(", ")}.`);
@@ -2312,7 +2347,7 @@ ${output}
       if (typeof item === "string") {
         return [{ criterionId: criteria.criteria[0]?.id ?? "clarity", claim: item.slice(0, 500), quotedPassage: "", reason: item.slice(0, 800) }];
       }
-      if (!isRecord2(item)) return [];
+      if (!isRecord3(item)) return [];
       const criterionId = criterionKey(clip2(item.criterionId ?? item.criterion, 80), criteria);
       if (clip2(item.criterionId ?? item.criterion, 80) && !known.has(criterionId)) errors.push(`Unknown criterion on a major issue: ${criterionId}.`);
       const claim = clip2(item.claim ?? item.summary ?? item.issue, 500);
@@ -2367,7 +2402,7 @@ ${output}
   var physicsClasses = /* @__PURE__ */ new Set(["CONSISTENT", "EXTENDS", "CHALLENGES"]);
   var goalLevels = /* @__PURE__ */ new Set(["none", "indirect", "partial", "direct"]);
   function rangeFrom(value, fallbackUnit) {
-    const record = isRecord2(value) ? value : {};
+    const record = isRecord3(value) ? value : {};
     return {
       low: clip2(record.low, 80) || "not estimated",
       central: clip2(record.central, 80) || "not estimated",
@@ -2375,19 +2410,41 @@ ${output}
       unit: clip2(record.unit, 40) || fallbackUnit
     };
   }
+  function normaliseOntology(raw) {
+    const text2 = raw.toLowerCase().replace(/[_/]+/g, " ").replace(/\s+/g, " ").trim();
+    if (!text2) return { value: "logical-mathematical", assumed: true };
+    if (/not yet|untestable|not-yet|not yet testable/.test(text2)) return { value: "physical-not-yet-testable", assumed: false };
+    if (/philosoph|metaphys/.test(text2)) return { value: "metaphysical-philosophical", assumed: false };
+    if (/math|logic/.test(text2)) return { value: "logical-mathematical", assumed: false };
+    if (/physical|empiric|testable|experiment/.test(text2)) return { value: "physical-testable", assumed: false };
+    if (ontologyClasses.has(text2)) return { value: text2, assumed: false };
+    return { value: "logical-mathematical", assumed: true };
+  }
+  function normalisePhysicsClass(raw) {
+    const text2 = raw.toLowerCase().replace(/[_/]+/g, " ").replace(/\s+/g, " ").trim();
+    if (!text2) return { value: "CONSISTENT", assumed: true };
+    if (text2 === "extends" || text2.startsWith("extend") || text2 === "extension") return { value: "EXTENDS", assumed: false };
+    if (text2.startsWith("challenge") || text2.includes("contradict")) return { value: "CHALLENGES", assumed: false };
+    if (text2 === "consistent" || text2.startsWith("consistent")) return { value: "CONSISTENT", assumed: false };
+    if (physicsClasses.has(text2.toUpperCase())) return { value: text2.toUpperCase(), assumed: false };
+    return { value: "CONSISTENT", assumed: true };
+  }
   function readV2(input, errors, includeValue) {
-    const ontologyClass = clip2(input.ontologyClass, 80);
-    if (!ontologyClasses.has(ontologyClass)) errors.push("ontologyClass must be one of the four AIR classes.");
-    const physicsRaw = isRecord2(input.physics) ? input.physics : null;
-    const classification = clip2(physicsRaw?.classification, 20).toUpperCase();
-    if (!physicsClasses.has(classification)) errors.push("physics.classification must be CONSISTENT, EXTENDS, or CHALLENGES.");
+    const ontologySource = clip2(input.ontologyClass, 120);
+    const ontology = normaliseOntology(ontologySource);
+    const fieldNotes = [];
+    if (ontology.assumed) fieldNotes.push(`ontologyClass "${ontologySource || "missing"}" was read as ${ontology.value}.`);
+    const physicsRaw = isRecord3(input.physics) ? input.physics : null;
+    const classSource = clip2(physicsRaw?.classification, 80);
+    const physicsClass = normalisePhysicsClass(classSource);
+    if (physicsClass.assumed) fieldNotes.push(`physics.classification "${classSource || "missing"}" was read as ${physicsClass.value}.`);
     const physics = {
-      classification: physicsClasses.has(classification) ? classification : "CONSISTENT",
+      classification: physicsClass.value,
       laws: stringArray(physicsRaw?.laws, 8, 120),
       howAddressed: clip2(physicsRaw?.howAddressed, 800)
     };
     if (physics.laws.length === 0) errors.push("physics.laws needs at least one named law or an explicit 'none used'.");
-    const simulationRaw = isRecord2(input.simulation) ? input.simulation : null;
+    const simulationRaw = isRecord3(input.simulation) ? input.simulation : null;
     const reported = simulationRaw ? Number(simulationRaw.reported) : NaN;
     const passed = simulationRaw ? Number(simulationRaw.passed) : NaN;
     const simulation = {
@@ -2397,7 +2454,7 @@ ${output}
       inputsAvailable: Boolean(simulationRaw?.inputsAvailable)
     };
     if (!simulation.methods) errors.push("simulation.methods must say what was run, or that simulation does not apply.");
-    const valueRaw = isRecord2(input.valueEstimate) ? input.valueEstimate : null;
+    const valueRaw = isRecord3(input.valueEstimate) ? input.valueEstimate : null;
     const valueEstimate = {
       confidence: "low",
       assumptions: stringArray(valueRaw?.assumptions, 8, 240),
@@ -2410,7 +2467,7 @@ ${output}
     };
     if (includeValue && valueEstimate.assumptions.length === 0) errors.push("valueEstimate.assumptions needs at least one assumption.");
     const goals = Array.isArray(input.goals) ? input.goals.flatMap((item) => {
-      if (!isRecord2(item)) return [];
+      if (!isRecord3(item)) return [];
       const level = clip2(item.level, 20);
       if (!goalLevels.has(level)) return [];
       const goalId = clip2(item.goalId, 80);
@@ -2419,11 +2476,12 @@ ${output}
     }) : [];
     if (goals.length === 0) errors.push("goals must list a level for the documented public goals you considered.");
     return {
-      ontologyClass: ontologyClasses.has(ontologyClass) ? ontologyClass : void 0,
+      ontologyClass: ontology.value,
       physics,
       simulation,
       ...includeValue ? { valueEstimate } : {},
-      goals
+      goals,
+      ...fieldNotes.length > 0 ? { fieldNotes } : {}
     };
   }
 
@@ -2625,19 +2683,19 @@ ${output}
   };
 
   // src/domain/goals.ts
-  function isRecord3(value) {
+  function isRecord4(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
   }
   function parseGlobalGoals(input) {
     const errors = [];
-    if (!isRecord3(input)) return { ok: false, errors: ["Goals file must be a JSON object."] };
+    if (!isRecord4(input)) return { ok: false, errors: ["Goals file must be a JSON object."] };
     const version = typeof input.version === "string" ? input.version.trim() : "";
     if (!version) errors.push("version is required.");
     const goalsRaw = Array.isArray(input.goals) ? input.goals : [];
     const goals = [];
     const seen = /* @__PURE__ */ new Set();
     for (const item of goalsRaw) {
-      if (!isRecord3(item)) continue;
+      if (!isRecord4(item)) continue;
       const id = typeof item.id === "string" ? item.id.trim() : "";
       const name = typeof item.name === "string" ? item.name.trim() : "";
       const statement = typeof item.statement === "string" ? item.statement.trim() : "";
@@ -3244,7 +3302,7 @@ ${output}
         const list = el(card, "ul");
         list.id = "criterion-scores";
         for (const score of model.result.scores) {
-          const line = score.criterionId === "global-goals" ? `Global goals: ${Math.round(score.score)} (bonus, not counted in overall)` : `${score.criterionId}: ${Math.round(score.score)}`;
+          const line = score.criterionId === "global-goals" ? `Global goals: ${Math.round(score.score)} (bonus, not counted in overall)` : `${score.criterionId}: ${Math.round(score.score)}${score.uncited ? " \xB7 uncited, half weight" : ""}`;
           el(list, "li", line);
         }
       }
@@ -3623,7 +3681,7 @@ ${JSON.stringify(report)}`),
       roundsLabel: defenceRoundsLabel(review.defenceTranscript),
       sheetNote: review.defenceNote ?? "",
       model: review.modelId,
-      scores: review.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score })),
+      scores: review.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score, ...score.uncited ? { uncited: true } : {} })),
       feedback: feedback ? labels.map((item) => ({ label: item.label, text: feedback[item.key]?.trim() || "none" })) : [],
       notice: review.sourceNote ?? ""
     };
@@ -3650,7 +3708,7 @@ ${JSON.stringify(report)}`),
   var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback"]);
   var DEFENDED_KEYS = /* @__PURE__ */ new Set(["label", "overallScore", "recommendation", "summary", "scores"]);
   var PAPER_KEYS = /* @__PURE__ */ new Set(["title", "doi", "url"]);
-  function isRecord4(value) {
+  function isRecord5(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
   }
   function clip3(value, max) {
@@ -3705,14 +3763,14 @@ ${JSON.stringify(report)}`),
     return checked;
   }
   function validateWebChatSubmission(input, criteria = officialCriteria) {
-    if (!isRecord4(input)) return { ok: false, error: "The score was not a JSON object." };
+    if (!isRecord5(input)) return { ok: false, error: "The score was not a JSON object." };
     for (const key of Object.keys(input)) {
       if (!TOP_KEYS.has(key)) return { ok: false, error: "The score included a field the board does not accept." };
     }
     if (input.source !== WEB_CHAT_SOURCE || input.tier !== UNCALIBRATED_WEB_CHAT_TIER) {
       return { ok: false, error: "Only an uncalibrated web-chat score can use this path." };
     }
-    if (!isRecord4(input.paper)) return { ok: false, error: "The paper title and link are missing." };
+    if (!isRecord5(input.paper)) return { ok: false, error: "The paper title and link are missing." };
     for (const key of Object.keys(input.paper)) {
       if (!PAPER_KEYS.has(key)) return { ok: false, error: "The paper field included extra text." };
     }
@@ -3729,7 +3787,7 @@ ${JSON.stringify(report)}`),
     const criterionProfile = clip3(input.criterionProfile, 40);
     if (!Array.isArray(input.scores)) return { ok: false, error: "The criterion scores are missing." };
     const scores = input.scores.map((item) => {
-      if (!isRecord4(item)) return null;
+      if (!isRecord5(item)) return null;
       if (Object.keys(item).some((key) => key !== "criterionId" && key !== "score")) return null;
       const criterionId = clip3(item.criterionId, 80);
       const score = Number(item.score);
@@ -3780,14 +3838,14 @@ ${JSON.stringify(report)}`),
   }
   function readDefended(input, criteria) {
     if (input === void 0 || input === null) return { ok: true, score: null };
-    if (!isRecord4(input)) return { ok: false, error: "The defended score was not a JSON object." };
+    if (!isRecord5(input)) return { ok: false, error: "The defended score was not a JSON object." };
     for (const key of Object.keys(input)) {
       if (!DEFENDED_KEYS.has(key)) return { ok: false, error: "The defended score included a field the board does not accept." };
     }
     if (input.label !== "after author defence") return { ok: false, error: "The second score must be labelled after author defence." };
     if (!Array.isArray(input.scores)) return { ok: false, error: "The defended score is missing its criterion scores." };
     const scores = input.scores.flatMap((item) => {
-      if (!isRecord4(item) || Object.keys(item).some((key) => key !== "criterionId" && key !== "score")) return [];
+      if (!isRecord5(item) || Object.keys(item).some((key) => key !== "criterionId" && key !== "score")) return [];
       const criterionId = clip3(item.criterionId, 80);
       const score = Number(item.score);
       return Number.isInteger(score) && criterionId ? [{ criterionId, score }] : [];

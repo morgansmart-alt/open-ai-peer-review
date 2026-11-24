@@ -111,6 +111,7 @@ export function ScoreCard({
                 {bar.marks.map((mark) => (
                   <li key={mark.reviewId}>
                     {mark.name} {formatScore(mark.score)}
+                    {mark.uncited ? " · uncited, half weight" : ""}
                     {mark.evidence === "possible" ? " · possible" : mark.evidence === "proven" ? " · proven" : ""}
                   </li>
                 ))}

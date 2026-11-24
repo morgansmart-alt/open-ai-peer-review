@@ -117,6 +117,7 @@ export function ReportView({
         )}
         {report.reading?.coverageLabel && <p className="mt-1 text-sm text-ink-soft">{OCR_OR_TEXT_SUGGESTION}</p>}
         {report.unverifiedQuotes ? <p className="mt-1 text-xs text-ink-soft">{report.unverifiedQuotes} unverified quote{report.unverifiedQuotes === 1 ? "" : "s"}</p> : null}
+        {report.fieldNotes && report.fieldNotes.length > 0 ? <p className="mt-1 text-xs text-ink-soft">{report.fieldNotes.join(" ")}</p> : null}
         {check.verdictNote ? (
           <p className="mt-2 text-sm text-ink-soft" data-testid="verdict-note">
             {check.verdictNote}
@@ -191,6 +192,7 @@ export function ReportView({
                     {formatScore(shown(score.score))}/100
                     {score.confidence ? ` · ${score.confidence}` : ""}
                     {score.evidence === "proven" ? " · Proven" : score.evidence === "possible" ? " · Possible" : ""}
+                    {score.uncited ? " · uncited, half weight" : ""}
                   </span>
                 </div>
                 {isBonusCriterion(score.criterionId) ? (

@@ -77,6 +77,8 @@ export interface CriterionScore {
   rationale: string
   citations: Citation[]
   confidence?: Confidence
+  /** The model gave a score and no citation. The score is kept at half weight. */
+  uncited?: boolean
   /** Possible is not proven. A proven label needs a quotation from the publication. */
   evidence?: EvidenceLabel
 }
@@ -172,6 +174,8 @@ export interface ReviewReport {
   simulation?: SimulationEvidence
   valueEstimate?: ValueEstimate
   goals?: GoalAlignment[]
+  /** Wording AIR normalised instead of rejecting. Not part of the score. */
+  fieldNotes?: string[]
   /**
    * Optional notes about AIR itself. Never part of the score.
    * Absent when the model had nothing to say or the field was unusable.

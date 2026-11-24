@@ -1019,8 +1019,9 @@
         if (isBonusCriterion(criterion.id)) continue;
         return null;
       }
-      weight += criterion.weight;
-      total += criterion.weight * found.score;
+      const factor = found.uncited ? 0.5 : 1;
+      weight += criterion.weight * factor;
+      total += criterion.weight * factor * found.score;
     }
     if (weight <= 0) return null;
     return round2(total / weight);
@@ -2119,21 +2120,50 @@ ${output}
     "scoringcheck",
     "confidence"
   ]);
+  function isRecord2(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+  function parseScoreValue(value) {
+    if (typeof value === "number" && Number.isFinite(value)) return Math.round(value);
+    if (typeof value !== "string") return null;
+    const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*(?:\/\s*100)?$/);
+    if (!match) return null;
+    return Math.round(Number(match[1]));
+  }
   function scoreEntry(key, field) {
     if (SCORE_KEY_SKIP.has(key.toLowerCase().replace(/[_-]/g, ""))) return null;
-    if (typeof field === "number" && Number.isFinite(field)) return { criterionId: key, score: field };
-    if (field && typeof field === "object" && !Array.isArray(field) && "score" in field) return { criterionId: key, ...field };
-    return null;
+    const direct = parseScoreValue(field);
+    if (direct != null && (typeof field === "number" || typeof field === "string")) return { criterionId: key, score: direct };
+    if (!isRecord2(field)) return null;
+    const score = parseScoreValue(field.score);
+    if (score == null && !("score" in field)) return null;
+    const id = field.criterionId ?? field.id ?? field.name ?? field.label ?? key;
+    return { ...field, criterionId: String(id), ...score != null ? { score } : {} };
+  }
+  function scoreRows(value) {
+    if (!Array.isArray(value)) return [];
+    return value.flatMap((item) => {
+      if (!isRecord2(item)) return [];
+      const id = item.criterionId ?? item.id ?? item.name ?? item.label;
+      const score = parseScoreValue(item.score);
+      return [{ ...item, ...id ? { criterionId: String(id) } : {}, ...score != null ? { score } : {} }];
+    });
   }
   function normaliseScoreShape(value) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-    const row = { ...value };
-    if (row.scores && typeof row.scores === "object" && !Array.isArray(row.scores)) {
+    if (!isRecord2(value)) return value;
+    let row = { ...value };
+    for (const key of ["review", "result", "assessment", "report"]) {
+      const inner = row[key];
+      if (isRecord2(inner) && (inner.scores || inner.summary || inner.overallScore || inner.criteria)) row = { ...row, ...inner };
+    }
+    if (!Array.isArray(row.scores) && Array.isArray(row.criteria)) row.scores = row.criteria;
+    if (row.scores && isRecord2(row.scores)) {
       row.scores = Object.entries(row.scores).flatMap(([key, field]) => {
-        const entry = scoreEntry(key, field) ?? (typeof field === "number" ? { criterionId: key, score: field } : null);
+        const entry = scoreEntry(key, field);
         return entry ? [entry] : [];
       });
     }
+    if (Array.isArray(row.scores)) row.scores = scoreRows(row.scores);
     if (!Array.isArray(row.scores)) {
       const lifted = Object.entries(row).flatMap(([key, field]) => {
         const entry = scoreEntry(key, field);
@@ -2142,6 +2172,41 @@ ${output}
       if (lifted.length > 0) row.scores = lifted;
     }
     return row;
+  }
+  function mergeScoreLists(base, patch) {
+    const map = /* @__PURE__ */ new Map();
+    for (const item of scoreRows(base)) {
+      const id = String(item.criterionId ?? "");
+      if (id) map.set(id, item);
+    }
+    for (const item of scoreRows(patch)) {
+      const id = String(item.criterionId ?? "");
+      if (!id) continue;
+      const previous = map.get(id);
+      if (!previous) {
+        map.set(id, item);
+        continue;
+      }
+      const citations = Array.isArray(item.citations) && item.citations.length === 0 && Array.isArray(previous.citations) && previous.citations.length > 0 ? previous.citations : item.citations;
+      map.set(id, { ...previous, ...item, criterionId: id, ...citations ? { citations } : {} });
+    }
+    return [...map.values()];
+  }
+  function mergeReviewFields(base, patch) {
+    const left = isRecord2(base) ? { ...base } : {};
+    const right = isRecord2(patch) ? patch : {};
+    for (const [key, value] of Object.entries(right)) {
+      if (value == null) continue;
+      if (typeof value === "string" && !value.trim()) continue;
+      if (Array.isArray(value) && value.length === 0) continue;
+      if (key === "summary" && typeof value === "string" && value.trim().length < 40 && typeof left.summary === "string" && left.summary.trim().length >= 40) continue;
+      if (key === "scores" && Array.isArray(value)) {
+        left.scores = mergeScoreLists(left.scores, value);
+        continue;
+      }
+      left[key] = value;
+    }
+    return normaliseScoreShape(left);
   }
   function parseModelJson(raw) {
     const scored = lastScoreJson(raw);
@@ -2157,7 +2222,7 @@ ${output}
     const exampleId = criterionIds[0] ?? "impact";
     return [
       `Your JSON did not validate (${detail}).`,
-      "Reply with one JSON object and nothing else.",
+      "Return the FULL corrected JSON object, not a patch. Repeat every field that was already valid.",
       "summary must be a string of at least 40 characters.",
       "scores must be an array with one object for each criterion id.",
       "Each scores object needs criterionId, score (integer 0-100), rationale (at least 20 characters), citations (an array of {quote, location}), and confidence (low, medium, or high).",
@@ -2182,7 +2247,7 @@ ${output}
     return null;
   }
   function rejectionNote(problem, raw) {
-    const chosen = raw.replace(/\s+/g, " ").trim().slice(0, 200);
+    const chosen = raw.replace(/\s+/g, " ").trim().slice(0, 600);
     return `Rejected the reply. ${problem} Chosen JSON: ${chosen}`;
   }
   async function settleChatJson(raw, ask, log, validate, criterionIds = []) {
@@ -2199,11 +2264,24 @@ ${output}
         return { text: first.repaired ? first.text : raw, repaired: first.repaired, reasked: false };
       }
       const problem = checked.errors.join(" ");
-      log(rejectionNote(problem, first.text));
+      log(rejectionNote(problem, first.text || raw));
       const follow2 = await ask(template ? FILL_REVIEW_PROMPT : reaskJsonPrompt(problem, criterionIds));
       const second2 = parseModelJson(follow2);
-      if (second2.ok && second2.repaired) log("Repaired the corrected JSON.");
-      return { text: second2.ok ? second2.repaired ? second2.text : follow2 : follow2, repaired: Boolean(second2.ok && second2.repaired), reasked: true };
+      const merged = mergeReviewFields(first.value, second2.ok ? second2.value : {});
+      const mergedText = JSON.stringify(merged);
+      const mergedCheck = validate ? validate(mergedText) : { ok: true };
+      if (mergedCheck.ok) {
+        if (second2.ok && second2.repaired) log("Repaired the corrected JSON.");
+        return { text: mergedText, repaired: true, reasked: true };
+      }
+      const firstText = JSON.stringify(first.value);
+      const firstCheck = validate ? validate(firstText) : { ok: false, errors: ["The first reply was not usable."] };
+      if (firstCheck.ok) {
+        log("The correction was less complete than the first reply. Kept the first reply.");
+        return { text: firstText, repaired: true, reasked: true };
+      }
+      log(rejectionNote("errors" in mergedCheck ? mergedCheck.errors.join(" ") : "The corrected JSON was not usable.", mergedText));
+      return { text: mergedText, repaired: true, reasked: true };
     }
     log(rejectionNote(first.error, raw));
     const follow = await ask(reaskJsonPrompt(first.error, criterionIds));
@@ -2213,7 +2291,7 @@ ${output}
   }
 
   // src/services/validateReport.ts
-  function isRecord2(value) {
+  function isRecord3(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
   }
   function extractJsonValue(raw) {
@@ -2231,7 +2309,7 @@ ${output}
     }
     return value.flatMap((item) => {
       if (typeof item === "string") return [{ quote: item.slice(0, 500), location: "Record" }];
-      if (!isRecord2(item)) return [];
+      if (!isRecord3(item)) return [];
       const quote = clip2(item.quote ?? item.passage ?? item.text, 500);
       if (!quote) return [];
       return [{ quote, location: clip2(item.location ?? item.where ?? "Record", 160) || "Record" }];
@@ -2276,14 +2354,14 @@ ${output}
   }
   function validateReport(input, criteria) {
     const errors = [];
-    if (!isRecord2(input)) return { ok: false, errors: ["The model output was not a JSON object."] };
+    if (!isRecord3(input)) return { ok: false, errors: ["The model output was not a JSON object."] };
     const summary = clip2(input.summary, 4e3);
     if (summary.length < 40) errors.push("summary must be at least 40 characters.");
     const scoresRaw = Array.isArray(input.scores) ? input.scores : [];
     const scores = criteria.criteria.map((criterion) => {
       const bonus = isBonusCriterion(criterion.id);
-      const found = scoresRaw.find((item) => isRecord2(item) && criterionKey(clip2(item.criterionId ?? item.id, 80), criteria) === criterion.id);
-      if (!isRecord2(found)) {
+      const found = scoresRaw.find((item) => isRecord3(item) && criterionKey(clip2(item.criterionId ?? item.id, 80), criteria) === criterion.id);
+      if (!isRecord3(found)) {
         if (!bonus) errors.push(`Missing score for ${criterion.id}.`);
         return null;
       }
@@ -2293,15 +2371,20 @@ ${output}
         errors.push(`${criterion.id} score must be an integer from ${criteria.scale.min} to ${criteria.scale.max}.`);
       }
       const rationale = clip2(found.rationale ?? found.reason, 2e3);
-      if (!bonus && rationale.length < 20) errors.push(`${criterion.id} rationale is too short.`);
-      const citations = citationsFrom(found.citations ?? found.quotes, bonus ? [] : errors, criterion.id);
-      if (!bonus && citations.length === 0) errors.push(`${criterion.id} needs at least one citation.`);
+      const citations = citationsFrom(found.citations ?? found.quotes, [], criterion.id);
+      const uncited = !bonus && citations.length === 0;
       const confidenceRaw = clip2(found.confidence, 16).toLowerCase();
       const confidence = confidenceRaw === "low" || confidenceRaw === "med" || confidenceRaw === "medium" || confidenceRaw === "high" ? confidenceRaw : "";
-      if (!bonus && criteria.reportSchema === "0.2" && !confidence) errors.push(`${criterion.id} needs a confidence of low, medium, or high.`);
       const normalizedConfidence = confidence === "high" ? "high" : confidence === "medium" || confidence === "med" ? "medium" : confidence === "low" ? "low" : void 0;
       if (bonus && (!Number.isInteger(score) || score < criteria.scale.min || score > criteria.scale.max)) return null;
-      return { criterionId: criterion.id, score, rationale: rationale || (bonus ? "Bonus score. Not counted in the overall." : ""), citations, confidence: normalizedConfidence };
+      return {
+        criterionId: criterion.id,
+        score,
+        rationale: rationale || (bonus ? "Bonus score. Not counted in the overall." : "No rationale was given."),
+        citations,
+        confidence: normalizedConfidence ?? (criteria.reportSchema === "0.2" ? "medium" : void 0),
+        ...uncited ? { uncited: true } : {}
+      };
     });
     const recommendation = recommendationId(clip2(input.recommendation, 160), criteria);
     if (!recommendation) errors.push(`recommendation must be one of: ${criteria.recommendationCategories.map((item) => item.id).join(", ")}.`);
@@ -2318,7 +2401,7 @@ ${output}
       if (typeof item === "string") {
         return [{ criterionId: criteria.criteria[0]?.id ?? "clarity", claim: item.slice(0, 500), quotedPassage: "", reason: item.slice(0, 800) }];
       }
-      if (!isRecord2(item)) return [];
+      if (!isRecord3(item)) return [];
       const criterionId = criterionKey(clip2(item.criterionId ?? item.criterion, 80), criteria);
       if (clip2(item.criterionId ?? item.criterion, 80) && !known.has(criterionId)) errors.push(`Unknown criterion on a major issue: ${criterionId}.`);
       const claim = clip2(item.claim ?? item.summary ?? item.issue, 500);
@@ -2373,7 +2456,7 @@ ${output}
   var physicsClasses = /* @__PURE__ */ new Set(["CONSISTENT", "EXTENDS", "CHALLENGES"]);
   var goalLevels = /* @__PURE__ */ new Set(["none", "indirect", "partial", "direct"]);
   function rangeFrom(value, fallbackUnit) {
-    const record = isRecord2(value) ? value : {};
+    const record = isRecord3(value) ? value : {};
     return {
       low: clip2(record.low, 80) || "not estimated",
       central: clip2(record.central, 80) || "not estimated",
@@ -2381,19 +2464,41 @@ ${output}
       unit: clip2(record.unit, 40) || fallbackUnit
     };
   }
+  function normaliseOntology(raw) {
+    const text = raw.toLowerCase().replace(/[_/]+/g, " ").replace(/\s+/g, " ").trim();
+    if (!text) return { value: "logical-mathematical", assumed: true };
+    if (/not yet|untestable|not-yet|not yet testable/.test(text)) return { value: "physical-not-yet-testable", assumed: false };
+    if (/philosoph|metaphys/.test(text)) return { value: "metaphysical-philosophical", assumed: false };
+    if (/math|logic/.test(text)) return { value: "logical-mathematical", assumed: false };
+    if (/physical|empiric|testable|experiment/.test(text)) return { value: "physical-testable", assumed: false };
+    if (ontologyClasses.has(text)) return { value: text, assumed: false };
+    return { value: "logical-mathematical", assumed: true };
+  }
+  function normalisePhysicsClass(raw) {
+    const text = raw.toLowerCase().replace(/[_/]+/g, " ").replace(/\s+/g, " ").trim();
+    if (!text) return { value: "CONSISTENT", assumed: true };
+    if (text === "extends" || text.startsWith("extend") || text === "extension") return { value: "EXTENDS", assumed: false };
+    if (text.startsWith("challenge") || text.includes("contradict")) return { value: "CHALLENGES", assumed: false };
+    if (text === "consistent" || text.startsWith("consistent")) return { value: "CONSISTENT", assumed: false };
+    if (physicsClasses.has(text.toUpperCase())) return { value: text.toUpperCase(), assumed: false };
+    return { value: "CONSISTENT", assumed: true };
+  }
   function readV2(input, errors, includeValue) {
-    const ontologyClass = clip2(input.ontologyClass, 80);
-    if (!ontologyClasses.has(ontologyClass)) errors.push("ontologyClass must be one of the four AIR classes.");
-    const physicsRaw = isRecord2(input.physics) ? input.physics : null;
-    const classification = clip2(physicsRaw?.classification, 20).toUpperCase();
-    if (!physicsClasses.has(classification)) errors.push("physics.classification must be CONSISTENT, EXTENDS, or CHALLENGES.");
+    const ontologySource = clip2(input.ontologyClass, 120);
+    const ontology = normaliseOntology(ontologySource);
+    const fieldNotes = [];
+    if (ontology.assumed) fieldNotes.push(`ontologyClass "${ontologySource || "missing"}" was read as ${ontology.value}.`);
+    const physicsRaw = isRecord3(input.physics) ? input.physics : null;
+    const classSource = clip2(physicsRaw?.classification, 80);
+    const physicsClass = normalisePhysicsClass(classSource);
+    if (physicsClass.assumed) fieldNotes.push(`physics.classification "${classSource || "missing"}" was read as ${physicsClass.value}.`);
     const physics = {
-      classification: physicsClasses.has(classification) ? classification : "CONSISTENT",
+      classification: physicsClass.value,
       laws: stringArray(physicsRaw?.laws, 8, 120),
       howAddressed: clip2(physicsRaw?.howAddressed, 800)
     };
     if (physics.laws.length === 0) errors.push("physics.laws needs at least one named law or an explicit 'none used'.");
-    const simulationRaw = isRecord2(input.simulation) ? input.simulation : null;
+    const simulationRaw = isRecord3(input.simulation) ? input.simulation : null;
     const reported = simulationRaw ? Number(simulationRaw.reported) : NaN;
     const passed = simulationRaw ? Number(simulationRaw.passed) : NaN;
     const simulation = {
@@ -2403,7 +2508,7 @@ ${output}
       inputsAvailable: Boolean(simulationRaw?.inputsAvailable)
     };
     if (!simulation.methods) errors.push("simulation.methods must say what was run, or that simulation does not apply.");
-    const valueRaw = isRecord2(input.valueEstimate) ? input.valueEstimate : null;
+    const valueRaw = isRecord3(input.valueEstimate) ? input.valueEstimate : null;
     const valueEstimate = {
       confidence: "low",
       assumptions: stringArray(valueRaw?.assumptions, 8, 240),
@@ -2416,7 +2521,7 @@ ${output}
     };
     if (includeValue && valueEstimate.assumptions.length === 0) errors.push("valueEstimate.assumptions needs at least one assumption.");
     const goals = Array.isArray(input.goals) ? input.goals.flatMap((item) => {
-      if (!isRecord2(item)) return [];
+      if (!isRecord3(item)) return [];
       const level = clip2(item.level, 20);
       if (!goalLevels.has(level)) return [];
       const goalId = clip2(item.goalId, 80);
@@ -2425,11 +2530,12 @@ ${output}
     }) : [];
     if (goals.length === 0) errors.push("goals must list a level for the documented public goals you considered.");
     return {
-      ontologyClass: ontologyClasses.has(ontologyClass) ? ontologyClass : void 0,
+      ontologyClass: ontology.value,
       physics,
       simulation,
       ...includeValue ? { valueEstimate } : {},
-      goals
+      goals,
+      ...fieldNotes.length > 0 ? { fieldNotes } : {}
     };
   }
 
@@ -3664,6 +3770,9 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
   function stepDiagnostic(doc) {
     return `${describeButtons(doc)} ${describeCandidates(doc)}`;
   }
+  function replySettled(quietMs, stableMs, streaming, hasReply) {
+    return hasReply && !streaming && quietMs >= stableMs;
+  }
   function note(hooks, step, status, detail, diagnostic = "") {
     hooks.onProgress?.(detail, { step, status, ...diagnostic ? { detail: diagnostic } : {} });
   }
@@ -3716,7 +3825,6 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     const startLimit = hooks.replyStartTimeoutMs ?? 2e4;
     const start = Date.now();
     let lastReply = "";
-    let stableFor = 0;
     let lastAck = "";
     let ackStable = 0;
     let started = false;
@@ -3741,12 +3849,10 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       const sendReady = Boolean(findSubmit(doc, provider.selectors.submit, composer));
       if (reply2 || ack) started = true;
       const changed = reply2 !== lastReply;
-      if (changed) lastChange = Date.now();
-      if (changed || streaming) {
-        if (changed) lastReply = reply2;
-        stableFor = 0;
-      } else stableFor += pollMs;
-      const diagnostic2 = replyDiagnostic(selector, reply2.length, lastChange, changed ? 0 : stableFor, stableMs, streaming);
+      if (changed) lastReply = reply2;
+      if (changed || streaming || lastChange === null) lastChange = Date.now();
+      const quietFor = Date.now() - lastChange;
+      const diagnostic2 = replyDiagnostic(selector, reply2.length, changed ? Date.now() : lastChange, changed || streaming ? 0 : quietFor, stableMs, streaming);
       if (changed || Date.now() - lastLog >= 3e3) {
         note(hooks, label, reply2 ? "reading" : "waiting", `Waiting for the reply: ${label}.`, diagnostic2);
         lastLog = Date.now();
@@ -3769,7 +3875,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
           );
         }
       }
-      const settled = Boolean(reply2) && !changed && !streaming && stableFor >= stableMs;
+      const settled = replySettled(quietFor, stableMs, streaming, Boolean(reply2) && !changed);
       if (expect === "text" && settled) return reply2;
       if (expect === "json" && settled && json) return json;
       if (!reply2 && Date.now() - start >= silentMs) {
