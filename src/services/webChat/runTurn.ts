@@ -3,6 +3,7 @@ import { planDelivery, type DeliveryStep } from "./deliver.ts"
 import { choosePaperTextUrl, couldNotReadPaper, recordIdFromPaperTextUrl, TEXT_PAGE_NOTE, textPageHasPaper, textPageUntrusted } from "./paperText.ts"
 import {
   assistantMessages,
+  assistantSnapshot,
   attachTextFiles,
   attachmentReady,
   ATTACHMENT_SELECTORS,
@@ -28,7 +29,7 @@ import type { WebChatPacket } from "./protocol.ts"
 export interface TurnHooks {
   sleep(ms: number): Promise<void>
   aborted(): boolean
-  onProgress?(message: string, meta?: { step: string; status: string }): void
+  onProgress?(message: string, meta?: { step: string; status: string; detail?: string }): void
   pollMs?: number
   stableMs?: number
   stepTimeoutMs?: number
@@ -46,6 +47,8 @@ export interface TurnHooks {
   submitStableMs?: number
   /** How long to wait after a send attempt before trying the other method. */
   sendVerifyMs?: number
+  /** How long an empty reply may last before a clear error and a re-poll. */
+  replySilentMs?: number
   /** Probe the public text page. Absent means a normal fetch. */
   loadTextPage?(url: string): Promise<{ status: number; body: string }>
   /** Bring the chat tab forward so a background tab does not freeze the reply wait. */
@@ -93,8 +96,25 @@ function stepDiagnostic(doc: Document): string {
 
 export type ReplyExpect = "json" | "text"
 
-function note(hooks: TurnHooks, step: string, status: string, detail: string): void {
-  hooks.onProgress?.(detail, { step, status })
+function note(hooks: TurnHooks, step: string, status: string, detail: string, diagnostic = ""): void {
+  hooks.onProgress?.(detail, { step, status, ...(diagnostic ? { detail: diagnostic } : {}) })
+}
+
+function replyDiagnostic(selector: string, length: number, lastChange: number | null): string {
+  const when = lastChange === null ? "none" : `${Math.max(0, Math.round((Date.now() - lastChange) / 1000))}s ago`
+  return `selector ${selector || "none"}, ${length} characters, last change ${when}`
+}
+
+async function focusComposer(el: Element, hooks: TurnHooks): Promise<boolean> {
+  const html = el as HTMLElement
+  const start = Date.now()
+  while (Date.now() - start <= 1_000) {
+    if (typeof html.focus === "function") html.focus()
+    const active = el.ownerDocument?.activeElement
+    if (active === el || (active != null && el.contains(active))) return true
+    await hooks.sleep(Math.min(hooks.pollMs ?? 50, 50))
+  }
+  return false
 }
 
 function replyTimeoutReason(reply: string, expect: ReplyExpect): string {
@@ -117,7 +137,8 @@ async function waitForReply(
   await hooks.keepAwake?.()
   const pollMs = hooks.pollMs ?? 400
   const stableMs = hooks.stableMs ?? 2000
-  const timeoutMs = hooks.stepTimeoutMs ?? 4 * 60 * 1000
+  const timeoutMs = hooks.stepTimeoutMs ?? 90_000
+  const silentMs = hooks.replySilentMs ?? 45_000
   const startLimit = hooks.replyStartTimeoutMs ?? 20_000
   const start = Date.now()
   let lastReply = ""
@@ -127,15 +148,26 @@ async function waitForReply(
   let lastAck = ""
   let ackStable = 0
   let started = false
+  let lastChange: number | null = null
+  let lastLog = 0
+  let selector = ""
   while (Date.now() - start < timeoutMs) {
     if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.")
-    const reply = replyAfter(beforeMessages, assistantMessages(doc, provider.selectors.assistant, composer))
-    const json = expect === "json" ? reviewJsonBlock(reply) : ""
+    const snapshot = assistantSnapshot(doc, provider.selectors.assistant, composer)
+    selector = snapshot.selector
+    const reply = replyAfter(beforeMessages, snapshot.texts)
+    const json = reviewJsonBlock(reply)
     const ack = ackReply(doc, composer)
     const streaming = stopControlActive(doc, provider.selectors.stop)
     const sendReady = Boolean(findSubmit(doc, provider.selectors.submit, composer))
     const idle = sendReady && !streaming
     if (reply || ack) started = true
+    if (reply !== lastReply) lastChange = Date.now()
+    const diagnostic = replyDiagnostic(selector, reply.length, lastChange)
+    if (reply !== lastReply || Date.now() - lastLog >= 3_000) {
+      note(hooks, label, reply ? "reading" : "waiting", `Waiting for the reply: ${label}.`, diagnostic)
+      lastLog = Date.now()
+    }
     if (expect === "json" && json) {
       if (json === lastJson && jsonStable >= stableMs && (!streaming || sendReady)) return json
       if (json !== lastJson) {
@@ -160,12 +192,22 @@ async function waitForReply(
       if (sendReady) {
         throw new TurnError(
           "send-timeout",
-          `Send step on ${provider.label} did not start a reply. The Send button was still enabled. ${stepDiagnostic(doc)}`,
+          `Send step on ${provider.label} did not start a reply. The Send button was still enabled. ${diagnostic}. ${stepDiagnostic(doc)}`,
         )
       }
     }
-    const settled = Boolean(reply) && reply === lastReply && stableFor >= stableMs && (!streaming || idle || sendReady)
+    const settled = Boolean(reply) && reply === lastReply && stableFor >= stableMs
     if (expect === "text" && settled) return reply
+    if (settled && idle) return json || reply
+    if (!reply && Date.now() - start >= silentMs) {
+      const empty = replyDiagnostic(selector, 0, null)
+      if (attempt < 2) {
+        note(hooks, label, "error", `No reply container yet. Re-polling. ${empty}`)
+        await hooks.keepAwake?.()
+        return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1)
+      }
+      throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} timed out with no reply. ${empty}.`)
+    }
     if (reply !== lastReply) {
       lastReply = reply
       stableFor = 0
@@ -174,13 +216,15 @@ async function waitForReply(
     }
     await hooks.sleep(pollMs)
   }
-  const reply = replyAfter(beforeMessages, assistantMessages(doc, provider.selectors.assistant, composer))
+  const snapshot = assistantSnapshot(doc, provider.selectors.assistant, composer)
+  const reply = replyAfter(beforeMessages, snapshot.texts)
+  const diagnostic = replyDiagnostic(snapshot.selector, reply.length, lastChange)
   if (attempt < 2) {
-    note(hooks, label, "retry", `Reply step (${label}) timed out. Focusing the chat tab and waiting once more.`)
+    note(hooks, label, "error", `Reply step (${label}) timed out. Re-polling. ${diagnostic}`)
     await hooks.keepAwake?.()
     return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1)
   }
-  throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} did not finish in time. ${replyTimeoutReason(reply, expect)}.`)
+  throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} did not finish. ${diagnostic}. ${replyTimeoutReason(reply, expect)}.`)
 }
 
 async function waitForEnabledSubmit(doc: Document, provider: ProviderAdapter, composer: Element, hooks: TurnHooks): Promise<Element | null> {
@@ -274,7 +318,10 @@ async function sendComposerText(
   let pending = text
   let part = 1
   while (pending.length > 0) {
+    const focused = await focusComposer(composer, hooks)
+    note(hooks, label, focused ? "ready" : "error", focused ? `Composer focused. Inserting ${pending.length} characters.` : `Composer was not focused. Retrying the insert. ${pending.length} characters.`)
     const placed = placeComposerText(composer, pending)
+    note(hooks, label, placed.ok ? "ready" : "error", `Insert method ${placed.method}. Box holds ${placed.ok ? placed.chunk.length : placed.actual.length} characters.`)
     if (!placed.ok) {
       throw new TurnError(
         "insert-miss",

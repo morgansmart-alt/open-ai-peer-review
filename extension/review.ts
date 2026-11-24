@@ -44,9 +44,9 @@ let reviews: StoredReview[] = []
 let requestId = ""
 let pendingPaper: { filename: string; text: string; note?: string } | null = null
 
-function rememberStep(step: string, stepStatus: string): StepLogEntry[] {
+function rememberStep(step: string, stepStatus: string, detail = ""): StepLogEntry[] {
   const at = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-  return [...stepLog, { at, step, status: stepStatus }].slice(-20)
+  return [...stepLog, { at, step, status: stepStatus, ...(detail ? { detail } : {}) }].slice(-40)
 }
 
 function storageGet(key: string): Promise<unknown> {
@@ -279,11 +279,11 @@ async function run(): Promise<void> {
   }
 }
 
-chrome.runtime.onMessage.addListener((message: { source?: string; type?: string; requestId?: string; text?: string; message?: string; step?: string; status?: string; defendedText?: string | null; transcript?: { round: number; kind: string; text: string }[]; stopped?: boolean; chatModel?: string; notice?: string }) => {
+chrome.runtime.onMessage.addListener((message: { source?: string; type?: string; requestId?: string; text?: string; message?: string; step?: string; status?: string; detail?: string; defendedText?: string | null; transcript?: { round: number; kind: string; text: string }[]; stopped?: boolean; chatModel?: string; notice?: string }) => {
   if (!message || message.source !== EXTENSION_SOURCE || message.requestId !== requestId) return
   if (message.type === "air-web-chat-progress" && message.message) {
     if (!busy) return
-    stepLog = rememberStep(message.step || "Review", message.status || "update")
+    stepLog = rememberStep(message.step || "Review", message.status || "update", message.detail || "")
     status = message.message
     paint()
     return

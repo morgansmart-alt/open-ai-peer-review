@@ -319,7 +319,16 @@ export function assistantText(root: ParentNode, selectors: string[], composer?: 
   return text
 }
 
-function assistantNodes(root: ParentNode, selectors: string[], composer?: Element | null): Element[] {
+const GROK_REPLY_SELECTORS = [
+  '[data-testid="grokResponse"]',
+  '[data-testid="grok-response"]',
+  '[data-testid="GrokResponse"]',
+  '[data-testid="grok-message"]',
+  '[data-testid*="grokMessage"]',
+  'article[data-testid*="grok"]',
+]
+
+function assistantNodes(root: ParentNode, selectors: string[], composer?: Element | null): { nodes: Element[]; selector: string } {
   const seen = new Set<Element>()
   const collect = (nodes: Element[]): Element[] => {
     const usable = nodes.filter((el) => {
@@ -331,30 +340,36 @@ function assistantNodes(root: ParentNode, selectors: string[], composer?: Elemen
     })
     return usable.filter((el) => !usable.some((other) => other !== el && other.contains(el)))
   }
-  for (const selector of selectors) {
+  const selectorsToTry = [...selectors, ...GROK_REPLY_SELECTORS.filter((selector) => !selectors.includes(selector))]
+  for (const selector of selectorsToTry) {
     let nodes: Element[] = []
     try {
       nodes = queryAllDeep(root, selector)
     } catch {
       continue
     }
-    const found = collect(nodes)
-    if (found.length) return found
+    const found = collect(nodes).filter((el) => elementText(el).length > 0)
+    if (found.length) return { nodes: found, selector }
   }
   let pool: Element[] = []
   try {
-    pool = queryAllDeep(root, "[data-testid], [data-message-author], [data-message-author-role], [class*='assistant'], [class*='response']")
+    pool = queryAllDeep(chatRegion(root), "[data-testid], [data-message-author], [data-message-author-role], [class*='assistant'], [class*='response']")
   } catch {
     pool = []
   }
-  return collect(pool.filter(looksLikeAssistant))
+  const fallback = collect(pool.filter(looksLikeAssistant)).filter((el) => elementText(el).length > 0)
+  return { nodes: fallback, selector: fallback.length ? "assistant-fallback" : "" }
+}
+
+/** Assistant replies in document order, and the selector that found the latest container. */
+export function assistantSnapshot(root: ParentNode, selectors: string[], composer?: Element | null): { texts: string[]; selector: string } {
+  const found = assistantNodes(root, selectors, composer)
+  return { texts: found.nodes.map((el) => elementText(el)).filter((text) => text.length > 0), selector: found.selector }
 }
 
 /** Assistant replies in document order. Nested copies of the same message are skipped. */
 export function assistantMessages(root: ParentNode, selectors: string[], composer?: Element | null): string[] {
-  return assistantNodes(root, selectors, composer)
-    .map((el) => elementText(el))
-    .filter((text) => text.length > 0)
+  return assistantSnapshot(root, selectors, composer).texts
 }
 
 /**
@@ -460,55 +475,72 @@ function setControlValue(control: HTMLTextAreaElement | HTMLInputElement, text: 
 
 function clearEditable(el: HTMLElement): void {
   if (typeof el.focus === "function") el.focus()
+  const doc = el.ownerDocument
   try {
-    const doc = el.ownerDocument
     const selection = doc.getSelection?.()
     const range = doc.createRange()
     range.selectNodeContents(el)
     selection?.removeAllRanges()
     selection?.addRange(range)
-    doc.execCommand?.("delete", false)
+    if (typeof doc.execCommand === "function") doc.execCommand("delete", false)
+    else el.textContent = ""
   } catch {
-    // The text assignment below still empties the box.
+    el.textContent = ""
   }
+  if (!composerText(el)) return
   el.textContent = ""
 }
 
-/** One insert. A second paste is not issued. A doubled insert is collapsed back to one copy. */
-export function fillComposer(el: Element, text: string): { ok: boolean; actual: string; truncated: boolean } {
-  const tag = el.tagName
-  if (tag === "TEXTAREA" || tag === "INPUT") {
-    setControlValue(el as HTMLTextAreaElement, text)
-  } else {
-    const editable = el as HTMLElement
-    clearEditable(editable)
-    let inserted = false
+/**
+ * One insert into a contenteditable. beforeinput is what X's editor accepts.
+ * execCommand is the fallback. textContent is only used when the document has no execCommand,
+ * which is the test realm, not the live X editor.
+ */
+function insertEditable(el: HTMLElement, text: string): string {
+  if (typeof el.focus === "function") el.focus()
+  clearEditable(el)
+  let accepted = false
+  try {
+    const event = new InputEvent("beforeinput", { bubbles: true, cancelable: true, data: text, inputType: "insertText" })
+    accepted = !el.dispatchEvent(event)
+  } catch {
+    accepted = false
+  }
+  if (accepted) return "beforeinput"
+  const doc = el.ownerDocument
+  if (typeof doc.execCommand === "function") {
     try {
-      const doc = el.ownerDocument
       const selection = doc.getSelection?.()
       const range = doc.createRange()
       range.selectNodeContents(el)
       selection?.removeAllRanges()
       selection?.addRange(range)
-      inserted = Boolean(doc.execCommand?.("insertText", false, text))
+      doc.execCommand("insertText", false, text)
     } catch {
-      inserted = false
+      // The read below reports the mismatch.
     }
     let actual = composerText(el)
     if (text && actual === text + text) {
-      editable.textContent = text
-      dispatchInput(editable, text)
+      el.textContent = text
+      dispatchInput(el, text)
       actual = composerText(el)
     }
-    if (!inserted || !messageMatches(actual, text)) {
-      editable.textContent = text
-      dispatchInput(editable, text)
-    }
+    if (messageMatches(actual, text)) return accepted ? "beforeinput" : "insertText"
+    return "insertText"
   }
+  el.textContent = text
+  dispatchInput(el, text)
+  return "text"
+}
+
+/** One insert. A second paste is not issued. A doubled insert is collapsed back to one copy. */
+export function fillComposer(el: Element, text: string): { ok: boolean; actual: string; truncated: boolean; method: string } {
+  const method = el.tagName === "TEXTAREA" || el.tagName === "INPUT" ? "value" : insertEditable(el as HTMLElement, text)
+  if (method === "value") setControlValue(el as HTMLTextAreaElement, text)
   const actual = composerText(el)
   const ok = messageMatches(actual, text)
   const truncated = !ok && actual.trim().length > 0 && text.startsWith(actual)
-  return { ok, actual, truncated }
+  return { ok, actual, truncated, method }
 }
 
 export function writeComposer(el: Element, text: string): void {
@@ -519,21 +551,16 @@ export function writeComposer(el: Element, text: string): void {
  * Put `text` in the box, shortening from the end until the box holds that exact prefix.
  * Returns the text that was verified in the box.
  */
-export function placeComposerText(el: Element, text: string): { ok: true; chunk: string } | { ok: false; actual: string } {
-  let attempt = text
-  for (let pass = 0; pass < 8 && attempt.length > 0; pass += 1) {
-    const placed = fillComposer(el, attempt)
-    if (placed.ok) return { ok: true, chunk: attempt }
-    if (placed.truncated && placed.actual.trim().length >= 20) {
-      const prefix = text.slice(0, placed.actual.length)
-      const exact = fillComposer(el, prefix)
-      if (exact.ok) return { ok: true, chunk: prefix }
-    }
-    const next = Math.floor(attempt.length / 2)
-    if (next < 20) break
-    attempt = attempt.slice(0, next)
+export function placeComposerText(el: Element, text: string): { ok: true; chunk: string; method: string } | { ok: false; actual: string; method: string } {
+  let placed = fillComposer(el, text)
+  if (!placed.ok) placed = fillComposer(el, text)
+  if (placed.ok) return { ok: true, chunk: text, method: placed.method }
+  if (placed.truncated && placed.actual.trim().length >= 20) {
+    const prefix = text.slice(0, placed.actual.length)
+    const exact = fillComposer(el, prefix)
+    if (exact.ok) return { ok: true, chunk: prefix, method: exact.method }
   }
-  return { ok: false, actual: composerText(el) }
+  return { ok: false, actual: placed.actual, method: placed.method }
 }
 
 /** One click, then ignore a second call on the same element until the turn yields. */

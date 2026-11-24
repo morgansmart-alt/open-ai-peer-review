@@ -171,7 +171,17 @@
         'button[data-testid="grok-send"]'
       ],
       stop: ['button[aria-label="Stop"]', 'button[aria-label*="Stop"]', 'button[aria-label*="Stop generating"]'],
-      assistant: ['[data-testid="assistant-message"]', '[data-testid="grok-message"]', '[class*="assistant-message"]', '[data-message-author="assistant"]'],
+      assistant: [
+        '[data-testid="grokResponse"]',
+        '[data-testid="grok-response"]',
+        '[data-testid="GrokResponse"]',
+        '[data-testid="grok-message"]',
+        '[data-testid*="grokMessage"]',
+        '[data-testid="assistant-message"]',
+        '[data-message-author="assistant"]',
+        '[class*="assistant-message"]',
+        'article[data-testid*="grok"]'
+      ],
       fileInput: ['input[type="file"]'],
       login: ['a[href*="/login"]', 'a[href*="/i/flow/login"]', 'a[data-testid="login"]']
     }
@@ -3051,7 +3061,7 @@ ${output}
       const log = el(form, "ol", void 0, "note");
       log.id = "step-log";
       for (const entry of model.stepLog) {
-        el(log, "li", `${entry.at} \xB7 ${entry.step} \xB7 ${entry.status}`);
+        el(log, "li", `${entry.at} \xB7 ${entry.step} \xB7 ${entry.status}${entry.detail ? ` \xB7 ${entry.detail}` : ""}`);
       }
     }
     if (model.status) {
@@ -3633,9 +3643,9 @@ ${JSON.stringify(report)}`),
   var reviews = [];
   var requestId = "";
   var pendingPaper = null;
-  function rememberStep(step, stepStatus) {
+  function rememberStep(step, stepStatus, detail = "") {
     const at = (/* @__PURE__ */ new Date()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    return [...stepLog, { at, step, status: stepStatus }].slice(-20);
+    return [...stepLog, { at, step, status: stepStatus, ...detail ? { detail } : {} }].slice(-40);
   }
   function storageGet(key) {
     return new Promise((resolve) => {
@@ -3858,7 +3868,7 @@ ${JSON.stringify(report)}`),
     if (!message || message.source !== EXTENSION_SOURCE || message.requestId !== requestId) return;
     if (message.type === "air-web-chat-progress" && message.message) {
       if (!busy) return;
-      stepLog = rememberStep(message.step || "Review", message.status || "update");
+      stepLog = rememberStep(message.step || "Review", message.status || "update", message.detail || "");
       status = message.message;
       paint();
       return;
