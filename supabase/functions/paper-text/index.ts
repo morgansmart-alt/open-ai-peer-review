@@ -1,6 +1,6 @@
-// Public text for one Zenodo record. No auth and no private notes.
-// This file is not deployed by the pull request.
-// Later: supabase functions deploy paper-text --no-verify-jwt
+// Secondary plain-text service. GitHub Pages serves the static files.
+// Zenodo often answers 403 from this host. No auth and no private notes.
+// Deploy: supabase functions deploy paper-text --no-verify-jwt
 
 import { extensionOf, fetchZenodoRecord, fetchZenodoResponse } from "../../../src/services/zenodo.ts"
 import { formatPaperText } from "../../../src/services/webChat/paperText.ts"

@@ -7,13 +7,16 @@ import { acceptWebChatResult, draftWebChatReview } from "./accept.ts"
 import { planDelivery } from "./deliver.ts"
 import { buildWebChatPacket } from "./packet.ts"
 import { parseModelJson, settleChatJson } from "../jsonText.ts"
+import { collectPaperIds, renderStaticPaperText } from "./paperTextFiles.ts"
 import {
+  choosePaperTextUrl,
   couldNotReadPaper,
   formatPaperText,
   isPublicPaperTextUrl,
   linkReadingPrompt,
   MANUAL_PASTE_SITE,
   manualPasteModel,
+  paperTextFunctionUrl,
   paperTextRecordIdFromPath,
   paperTextUrl,
   TEXT_PAGE_NOTE,
@@ -46,9 +49,10 @@ const record = {
 
 describe("public paper text", () => {
   it("builds a path a chat can fetch and a page with the public links", () => {
-    expect(paperTextUrl("22826")).toBe("https://lotswxboafsenmszijpf.supabase.co/functions/v1/paper-text?id=22826")
+    expect(paperTextUrl("22826")).toBe("https://morgansmart-alt.github.io/open-ai-peer-review/paper-text/22826.txt")
     expect(paperTextRecordIdFromPath("/open-ai-peer-review/paper/22826/text")).toBe("22826")
     expect(isPublicPaperTextUrl(paperTextUrl("22826"))).toBe(true)
+    expect(isPublicPaperTextUrl(paperTextFunctionUrl("22826"))).toBe(true)
     expect(isPublicPaperTextUrl("https://share.google/aimode/secret")).toBe(false)
     const page = formatPaperText(record, [
       { filename: "note.txt", text: "The table is in the file. https://chatgpt.com/share/SECRET" },
@@ -176,6 +180,33 @@ describe("json repair and the text page check", () => {
     expect(textPageUntrusted(silent)).toBe(true)
     expect(textPageUntrusted('{"overallScore":84,"summary":"The record is sound."}')).toBe(false)
     expect(TEXT_PAGE_NOTE).toBe("text page unreachable, model used other sources")
+  })
+
+  it("writes static text from board ids and prefers that file over the function", async () => {
+    expect(collectPaperIds([
+      { recordId: "22826", doi: "10.5281/zenodo.22826" },
+      { doi: "10.5281/zenodo.18916931" },
+      { recordId: "sample-fog" },
+      { paper: { url: "https://zenodo.org/records/611843" } },
+    ])).toEqual(["18916931", "22826", "611843"])
+    const file = renderStaticPaperText({
+      id: "22826",
+      title: "CODATA",
+      authors: ["Ada Lovelace"],
+      doi: "10.5281/zenodo.22826",
+      conceptDoi: "10.5281/zenodo.611843",
+      description: "A public abstract of the data note.",
+      files: [{ filename: "note.txt", text: "measured yield" }],
+    })
+    expect(file).toContain("Zenodo record: https://zenodo.org/records/22826")
+    expect(file).toContain("Version DOI: https://doi.org/10.5281/zenodo.22826")
+    expect(file).toContain("measured yield")
+    expect(textPageHasPaper(200, file)).toBe(true)
+    const staticFile = await choosePaperTextUrl("22826", async (url) => ({ status: url.endsWith(".txt") ? 200 : 404, body: url.endsWith(".txt") ? file : "missing" }))
+    expect(staticFile).toBe(paperTextUrl("22826"))
+    const service = await choosePaperTextUrl("22826", async (url) => ({ status: url.includes("functions/v1/paper-text") ? 200 : 404, body: url.includes("functions/v1/paper-text") ? file : "missing" }))
+    expect(service).toBe(paperTextFunctionUrl("22826"))
+    expect(await choosePaperTextUrl("22826", async () => ({ status: 404, body: "missing" }))).toBeNull()
   })
 })
 

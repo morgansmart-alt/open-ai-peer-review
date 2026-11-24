@@ -21,10 +21,47 @@ export function paperTextPath(recordId: string): string {
   return `/paper/${encodeURIComponent(recordId)}/text`
 }
 
-/** Public plain-text endpoint. The id is a query parameter, so a fetch keeps it. */
-export function paperTextUrl(recordId: string, endpoint = PAPER_TEXT_FUNCTION): string {
-  const base = endpoint.replace(/\/$/, "")
-  return `${base}?id=${encodeURIComponent(recordId)}`
+/** Static file on GitHub Pages. A .txt file is HTTP 200 with content-type text/plain. */
+export function paperTextUrl(recordId: string, origin = PAPER_TEXT_ORIGIN): string {
+  return `${origin.replace(/\/$/, "")}/paper-text/${encodeURIComponent(recordId)}.txt`
+}
+
+/** Secondary plain-text service. Zenodo often refuses this host, so it is tried after the static file. */
+export function paperTextFunctionUrl(recordId: string, endpoint = PAPER_TEXT_FUNCTION): string {
+  return `${endpoint.replace(/\/$/, "")}?id=${encodeURIComponent(recordId)}`
+}
+
+export function paperTextCandidates(recordId: string): string[] {
+  return [paperTextUrl(recordId), paperTextFunctionUrl(recordId)]
+}
+
+export function recordIdFromPaperTextUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    const file = parsed.pathname.match(/\/paper-text\/(\d+)\.txt$/)
+    if (file?.[1]) return file[1]
+    const query = parsed.searchParams.get("id")
+    if (query && /^\d+$/.test(query)) return query
+    const route = parsed.pathname.match(/\/paper\/(\d+)\/text\/?$/)
+    return route?.[1] ?? null
+  } catch {
+    return null
+  }
+}
+
+export async function choosePaperTextUrl(
+  recordId: string,
+  load: (url: string) => Promise<{ status: number; body: string }>,
+): Promise<string | null> {
+  for (const url of paperTextCandidates(recordId)) {
+    try {
+      const loaded = await load(url)
+      if (textPageHasPaper(loaded.status, loaded.body)) return url
+    } catch {
+      // The next address is tried.
+    }
+  }
+  return null
 }
 
 export function paperTextRecordIdFromPath(pathname: string): string | null {
@@ -44,7 +81,7 @@ export function isPublicPaperTextUrl(url: string): boolean {
       return /^\d+$/.test(parsed.searchParams.get("id") ?? "")
     }
     if (parsed.origin === "https://morgansmart-alt.github.io") {
-      return /\/open-ai-peer-review\/paper\/[^/]+\/text\/?$/.test(parsed.pathname)
+      return /\/open-ai-peer-review\/paper-text\/\d+\.txt$/.test(parsed.pathname) || /\/open-ai-peer-review\/paper\/[^/]+\/text\/?$/.test(parsed.pathname)
     }
     return false
   } catch {
