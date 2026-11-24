@@ -49,7 +49,13 @@ function parseSlice(slice: string): { value: unknown; text: string; repaired: bo
 }
 
 function hasNumericScore(value: unknown): boolean {
-  return typeof value === "object" && value !== null && !Array.isArray(value) && typeof (value as { overallScore?: unknown }).overallScore === "number"
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false
+  const row = value as { overallScore?: unknown; recommendation?: unknown; questionsForAuthors?: unknown }
+  if (typeof row.overallScore !== "number" || !Number.isFinite(row.overallScore)) return false
+  if (typeof row.recommendation === "string" && (row.recommendation.includes("<") || row.recommendation.includes("|"))) return false
+  const questions = row.questionsForAuthors
+  if (Array.isArray(questions) && questions.length === 1 && (questions[0] === "string" || questions[0] === "<question>")) return false
+  return true
 }
 
 /**

@@ -2049,7 +2049,13 @@ ${output}
     }
   }
   function hasNumericScore(value) {
-    return typeof value === "object" && value !== null && !Array.isArray(value) && typeof value.overallScore === "number";
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+    const row = value;
+    if (typeof row.overallScore !== "number" || !Number.isFinite(row.overallScore)) return false;
+    if (typeof row.recommendation === "string" && (row.recommendation.includes("<") || row.recommendation.includes("|"))) return false;
+    const questions = row.questionsForAuthors;
+    if (Array.isArray(questions) && questions.length === 1 && (questions[0] === "string" || questions[0] === "<question>")) return false;
+    return true;
   }
   function lastScoreJson(raw) {
     const windowText = raw.length > 4e5 ? raw.slice(-2e5) : raw;
@@ -3058,8 +3064,13 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     if (block === sent) return true;
     if (sent.startsWith(block) && block.length >= 40) return true;
     if (sent.endsWith(block) && block.length >= 40) return true;
-    const head = sent.slice(0, 80);
-    if (head.length >= 40 && block.startsWith(head) && block.length <= sent.length + 40) return true;
+    const head = sent.slice(0, 100);
+    if (head.length >= 40 && block.startsWith(head) && block.length <= sent.length + 80) return true;
+    if (sent.length >= 80) {
+      const midAt = Math.floor(sent.length / 2);
+      const mid = sent.slice(midAt, midAt + 100);
+      if (block.includes(head) || mid.length >= 80 && block.includes(mid)) return true;
+    }
     return false;
   }
   function isUiLabel(text) {
@@ -3075,19 +3086,38 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     const tied = blocks.filter((block) => block.length === longest);
     return tied[tied.length - 1] ?? "";
   }
+  function shortestLast(blocks) {
+    if (blocks.length === 0) return "";
+    const shortest = Math.min(...blocks.map((block) => block.length));
+    const tied = blocks.filter((block) => block.length === shortest);
+    return tied[tied.length - 1] ?? "";
+  }
+  function scoreAfterPrompt(block, prompt) {
+    const sent = normaliseComposerText(prompt);
+    const text = normaliseComposerText(block);
+    const head = sent.slice(0, 80);
+    const at = head.length >= 40 ? text.lastIndexOf(head) : -1;
+    const tail = at >= 0 ? text.slice(at + head.length) : text;
+    return reviewJsonBlock(tail);
+  }
   function chooseReplyBlock(blocks, beforeRegion, sentPrompt, expect = "text") {
     const fresh = blocks.filter((block) => {
       const trimmed = block.replace(/\s+/g, " ").trim();
-      if (!trimmed || isUiLabel(block) || isPromptEcho(block, sentPrompt)) return false;
+      if (!trimmed || isUiLabel(block)) return false;
       const probe = trimmed.slice(0, 80);
       return !(probe.length >= 40 && beforeRegion.includes(probe));
     });
+    const clean = fresh.filter((block) => !isPromptEcho(block, sentPrompt));
     if (expect === "json") {
-      const withJson = fresh.filter((block) => reviewJsonBlock(block));
-      if (withJson.length > 0) return longestLast(withJson);
-      return "";
+      const withJson = clean.filter((block) => reviewJsonBlock(block));
+      if (withJson.length > 0) {
+        const block = shortestLast(withJson);
+        return reviewJsonBlock(block) || block;
+      }
+      const extracted = fresh.map((block) => scoreAfterPrompt(block, sentPrompt)).filter((item) => item.length > 0);
+      return extracted[extracted.length - 1] ?? "";
     }
-    return longestLast(fresh.filter((block) => block.trim().length >= 80 || reviewJsonBlock(block) || hasSentence(block)));
+    return longestLast(clean.filter((block) => block.trim().length >= 80 || reviewJsonBlock(block) || hasSentence(block)));
   }
   function walkReplyText(node, composer, chunks) {
     if (node instanceof Element) {
@@ -3159,11 +3189,11 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     const right = normaliseComposerText(intended);
     if (left === right) return true;
     if (left.length < 40 || right.length < 40) return false;
-    const start = right.slice(0, 48);
-    const end = right.slice(-48);
-    if (!left.startsWith(start) || !left.endsWith(end)) return false;
+    const start = right.slice(0, Math.min(48, right.length));
+    const end = right.slice(-Math.min(48, right.length));
     const ratio = Math.min(left.length, right.length) / Math.max(left.length, right.length);
-    return ratio >= 0.95;
+    if (left.startsWith(start) && ratio >= 0.98) return true;
+    return left.startsWith(start) && left.endsWith(end) && ratio >= 0.95;
   }
   function messageMatches(actual, intended) {
     return composerTextMatches(actual, intended);

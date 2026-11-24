@@ -191,6 +191,10 @@ describe("json repair and the text page check", () => {
     expect(templateAsked[0]).not.toContain("overallScore")
     expect(template.reasked).toBe(true)
     expect(template.text).toContain("81")
+    const both = '{"overallScore":"<0-100>","questionsForAuthors":["<question>"],"recommendation":"<accept|encourage>"} {"overallScore":91,"questionsForAuthors":["What limits the table?"],"recommendation":"accept"}'
+    const parsed = parseModelJson(both)
+    expect(parsed.ok).toBe(true)
+    if (parsed.ok) expect(parsed.value).toMatchObject({ overallScore: 91 })
   })
 
   it("treats a 404 page as down and a scored reply that cites that 404 as untrusted", () => {
