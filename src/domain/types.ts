@@ -161,6 +161,10 @@ export interface ReviewReport {
     pagesTotal: number
     chunksSummarised: number
     coverage: "full" | "partial"
+    /** Zero when the files had no extractable words. Absent on older readings. */
+    extractableWords?: number
+    /** Set when the files were not read, for example a scanned PDF. Absent means use `coverage`. */
+    coverageLabel?: string
   }
 }
 

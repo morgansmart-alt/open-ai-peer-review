@@ -5,9 +5,10 @@ import { buildRanking } from "../domain/ranking.ts"
 import type { AirDatabase, StoredReview } from "../domain/types.ts"
 import { PDF_PAGE_CEILING, extractDocument, pagesToRead, scannedPdfNote } from "./extractText.ts"
 import { geminiChatBody, openAiChatBody, OUTPUT_TOKEN_LIMIT, providerErrorMessage } from "./providers.ts"
-import { buildPacket, shouldSummarize, singleCallCharBudget } from "./prompts.ts"
+import { buildPacket, reviewUserPrompt, shouldSummarize, singleCallCharBudget } from "./prompts.ts"
 import { listZip, textFromDocx, textFromZip } from "./zipText.ts"
-import { chunkText, coverageAllowsPublish, quoteMatchesCorpus, readingCoverage, sectionsFor } from "./textTools.ts"
+import { chunkText, coverageAllowsPublish, coveragePhrase, extractableWordCount, OCR_OR_TEXT_SUGGESTION, quoteMatchesCorpus, readingCoverage, sectionsFor, UNREAD_SCAN_COVERAGE } from "./textTools.ts"
+import { estimateReviewCalls, reviewCallEstimateMessage, summaryBatches } from "./reviewCalls.ts"
 import { validateReport } from "./validateReport.ts"
 import { isPublishedDoi, parseAnyRef, recordFromCrossref, recordFromOpenAlex } from "./works.ts"
 
@@ -98,6 +99,22 @@ describe("full-length coverage", () => {
     })
     expect(readingCoverage([{ pagesRead: 500, pagesTotal: 800 }], 80).coverage).toBe("partial")
   })
+
+  it("does not call a scanned PDF with no extractable words a full reading", () => {
+    expect(extractableWordCount("")).toBe(0)
+    expect(extractableWordCount("Figures not read. Image pixels were not scored.")).toBe(0)
+    const scanned = readingCoverage([{ filename: "scan.pdf", text: "", kind: "pdf", pagesRead: 12, pagesTotal: 12 }], 0)
+    expect(scanned.coverage).not.toBe("full")
+    expect(scanned.extractableWords).toBe(0)
+    expect(coveragePhrase(scanned)).toBe(UNREAD_SCAN_COVERAGE)
+    expect(coveragePhrase(scanned)).toBe("not read (no extractable text, likely scanned/images)")
+    expect(coverageAllowsPublish(scanned)).toBe(false)
+    expect(OCR_OR_TEXT_SUGGESTION).toMatch(/OCR/)
+    expect(OCR_OR_TEXT_SUGGESTION).toMatch(/text version/)
+    const readable = readingCoverage([{ filename: "paper.pdf", text: "The methods section reports the weighing protocol in full.", kind: "pdf", pagesRead: 4, pagesTotal: 4 }], 0)
+    expect(readable.coverage).toBe("full")
+    expect(coverageAllowsPublish(readable)).toBe(true)
+  })
 })
 
 describe("file types", () => {
@@ -178,6 +195,18 @@ describe("scoring the whole paper", () => {
     const huge = [{ filename: "01.pdf", text: "A".repeat(500_000) }, { filename: "02.pdf", text: "TAIL-MARKER" }]
     expect(shouldSummarize(huge, "anthropic")).toBe(true)
     expect(shouldSummarize(huge, "gemini")).toBe(false)
+    const prompt = reviewUserPrompt({ title: "T", doi: "", recordVersion: "", publicationDate: "", license: "", keywords: [], description: "", files: [] } as never, officialCriteria, "paper")
+    for (const criterion of officialCriteria.criteria) expect(prompt).toContain(criterion.id)
+    expect(estimateReviewCalls([{ text: "A short methods section with a weighing protocol." }], "gemini")).toEqual({ calls: 1, summaryCalls: 0, scoreCalls: 1 })
+    const long = [{ filename: "a.pdf", text: "A".repeat(500_000) }, { filename: "b.pdf", text: "B".repeat(500_000) }]
+    const batched = estimateReviewCalls(long, "anthropic")
+    expect(batched.scoreCalls).toBe(1)
+    expect(batched.calls).toBeGreaterThan(1)
+    expect(batched.summaryCalls).toBeLessThan(sectionsFor(long).length)
+    expect(summaryBatches(sectionsFor(long)).length).toBeLessThan(sectionsFor(long).length)
+    expect(reviewCallEstimateMessage(batched.calls).level).toBe("warn")
+    expect(reviewCallEstimateMessage(batched.calls).text).toMatch(/daily free quota|free daily cap/)
+    expect(reviewCallEstimateMessage(1).level).toBe("none")
     const sections = sectionsFor(huge, 4)
     expect(sections.some((section) => section.text.includes("TAIL-MARKER") || section.label.startsWith("02.pdf"))).toBe(true)
     const digest = buildPacket({ files: [], description: "", title: "T" } as never, huge, ["01.pdf: a summary that is not the paper"])

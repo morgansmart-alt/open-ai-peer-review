@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js"
 import { emptyDatabase, type AirDatabase, type AuthorClaim, type IssueRound, type IssueStatus, type IssueThread, type NodeSubmission, type StoredReview } from "../domain/types.ts"
-import { fluidRoundPastLegacyCap, legacySixRoundMessage, LOCAL_FLUID_ROUND_NOTE } from "../domain/versions.ts"
+import { isHumanReview, fluidRoundPastLegacyCap, legacySixRoundMessage, LOCAL_FLUID_ROUND_NOTE } from "../domain/versions.ts"
+import { createReviewOwner, ownerSecretFor, withCriterionProfile } from "./reviewOwner.ts"
 
 export const LOCAL_COMMENT_ROUND_NOTE =
   "Saved on this browser. The shared board still rejects a comment until its database update is applied. A comment does not change the score or the issue status."
@@ -111,10 +112,20 @@ export async function publishWebChatReview(mode: BackendMode, review: StoredRevi
   }
 }
 
+export const LOCAL_PROFILE_RETAG_NOTE =
+  "Saved on this browser. The shared board updates the profile after its database migration is applied, and only for the reviewer who published the reading."
+
+async function attachHumanOwner(review: StoredReview): Promise<string | null> {
+  if (!isHumanReview(review) || review.sample) return null
+  const owner = await createReviewOwner(review.id)
+  return owner.hash
+}
+
 export async function publishReview(mode: BackendMode, review: StoredReview): Promise<string | null> {
   if (isUncalibratedWebChat(review)) return publishWebChatReview(mode, review)
   const limited = spend()
   if (limited) return limited
+  const ownerHash = await attachHumanOwner(review)
   if (mode === "local" || review.mock || review.sample) {
     if (mode === "supabase" && review.mock) {
       const overlay = loadOverlay()
@@ -140,17 +151,45 @@ export async function publishReview(mode: BackendMode, review: StoredReview): Pr
     custom_criteria: review.customCriteria,
     output_hash: review.outputHash,
     private_context_count: review.privateContextCount ?? 0,
+    ...(ownerHash ? { owner_hash: ownerHash } : {}),
     payload: publicPayload(review),
   }
   const { error } = await sb.from("air_reviews").insert(row)
-  if (error && /private_context_count/i.test(error.message)) {
-    const { private_context_count: dropped, ...withoutCount } = row
-    void dropped
-    const retry = await sb.from("air_reviews").insert(withoutCount)
+  if (error && /owner_hash|private_context_count/i.test(error.message)) {
+    const { private_context_count: droppedCount, owner_hash: droppedHash, ...withoutOptional } = row
+    void droppedCount
+    void droppedHash
+    const retry = await sb.from("air_reviews").insert(withoutOptional)
     return retry.error ? retry.error.message : null
   }
   if (error) return error.message
   return null
+}
+
+export async function retagHumanReviewProfile(mode: BackendMode, review: StoredReview, profileId: string): Promise<string | null> {
+  const updated = withCriterionProfile(review, profileId)
+  if (!updated.ok) return updated.error
+  const secret = ownerSecretFor(review.id)
+  const local = loadLocalDatabase()
+  const inLocal = local.reviews.some((item) => item.id === review.id)
+  if (!secret && !inLocal) return "Only the browser that published this human review can change its profile."
+  if (inLocal) {
+    local.reviews = local.reviews.map((item) => (item.id === review.id ? updated.review : item))
+    saveLocalDatabase(local)
+  }
+  if (mode === "local" || review.mock || review.sample) return inLocal || secret ? null : "Only the browser that published this human review can change its profile."
+  if (!secret) return LOCAL_PROFILE_RETAG_NOTE
+  const sb = client()
+  if (!sb) return inLocal ? null : "The shared board is not configured."
+  const rpc = await sb.rpc("air_retag_human_profile", { p_review_id: review.id, p_profile: profileId, p_secret: secret })
+  if (!rpc.error) return null
+  if (missingAppendFunction(rpc.error)) {
+    const overlay = loadOverlay()
+    overlay.reviews = [...overlay.reviews.filter((item) => item.id !== review.id), updated.review]
+    saveOverlay(overlay)
+    return LOCAL_PROFILE_RETAG_NOTE
+  }
+  return rpc.error.message
 }
 
 export async function publishNode(mode: BackendMode, node: NodeSubmission): Promise<string | null> {

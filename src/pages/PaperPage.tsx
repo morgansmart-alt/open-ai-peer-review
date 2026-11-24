@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { Link, useParams } from "react-router-dom"
 import { keySlot } from "../domain/assessors.ts"
+import { FREE_KEY_GUIDE_TITLE } from "../content/freeKeyGuide.ts"
+import { CRITERION_PROFILES, isCriterionProfileId, storedProfileLabel, type CriterionProfileId } from "../domain/profiles.ts"
 import { canAppendRound, commentStatus, humanQuoteCheck, latestAuthorClaim, newerVersion, roleLabel, ROUND_LIMIT, statusFromCheck, statusLabel } from "../domain/issues.ts"
 import { buildRanking } from "../domain/ranking.ts"
 import { boardValue } from "../domain/scoring.ts"
@@ -21,11 +23,15 @@ import { ladderTier } from "../domain/fidelity.ts"
 import { LineChart } from "../components/charts.tsx"
 import { sha256Hex, uid } from "../services/hash.ts"
 import { prepareRecheck } from "../services/recheck.ts"
-import { runIndependent, runSourceCheck, type VerdictDraft } from "../services/review.ts"
+import { runIndependent, type VerdictDraft } from "../services/review.ts"
 import { fileSelectionFor, rememberFileSelection } from "../services/fileSelection.ts"
 import { loadVersionDocuments } from "../services/versionText.ts"
 import { downloadReceipt, lookupReceipt, savePrivateContext } from "../services/privateContext.ts"
 import { resolvedModel } from "../services/providers.ts"
+import { executeRecheck, recheckAuthorLabel } from "../services/recheckRun.ts"
+import { resolveRecheckChoice } from "../services/recheckRoute.ts"
+import { humanReviewOwnedHere } from "../services/reviewOwner.ts"
+import { webChatProviders } from "../../extension/adapters/index.ts"
 import {
   extensionOf,
   fetchRecordVersions,
@@ -54,7 +60,7 @@ export function PaperPage() {
   const [selectedFiles, setSelectedFiles] = useState<string[]>([])
   const [includeCodeData, setIncludeCodeData] = useState(true)
   const [loadingText, setLoadingText] = useState(false)
-  const [recheckNote, setRecheckNote] = useState<string | null>(null)
+  const [recheckNote, setRecheckNote] = useState<ReactNode>(null)
   const [recheckBusy, setRecheckBusy] = useState(false)
 
   useEffect(() => {
@@ -117,10 +123,27 @@ export function PaperPage() {
     setLoadingText(false)
   }
 
-  async function recheck(issue: IssueThread, targetRecordId: string): Promise<string> {
-    if (!record) return "Load the record first."
-    const profile = air.profiles.find((item) => item.id === "grok") ?? air.profiles[0]
-    if (!profile) return "No assessor is configured."
+  function noteFrom(result: { message: string; needsKey?: boolean }, doi: string): ReactNode {
+    if (!result.needsKey) return result.message
+    return (
+      <>
+        {result.message}{" "}
+        <Link className="underline" to={`/review?doi=${encodeURIComponent(doi)}&guide=1`}>
+          {FREE_KEY_GUIDE_TITLE}
+        </Link>
+      </>
+    )
+  }
+
+  async function recheck(issue: IssueThread, targetRecordId: string): Promise<{ message: string; needsKey?: boolean }> {
+    if (!record) return { message: "Load the record first." }
+    const choice = await resolveRecheckChoice({
+      profiles: air.profiles,
+      keys: air.providerSettings.keys,
+      lastRoute: air.settings.lastRoute,
+      webChatProviderIds: webChatProviders.map((provider) => provider.id),
+    })
+    if (!choice.ok) return { message: choice.message, needsKey: true }
     try {
       const sameTarget = targetRecordId === record.id
       const reusable =
@@ -137,7 +160,7 @@ export function PaperPage() {
       })
       if (prepared.target.id === record.id) setDocuments(prepared.documents)
       const searched = publicationPlainText(prepared.documents, prepared.target.description)
-      const related = air.settings.demoMode ? [] : await fetchRelatedSnippets(prepared.target).catch(() => [])
+      const related = await fetchRelatedSnippets(prepared.target).catch(() => [])
       const privateLinks = [
         ...loadSubmissionLinks(record.doi, record.recordVersion),
         ...issue.rounds.flatMap((round) => {
@@ -145,16 +168,13 @@ export function PaperPage() {
           return saved ? [saved] : []
         }),
       ]
-      const draft = await runSourceCheck({
-        ctx: {
-          profile,
-          settings: air.providerSettings,
-          criteria: air.criteria,
-          record: prepared.target,
-          documents: prepared.documents,
-          conversationLinks: privateLinks,
-          demo: air.settings.demoMode || !air.providerSettings.keys[keySlot(profile)],
-        },
+      const draft = await executeRecheck({
+        choice,
+        settings: air.providerSettings,
+        criteria: air.criteria,
+        record: prepared.target,
+        documents: prepared.documents,
+        conversationLinks: privateLinks,
         claim: issue.claim,
         quotedPassage: issue.quotedPassage,
         reason: issue.reason,
@@ -169,7 +189,7 @@ export function PaperPage() {
         {
           id: uid("round"),
           kind: issue.rounds.some((round) => round.kind === "source-check" || round.kind === "recheck") ? "recheck" : "source-check",
-          authorLabel: air.settings.nodeName || profile.name,
+          authorLabel: air.settings.nodeName || recheckAuthorLabel(choice, air.profiles),
           authorRole: "ai-recheck",
           result: settled.result,
           citations: settled.citations,
@@ -181,31 +201,37 @@ export function PaperPage() {
         },
         status,
       )
-      return error ?? `${settled.result.replaceAll("_", " ")}. Checked ${prepared.checkedVersionId}. Status is now ${statusLabel(status)}.`
+      if (!error) {
+        if (choice.kind === "assessor") air.setLastRoute({ kind: "assessor", id: choice.profile.id })
+        else if (choice.kind === "webgpu") air.setLastRoute({ kind: "webgpu", id: "webgpu" })
+        else air.setLastRoute({ kind: "web-chat", id: choice.providerId })
+      }
+      return { message: error ?? `${settled.result.replaceAll("_", " ")}. Checked ${prepared.checkedVersionId} with ${recheckAuthorLabel(choice, air.profiles)}. Status is now ${statusLabel(status)}.` }
     } catch (caught) {
-      return caught instanceof Error ? caught.message : "The check failed."
+      return { message: caught instanceof Error ? caught.message : "The check failed." }
     }
   }
 
   async function recheckOne(issue: IssueThread, targetRecordId: string) {
     setRecheckBusy(true)
     setRecheckNote(null)
-    const message = await recheck(issue, targetRecordId)
-    setRecheckNote(message)
+    const result = await recheck(issue, targetRecordId)
+    setRecheckNote(noteFrom(result, record?.doi ?? ""))
     setRecheckBusy(false)
   }
 
   async function recheckAll(issues: IssueThread[]) {
     if (!record) return
     setRecheckBusy(true)
-    const notes: string[] = []
+    const notes: { message: string; needsKey?: boolean }[] = []
     for (let index = 0; index < issues.length; index += 1) {
       const issue = issues[index]
       if (!issue) continue
       setRecheckNote(`Re-checking ${index + 1} of ${issues.length}.`)
       notes.push(await recheck(issue, record.id))
     }
-    setRecheckNote(notes.join(" "))
+    const needsKey = notes.some((item) => item.needsKey)
+    setRecheckNote(noteFrom({ message: notes.map((item) => item.message).join(" "), needsKey }, record.doi))
     setRecheckBusy(false)
   }
 
@@ -320,7 +346,7 @@ export function PaperPage() {
                 .map((review) => (
                   <details key={review.id} className="rounded-2xl border border-line bg-white/50 p-3">
                     <summary className="cursor-pointer text-sm">
-                      {air.profiles.find((profile) => profile.id === review.assessorId)?.name ?? review.assessorId} · {boardValue(review.report.overallScore, review.report, review.criteriaVersion).toFixed(0)} / 100 ·{" "}
+                      {air.profiles.find((profile) => profile.id === review.assessorId)?.name ?? review.assessorId} · {storedProfileLabel(review.criterionProfile)} · {boardValue(review.report.overallScore, review.report, review.criteriaVersion).toFixed(0)} / 100 ·{" "}
                       {formatWhen(review.createdAt)}
                       {review.customCriteria ? " · unranked" : ""}
                       {review.mock ? " · demo" : ""}
@@ -360,7 +386,7 @@ export function PaperPage() {
                 .map((review) => (
                   <details key={review.id} className="rounded-2xl border border-line bg-white/50 p-3">
                     <summary className="cursor-pointer text-sm">
-                      Human reviewer · {boardValue(review.report.overallScore, review.report, review.criteriaVersion).toFixed(0)} / 100 · {formatWhen(review.createdAt)}
+                      Human reviewer · {storedProfileLabel(review.criterionProfile)} · {boardValue(review.report.overallScore, review.report, review.criteriaVersion).toFixed(0)} / 100 · {formatWhen(review.createdAt)}
                       {review.customCriteria ? " · unranked" : ""}
                     </summary>
                     <div className="mt-3">
@@ -380,7 +406,8 @@ export function PaperPage() {
                           outputHash: review.outputHash,
                           stored: review,
                         }}
-                      />
+                        />
+                      <HumanProfileRetag review={review} />
                     </div>
                   </details>
                 ))}
@@ -420,6 +447,42 @@ export function PaperPage() {
         </>
       )}
     </div>
+  )
+}
+
+function HumanProfileRetag({ review }: { review: StoredReview }) {
+  const air = useAir()
+  const owned = humanReviewOwnedHere(review)
+  const initial = isCriterionProfileId(review.criterionProfile) ? review.criterionProfile : "device"
+  const [profileId, setProfileId] = useState<CriterionProfileId>(initial)
+  const [message, setMessage] = useState<string | null>(null)
+  if (!owned) return null
+  return (
+    <form
+      className="no-print mt-3 rounded-2xl border border-dashed border-line p-3"
+      onSubmit={(event) => {
+        event.preventDefault()
+        void air.retagReview(review, profileId).then((error) => {
+          setMessage(error ?? `Profile saved as ${storedProfileLabel(profileId)}. The scores already written stay as they are. The board weights the criteria in this profile.`)
+        })
+      }}
+    >
+      <label className="block text-xs text-ink-soft" htmlFor={`retag-${review.id}`}>
+        Criterion profile for this human review
+        <select id={`retag-${review.id}`} className={`${fieldClass} mt-1`} value={profileId} onChange={(event) => setProfileId(event.target.value as CriterionProfileId)}>
+          {CRITERION_PROFILES.map((profile) => (
+            <option key={profile.id} value={profile.id}>
+              {profile.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="mt-1 text-xs text-ink-soft">Only the browser that published this human review can change the profile. A missing profile stays labelled {storedProfileLabel(null)} until you choose one.</p>
+      <button type="submit" className={`${btnQuiet} mt-2`}>
+        Save profile
+      </button>
+      {message && <p className="mt-2 text-xs text-ink-soft">{message}</p>}
+    </form>
   )
 }
 
@@ -519,8 +582,8 @@ function IssueCard({
 
   async function respond(kind: "rebuttal" | "counter" | "comment") {
     if (!note.trim()) return
-    if (!canAppendRound(issue)) {
-      setMessage(`This version already has ${ROUND_LIMIT} rounds. A re-check on a later version can start again.`)
+    if (!canAppendRound(issue, { kind })) {
+      setMessage(`This version already has ${ROUND_LIMIT} rounds. A comment does not use one of those slots. A re-check on a later version can start again.`)
       return
     }
     const parsed = chatUrl.trim() ? parseConversationLink(chatUrl, chatNote) : null

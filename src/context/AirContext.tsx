@@ -7,7 +7,8 @@ import { officialCriteria } from "../domain/officialCriteria.ts"
 import { sampleDatabase } from "../domain/samples.ts"
 import type { AirDatabase, AssessorProfile, AuthorClaim, CriteriaSet, IssueRound, IssueStatus, IssueThread, NodeSubmission, ProviderSettings, StoredReview } from "../domain/types.ts"
 import { emptyDatabase } from "../domain/types.ts"
-import { openBackend, publishClaim, publishIssues, publishNode, publishReview, saveIssue, type BackendMode } from "../services/backend.ts"
+import { openBackend, publishClaim, publishIssues, publishNode, publishReview, retagHumanReviewProfile, saveIssue, LOCAL_PROFILE_RETAG_NOTE, type BackendMode } from "../services/backend.ts"
+import type { LastRoute } from "../services/recheckRoute.ts"
 import { mergeDatabases } from "../services/merge.ts"
 import { loadKeys, loadLocalDatabase, loadOverlay, loadSettings, saveKeys, saveSettings, toProviderSettings, type PersistedSettings } from "../services/storage.ts"
 
@@ -31,6 +32,8 @@ interface AirContextValue {
   setNodeName: (name: string) => void
   setOrcid: (orcid: string) => void
   setAuthorName: (name: string) => void
+  setLastRoute: (route: LastRoute) => void
+  retagReview: (review: StoredReview, profileId: string) => Promise<string | null>
   keysOpen: boolean
   setKeysOpen: (open: boolean) => void
   publishReading: (review: StoredReview) => Promise<string | null>
@@ -181,6 +184,22 @@ export function AirProvider({ children }: { children: ReactNode }) {
     [bump, mode],
   )
 
+  const retagReview = useCallback(
+    async (review: StoredReview, profileId: string) => {
+      const error = await retagHumanReviewProfile(mode, review, profileId)
+      const saved = !error || error === LOCAL_PROFILE_RETAG_NOTE
+      if (saved && mode === "supabase" && !review.mock && !review.sample) {
+        setRemote((current) => ({
+          ...current,
+          reviews: current.reviews.map((item) => (item.id === review.id ? { ...item, criterionProfile: profileId } : item)),
+        }))
+      }
+      if (saved) bump()
+      return error
+    },
+    [bump, mode],
+  )
+
   const claimRecord = useCallback(
     async (claim: AuthorClaim) => {
       const error = await publishClaim(mode, claim)
@@ -217,6 +236,8 @@ export function AirProvider({ children }: { children: ReactNode }) {
     setNodeName: (nodeName) => setSettings((current) => ({ ...current, nodeName })),
     setOrcid: (orcid) => setSettings((current) => ({ ...current, orcid })),
     setAuthorName: (authorName) => setSettings((current) => ({ ...current, authorName })),
+    setLastRoute: (lastRoute) => setSettings((current) => ({ ...current, lastRoute })),
+    retagReview,
     keysOpen,
     setKeysOpen,
     publishReading,

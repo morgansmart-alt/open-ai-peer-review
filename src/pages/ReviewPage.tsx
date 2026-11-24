@@ -38,7 +38,8 @@ import {
   type ZenodoRecord,
 } from "../services/zenodo.ts"
 import { isPublishedDoi, parseAnyRef, resolvePublishedDoi } from "../services/works.ts"
-import { coverageAllowsPublish } from "../services/textTools.ts"
+import { coverageAllowsPublish, OCR_OR_TEXT_SUGGESTION, coveragePhrase } from "../services/textTools.ts"
+import { estimateReviewCalls, reviewCallEstimateMessage } from "../services/reviewCalls.ts"
 
 interface PanelResult {
   assessorId: string
@@ -71,9 +72,26 @@ export function ReviewPage() {
   const [criterionProfile, setCriterionProfile] = useState<CriterionProfileId>("device")
   const [includeCodeData, setIncludeCodeData] = useState(true)
   const [guideOpen, setGuideOpen] = useState(params.get("guide") === "1")
+  const [quotaAck, setQuotaAck] = useState<string | null>(null)
   const guideRef = useRef<HTMLDivElement>(null)
   const acknowledged = publishNotices.every((notice) => acks[notice.id])
   const criteria = readingCriteria(air.criteria, criterionProfile, air.customCriteria)
+  const callEstimate = useMemo(() => {
+    const documents = docs.filter((doc) => selected.includes(doc.filename) && doc.text.trim())
+    if (documents.length === 0 || air.settings.demoMode) return null
+    let worst: { level: "info" | "warn"; text: string; calls: number } | null = null
+    for (const assessorId of assessors) {
+      const profile = air.profiles.find((item) => item.id === assessorId)
+      if (!profile) continue
+      const estimate = estimateReviewCalls(documents, profile.provider)
+      const message = reviewCallEstimateMessage(estimate.calls)
+      if (message.level === "none") continue
+      if (!worst || message.level === "warn" || (worst.level !== "warn" && estimate.calls > worst.calls)) {
+        worst = { level: message.level, text: message.text, calls: estimate.calls }
+      }
+    }
+    return worst
+  }, [air.profiles, air.settings.demoMode, assessors, docs, selected])
 
   useEffect(() => {
     const initial = params.get("doi")
@@ -204,6 +222,8 @@ export function ReviewPage() {
     }
     setBusy(true)
     setError(null)
+    if (kind === "browser") air.setLastRoute({ kind: "webgpu", id: "webgpu" })
+    else if (profile) air.setLastRoute({ kind: "assessor", id: profile.id })
     saveSubmissionLinks(record.doi, record.recordVersion, collected.links)
     try {
     const extracted = await ensureDocs()
@@ -269,6 +289,11 @@ export function ReviewPage() {
 
   async function run(demo: boolean) {
     if (!record) return
+    if (!demo && callEstimate?.level === "warn" && quotaAck !== callEstimate.text) {
+      setQuotaAck(callEstimate.text)
+      setError(`${callEstimate.text} Press the in-depth review button again to run it anyway.`)
+      return
+    }
     if (!demo) {
       const missing = air.profiles.filter((profile) => assessors.includes(profile.id) && !air.providerSettings.keys[keySlot(profile)] && !air.providerSettings.keys[profile.provider])
       if (missing.length) {
@@ -281,6 +306,8 @@ export function ReviewPage() {
       setError("Choose at least one assessor.")
       return
     }
+    const remembered = assessors[0]
+    if (!demo && remembered) air.setLastRoute({ kind: "assessor", id: remembered })
     const collected = collectConversationLinks(linkDrafts)
     if (!collected.ok) {
       setError(collected.error)
@@ -366,6 +393,7 @@ export function ReviewPage() {
     setBusy(true)
     setError(null)
     setPublished(false)
+    air.setLastRoute({ kind: "web-chat", id: providerId })
     try {
       const extracted = await ensureDocs()
       const documents = extracted.filter((doc) => selected.includes(doc.filename) && doc.text.trim())
@@ -715,7 +743,7 @@ export function ReviewPage() {
                 </select>
               </label>
               <p className="mt-1 text-xs text-ink-soft">
-                {CRITERION_PROFILES.find((profile) => profile.id === criterionProfile)?.summary} Suggested from the record’s type and keywords. You can change it before the reading. Estimated project value stays hidden unless this is a device or funding proposal.
+                {CRITERION_PROFILES.find((profile) => profile.id === criterionProfile)?.summary} Suggested from the title, description, keywords, and resource type. You can change it before the reading. Estimated project value stays hidden unless this is a device or funding proposal.
               </p>
               <ul className="mt-3 space-y-2">
                 {air.profiles.map((profile) => {
@@ -742,6 +770,12 @@ export function ReviewPage() {
                   )
                 })}
               </ul>
+              {callEstimate && (
+                <p className={`mt-3 text-sm ${callEstimate.level === "warn" ? "text-gold" : "text-ink-soft"}`} role={callEstimate.level === "warn" ? "alert" : "status"}>
+                  {callEstimate.text}
+                  {quotaAck === callEstimate.text && callEstimate.level === "warn" ? " Press the in-depth review button again to run it anyway." : ""}
+                </p>
+              )}
               <div className="mt-4 flex flex-wrap gap-2">
                 <button type="button" data-testid="indepth-review" className={btnPrimary} disabled={busy} onClick={() => void run(air.settings.demoMode)}>
                   {air.settings.demoMode ? "Run demo readings" : "In-depth review with your key"}
@@ -805,7 +839,10 @@ export function ReviewPage() {
             {!acknowledged && <p className="mt-2 text-sm text-ink-soft">Tick the four notices in step 1 before a reading can join the ranking.</p>}
             {record && !isPublishedDoi(record.doi) && <p className="mt-2 text-sm text-ink-soft">Publishing to the leaderboard needs a published DOI. This reading can still run in this browser.</p>}
             {results.some((result) => result.report && !coverageAllowsPublish(result.report.reading)) && (
-              <p className="mt-2 text-sm text-ink-soft">The ranked board needs full coverage, or at least 90% of the pages read.</p>
+              <p className="mt-2 text-sm text-ink-soft">
+                The ranked board needs full coverage, or at least 90% of the pages read.
+                {results.some((result) => result.report?.reading?.coverageLabel) ? ` ${OCR_OR_TEXT_SUGGESTION} Coverage: ${results.map((result) => coveragePhrase(result.report?.reading)).filter(Boolean).join("; ")}.` : ""}
+              </p>
             )}
             <button
               type="button"
