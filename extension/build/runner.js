@@ -3247,17 +3247,20 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
   function normaliseComposerText(value) {
     return value.replace(/\u00a0/g, " ").replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{2,}/g, "\n").replace(/[ \t]{2,}/g, " ").trim();
   }
+  function foldComposerText(value) {
+    return value.replace(/\u00a0/g, " ").replace(/[\u2018\u2019\u2032]/g, "'").replace(/[\u201C\u201D\u2033]/g, '"').replace(/\u2026/g, "...").replace(/\s+/g, "");
+  }
   function composerTextMatches(actual, intended) {
     if (!intended.trim()) return !actual.trim();
-    const left = normaliseComposerText(actual);
-    const right = normaliseComposerText(intended);
+    const left = foldComposerText(actual);
+    const right = foldComposerText(intended);
+    if (!right) return !left;
     if (left === right) return true;
-    if (left.length < 40 || right.length < 40) return false;
-    const start = right.slice(0, Math.min(48, right.length));
-    const end = right.slice(-Math.min(48, right.length));
+    if (right.length < 40 || left.length < 40) return false;
+    const head = right.slice(0, Math.min(200, right.length));
+    const tail = right.slice(-Math.min(200, right.length));
     const ratio = Math.min(left.length, right.length) / Math.max(left.length, right.length);
-    if (left.startsWith(start) && ratio >= 0.98) return true;
-    return left.startsWith(start) && left.endsWith(end) && ratio >= 0.95;
+    return left.includes(head) && left.includes(tail) && ratio >= 0.98;
   }
   function messageMatches(actual, intended) {
     return composerTextMatches(actual, intended);
@@ -3340,6 +3343,9 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       if (messageMatches(actual, text)) return { ok: true, chunk: text, method: placed.method, actual };
       await wait.sleep(pollMs);
     }
+    actual = composerText(el);
+    if (messageMatches(actual, text)) return { ok: true, chunk: text, method: placed.method, actual };
+    await wait.sleep(1500);
     actual = composerText(el);
     if (messageMatches(actual, text)) return { ok: true, chunk: text, method: placed.method, actual };
     const prefix = heldPrefix(actual, text);
@@ -3796,7 +3802,12 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       const focused = await focusComposer(composer, hooks);
       note(hooks, label, focused ? "ready" : "waiting", focused ? `Composer focused. Inserting ${pending.length} characters.` : `Composer was not focused. Inserting ${pending.length} characters and re-reading the box.`);
       const placed = await confirmComposerText(composer, pending, { sleep: (ms) => hooks.sleep(ms), pollMs: Math.min(hooks.pollMs ?? 50, 50), timeoutMs: 2e3 });
-      note(hooks, label, placed.ok ? "ready" : "error", `Insert method ${placed.method}. Box holds ${placed.actual.length} characters.`);
+      note(
+        hooks,
+        label,
+        placed.ok ? "ready" : "error",
+        `Insert method ${placed.method}. Box holds ${placed.actual.length} raw, ${foldComposerText(placed.actual).length} normalised. Message has ${pending.length} raw, ${foldComposerText(pending).length} normalised.`
+      );
       if (!placed.ok) {
         throw new TurnError(
           "insert-miss",
