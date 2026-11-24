@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
 import { buildRanking } from "../../domain/ranking.ts"
 import { ladderTier } from "../../domain/fidelity.ts"
-import { decideWebChatSubmission, submissionFromReview, validateWebChatSubmission, WEB_CHAT_SUBMIT_URL } from "./submission.ts"
+import { decideWebChatSubmission, submissionFromReview, toSubmissionRow, validateWebChatSubmission, WEB_CHAT_SUBMIT_URL } from "./submission.ts"
 import { WEB_CHAT_SOURCE, UNCALIBRATED_WEB_CHAT_TIER } from "./protocol.ts"
 import type { StoredReview } from "../../domain/types.ts"
 
@@ -49,6 +49,36 @@ describe("web-chat submission", () => {
     if (leaked.ok) expect(JSON.stringify(leaked.submission)).not.toContain("SECRET")
     const extra = validateWebChatSubmission({ ...payload(70, "revise"), instructions: "the whole prompt" })
     expect(extra.ok).toBe(false)
+    const decimal = validateWebChatSubmission(payload(70.25, "revise"))
+    expect(decimal.ok).toBe(true)
+    if (decimal.ok) {
+      expect(decimal.submission.overallScore).toBe(70.25)
+      expect(toSubmissionRow(decimal.submission).blind_score).toBe(70.25)
+    }
+    const rounded = validateWebChatSubmission(payload(70.256, "revise"))
+    expect(rounded.ok).toBe(true)
+    if (rounded.ok) expect(rounded.submission.overallScore).toBe(70.26)
+    const defended = validateWebChatSubmission(payload(70, "revise", {
+      defended: {
+        label: "after author defence",
+        overallScore: 70.5,
+        recommendation: "revise",
+        summary: payload(70, "revise").summary,
+        scores: scores(70),
+      },
+    }))
+    expect(defended.ok).toBe(true)
+    if (defended.ok) {
+      expect(defended.submission.defended?.overallScore).toBe(70.5)
+      expect(toSubmissionRow(defended.submission).defended_score).toBe(70.5)
+    }
+    const fraction = validateWebChatSubmission({
+      ...payload(70, "revise"),
+      scores: scores(70).map((item, index) => (index === 0 ? { ...item, score: 70.5 } : item)),
+    })
+    expect(fraction.ok).toBe(false)
+    const huge = validateWebChatSubmission(payload(140.2, "accept"))
+    expect(huge.ok).toBe(false)
   })
 
   it("rate-limits a burst and treats the same paper, site, and model as one row", () => {

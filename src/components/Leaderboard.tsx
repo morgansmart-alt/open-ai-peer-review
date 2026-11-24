@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { Link } from "react-router-dom"
 import { assessorById } from "../domain/assessors.ts"
-import { categoryLabel, isBonusCriterion } from "../domain/criteria.ts"
+import { categoryLabel, formatScore, isBonusCriterion } from "../domain/criteria.ts"
 import { boardValue, criteriaForReview, rankedBoardScore, scoringMismatch } from "../domain/scoring.ts"
 import { statusLabel } from "../domain/issues.ts"
 import { buildRanking, listRankingMethods, sortRows, type RankRow } from "../domain/ranking.ts"
@@ -9,7 +9,7 @@ import { scoreLineage, type LineagePoint } from "../domain/versions.ts"
 import { officialCriteria } from "../domain/officialCriteria.ts"
 import { storedProfileLabel } from "../domain/profiles.ts"
 import { WEB_CHAT_LABEL } from "../services/webChat/protocol.ts"
-import { boardErrorMessage, emptyBoardMessage, filterBoardRows, type BoardSlice } from "../browse/boardQuery.ts"
+import { boardErrorMessage, emptyBoardMessage, filterBoardRows, hideSamplesWhenLive, type BoardSlice } from "../browse/boardQuery.ts"
 import { airFeedbackExport } from "../services/airFeedback.ts"
 import { downloadText } from "../services/markdown.ts"
 import { useAir } from "../context/AirContext.tsx"
@@ -24,7 +24,15 @@ export function Leaderboard() {
   const [query, setQuery] = useState("")
   const [slice, setSlice] = useState<BoardSlice>("all")
   const [hideSamples, setHideSamples] = useState(false)
+  const [samplesTouched, setSamplesTouched] = useState(false)
   const [showWebChat, setShowWebChat] = useState(true)
+  const liveRows = air.ready && air.mode === "supabase"
+    ? air.db.reviews.filter((review) => !review.sample && !review.mock).length + (air.db.webChat ?? []).filter((review) => !review.sample && !review.mock).length
+    : 0
+  useEffect(() => {
+    const next = hideSamplesWhenLive(liveRows, samplesTouched, hideSamples)
+    if (next !== hideSamples) setHideSamples(next)
+  }, [hideSamples, liveRows, samplesTouched])
   const [openKey, setOpenKey] = useState<string | null>(null)
   const [communityCounts, setCommunityCounts] = useState<Record<string, number> | null>(null)
   useEffect(() => {
@@ -123,7 +131,14 @@ export function Leaderboard() {
           </select>
         </label>
         <label className="flex min-h-10 items-center gap-2 text-sm text-ink">
-          <input type="checkbox" checked={hideSamples} onChange={(event) => setHideSamples(event.target.checked)} />
+          <input
+            type="checkbox"
+            checked={hideSamples}
+            onChange={(event) => {
+              setSamplesTouched(true)
+              setHideSamples(event.target.checked)
+            }}
+          />
           Hide samples and demos
         </label>
         <label className="flex min-h-10 items-center gap-2 text-sm text-ink">
@@ -137,6 +152,7 @@ export function Leaderboard() {
             onClick={() => {
               setQuery("")
               setSlice("all")
+              setSamplesTouched(true)
               setHideSamples(false)
             }}
           >
@@ -164,6 +180,7 @@ export function Leaderboard() {
             onClick={() => {
               setQuery("")
               setSlice("all")
+              setSamplesTouched(true)
               setHideSamples(false)
             }}
           >
@@ -360,8 +377,8 @@ function WebChatBoard() {
           <li key={review.id} className="rounded-2xl border border-line px-3 py-2 text-sm">
             <span className="mr-2 rounded-full bg-gold/15 px-2 py-0.5 text-[11px] text-gold">uncalibrated web-chat</span>
             {review.title}
-            {review.doi ? ` · ${review.doi}` : ""} · blind {boardValue(review.report.overallScore, review.report, review.criteriaVersion).toFixed(0)} / 100
-            {review.defended ? ` · after author defence ${review.defended.overallScore}` : ""} · {storedProfileLabel(review.criterionProfile)} · {review.modelId}
+            {review.doi ? ` · ${review.doi}` : ""} · blind {formatScore(boardValue(review.report.overallScore, review.report, review.criteriaVersion))} / 100
+            {review.defended ? ` · after author defence ${formatScore(review.defended.overallScore)}` : ""} · {storedProfileLabel(review.criterionProfile)} · {review.modelId}
           </li>
         ))}
       </ul>
@@ -419,7 +436,7 @@ function Expanded({ row }: { row: RankRow }) {
             return (
             <details key={review.id}>
               <summary className="cursor-pointer text-sm">
-                {assessorById(review.assessorId, air.profiles)?.name ?? review.assessorId} · {shown.toFixed(0)} / 100 ·{" "}
+                {assessorById(review.assessorId, air.profiles)?.name ?? review.assessorId} · {formatScore(shown)} / 100 ·{" "}
                 {categoryLabel(criteriaForReview(review), check.shownRecommendation)}
                 {check.verdictNote ? ` · ${check.verdictNote}` : ""}
                 {check.mismatch ? " · Scoring mismatch, needs re-check" : ""}
@@ -433,7 +450,7 @@ function Expanded({ row }: { row: RankRow }) {
       <div className="space-y-3 text-sm">
         <p title={row.fidelity.label}>{row.fidelity.label}</p>
         <p className="text-ink-soft">
-          Rank score {row.panelRankScore?.toFixed(0) ?? "—"} from median {row.panelMedian?.toFixed(0) ?? "—"} / 100 across {row.reviewCount} reading
+          Rank score {row.panelRankScore == null ? "—" : formatScore(row.panelRankScore)} from median {row.panelMedian == null ? "—" : formatScore(row.panelMedian)} / 100 across {row.reviewCount} reading
           {row.reviewCount === 1 ? "" : "s"}. Criteria {row.criteriaVersions.join(", ") || "unlabelled"}.
           {row.physicsClass ? ` Physics class ${row.physicsClass}.` : ""}
           {row.issuePenalty > 0 ? ` Open issues nudge the order by ${row.issuePenalty.toFixed(2)}.` : " Addressed issues do not change the order."}
@@ -442,8 +459,8 @@ function Expanded({ row }: { row: RankRow }) {
           {Object.entries(row.subscores).map(([id, cell]) => (
             <li key={id}>
               {isBonusCriterion(id)
-                ? `Global goals: ${cell.median === null ? "—" : cell.median.toFixed(0)} (bonus, not counted in overall)`
-                : `${id}: ${cell.median === null ? "—" : cell.median.toFixed(1)}`}
+                ? `Global goals: ${cell.median === null ? "—" : formatScore(cell.median)} (bonus, not counted in overall)`
+                : `${id}: ${cell.median === null ? "—" : formatScore(cell.median)}`}
             </li>
           ))}
         </ul>
@@ -454,7 +471,7 @@ function Expanded({ row }: { row: RankRow }) {
           <ul className="mt-1 space-y-1">
             {row.humanReviews.map((review) => (
               <li key={review.id}>
-                Human reviewer · {(scoringMismatch(review).internal ?? boardValue(review.report.overallScore, review.report, review.criteriaVersion)).toFixed(0)} / 100
+                Human reviewer · {formatScore(scoringMismatch(review).internal ?? boardValue(review.report.overallScore, review.report, review.criteriaVersion))} / 100
                 {scoringMismatch(review).verdictNote ? ` · ${scoringMismatch(review).verdictNote}` : ""}
                 {scoringMismatch(review).mismatch ? " · Scoring mismatch, needs re-check" : ""}
               </li>

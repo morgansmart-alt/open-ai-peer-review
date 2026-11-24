@@ -26,6 +26,12 @@ export function rowMatchesSlice(row: BoardQueryRow, slice: BoardSlice): boolean 
   return true
 }
 
+/** Live Supabase rows should be the board. Samples stay available behind the existing toggle. */
+export function hideSamplesWhenLive(liveRows: number, userChose: boolean, hidden: boolean): boolean {
+  if (userChose) return hidden
+  return liveRows > 0
+}
+
 export function filterBoardRows<T extends BoardQueryRow>(rows: T[], query: string, slice: BoardSlice, hideSamples: boolean): T[] {
   return rows.filter((row) => {
     if (hideSamples && row.demo) return false

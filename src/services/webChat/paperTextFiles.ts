@@ -30,6 +30,40 @@ export function collectPaperIds(rows: readonly unknown[]): string[] {
   return [...ids].sort()
 }
 
+/** Board ids plus the curated open-access list. Sample ids never qualify. */
+export function mergePaperIds(board: readonly string[], curated: readonly string[]): string[] {
+  const ids = new Set<string>()
+  for (const value of [...curated, ...board]) {
+    const id = String(value ?? "").trim()
+    if (/^\d{5,}$/.test(id)) ids.add(id)
+  }
+  return [...ids].sort()
+}
+
+export function isOpenFileAccess(access: string): boolean {
+  const value = access.trim().toLowerCase()
+  return value === "" || value === "open" || value === "public"
+}
+
+/** Open text and extracted PDF bodies, clipped to the static-file cap. Closed files contribute nothing. */
+export function documentsForOpenRecord(
+  accessFiles: string,
+  files: readonly { key: string; text: string }[],
+  cap: number,
+): { filename: string; text: string }[] {
+  if (!isOpenFileAccess(accessFiles)) return []
+  const documents: { filename: string; text: string }[] = []
+  let used = 0
+  for (const file of files) {
+    const text = file.text.trim()
+    if (!text || used >= cap) continue
+    const slice = text.slice(0, cap - used)
+    used += slice.length
+    documents.push({ filename: file.key, text: slice })
+  }
+  return documents
+}
+
 export function renderStaticPaperText(record: {
   id: string
   title?: string

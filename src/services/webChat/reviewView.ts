@@ -292,7 +292,7 @@ export function renderReviewApp(root: HTMLElement, model: ReviewModel, actions: 
     card.id = "result"
     el(card, "p", model.result.label, "label")
     el(card, "h2", model.result.title)
-    el(card, "p", `Blind score ${Math.round(model.result.overall)} out of 100 · ${model.result.recommendation}`, "score")
+    el(card, "p", `Blind score ${model.result.overall.toFixed(2)} out of 100 · ${model.result.recommendation}`, "score")
     if (model.result.roundsLabel) {
       const rounds = el(card, "p", model.result.roundsLabel, "score")
       rounds.id = "defence-round-count"
@@ -302,7 +302,7 @@ export function renderReviewApp(root: HTMLElement, model: ReviewModel, actions: 
       line.id = "chat-model"
     }
     if (model.result.defendedOverall != null) {
-      const after = el(card, "p", `${model.result.defendedLabel || "after author defence"} ${Math.round(model.result.defendedOverall)} out of 100`, "score")
+      const after = el(card, "p", `${model.result.defendedLabel || "after author defence"} ${model.result.defendedOverall.toFixed(2)} out of 100`, "score")
       after.id = "after-defence"
     }
     if (model.result.sheetNote) {

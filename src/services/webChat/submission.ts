@@ -81,6 +81,15 @@ function clip(value: unknown, max: number): string {
   return typeof value === "string" ? value.trim().slice(0, max) : ""
 }
 
+/** An overall from round2: finite, on the 0–100 board, stored at two decimal places. Criterion scores stay integers. */
+function boardOverall(value: unknown): number | null {
+  const score = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN
+  if (!Number.isFinite(score)) return null
+  const rounded = Math.round(score * 100) / 100
+  if (rounded < 0 || rounded > 100) return null
+  return rounded
+}
+
 export function submissionFromReview(review: StoredReview, site: string): { ok: true; submission: WebChatSubmission } | { ok: false; error: string } {
   const criteria = criteriaForReview(review)
   const checkScores = review.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score }))
@@ -168,8 +177,8 @@ export function validateWebChatSubmission(
   if (/https?:\/\/(?:share\.google|chatgpt\.com\/share|claude\.ai\/share|grok\.com\/share)/i.test(summary)) {
     return { ok: false, error: "A private chat link was still in the summary." }
   }
-  const overallScore = Number(input.overallScore)
-  if (!Number.isInteger(overallScore)) return { ok: false, error: "The overall score must be an integer." }
+  const overallScore = boardOverall(input.overallScore)
+  if (overallScore === null) return { ok: false, error: "The overall score must be a number from 0 to 100." }
   const recommendation = clip(input.recommendation, 80)
   const described = describeScoring({ scores: ready, statedOverall: overallScore, recommendation, criteria })
   if (described.scoringCheck.mismatch) {
@@ -227,8 +236,8 @@ function readDefended(
   if (/https?:\/\/(?:share\.google|chatgpt\.com\/share|claude\.ai\/share|grok\.com\/share)/i.test(summary)) {
     return { ok: false, error: "A private chat link was still in the defended summary." }
   }
-  const overallScore = Number(input.overallScore)
-  if (!Number.isInteger(overallScore)) return { ok: false, error: "The defended score must be an integer." }
+  const overallScore = boardOverall(input.overallScore)
+  if (overallScore === null) return { ok: false, error: "The defended score must be a number from 0 to 100." }
   const recommendation = clip(input.recommendation, 80)
   const described = describeScoring({ scores, statedOverall: overallScore, recommendation, criteria })
   if (described.scoringCheck.mismatch) return { ok: false, error: "The defended score clashes with its own weighted total, so it was not sent." }

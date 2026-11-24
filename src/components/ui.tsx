@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import { formatScore } from "../domain/criteria.ts"
 
 export function ExternalLink({ href, className, children }: { href: string; className?: string; children: ReactNode }) {
   return (
@@ -24,7 +25,7 @@ export function ScoreValue({ value, title }: { value: number | null; title?: str
   if (value === null) return <span className="text-ink-soft">—</span>
   return (
     <span title={title} className="font-medium tabular-nums text-ink">
-      {value.toFixed(1)}
+      {formatScore(value)}
     </span>
   )
 }

@@ -7,7 +7,8 @@ import { acceptWebChatResult, draftWebChatReview } from "./accept.ts"
 import { planDelivery } from "./deliver.ts"
 import { buildWebChatPacket } from "./packet.ts"
 import { parseModelJson, settleChatJson } from "../jsonText.ts"
-import { collectPaperIds, renderStaticPaperText } from "./paperTextFiles.ts"
+import curatedIds from "../../../paper-text-ids.json" with { type: "json" }
+import { collectPaperIds, documentsForOpenRecord, isOpenFileAccess, mergePaperIds, renderStaticPaperText } from "./paperTextFiles.ts"
 import {
   choosePaperTextUrl,
   couldNotReadPaper,
@@ -216,6 +217,17 @@ describe("json repair and the text page check", () => {
       { recordId: "sample-fog" },
       { paper: { url: "https://zenodo.org/records/611843" } },
     ])).toEqual(["18916931", "22826", "611843"])
+    expect(curatedIds).toEqual(["18316375", "3554320", "17651481", "18706746", "19508474"])
+    expect(mergePaperIds(["22826", "sample-fog"], curatedIds)).toEqual(["17651481", "18316375", "18706746", "19508474", "22826", "3554320"])
+    expect(isOpenFileAccess("open")).toBe(true)
+    expect(isOpenFileAccess("restricted")).toBe(false)
+    expect(documentsForOpenRecord("open", [{ key: "paper.pdf", text: "extracted page from the open pdf" }], 18)).toEqual([
+      { filename: "paper.pdf", text: "extracted page fro" },
+    ])
+    expect(documentsForOpenRecord("closed", [{ key: "paper.pdf", text: "not public" }], 100)).toEqual([])
+    const fallback = renderStaticPaperText({ id: "18316375", title: "Open note", description: "The abstract remains when no file text is extracted." })
+    expect(fallback).toContain("The abstract remains")
+    expect(fallback).toContain("https://zenodo.org/records/18316375")
     const file = renderStaticPaperText({
       id: "22826",
       title: "CODATA",

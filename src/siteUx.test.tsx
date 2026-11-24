@@ -2,7 +2,8 @@ import type { ReactNode } from "react"
 import { describe, expect, it } from "vitest"
 import { renderToStaticMarkup } from "react-dom/server"
 import { MemoryRouter } from "react-router-dom"
-import { boardErrorMessage, emptyBoardMessage, filterBoardRows, type BoardQueryRow } from "./browse/boardQuery.ts"
+import { boardErrorMessage, emptyBoardMessage, filterBoardRows, hideSamplesWhenLive, type BoardQueryRow } from "./browse/boardQuery.ts"
+import { formatScore } from "./domain/criteria.ts"
 import { kindLabel } from "./components/commentLabel.ts"
 import { CommentList } from "./components/CommentList.tsx"
 import { HowItWorks } from "./components/HowItWorks.tsx"
@@ -113,6 +114,11 @@ describe("board query", () => {
     expect(filterBoardRows(rows, "", "open-issues", false).map((item) => item.title)).toEqual(["Fog nets"])
     expect(filterBoardRows(rows, "", "human", false)).toHaveLength(1)
     expect(filterBoardRows(rows, "", "samples", true)).toHaveLength(0)
+    expect(hideSamplesWhenLive(3, false, false)).toBe(true)
+    expect(hideSamplesWhenLive(0, false, false)).toBe(false)
+    expect(hideSamplesWhenLive(3, true, false)).toBe(false)
+    expect(formatScore(84.2)).toBe("84.20")
+    expect(formatScore(84)).toBe("84.00")
     expect(filterBoardRows(rows, "10.5281/zenodo.2", "all", false)).toHaveLength(1)
   })
 

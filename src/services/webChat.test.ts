@@ -485,7 +485,8 @@ describe("extension panel", () => {
       actions(),
     )
     expect(app.querySelector("#defence-round-count")?.textContent).toBe("Defence rounds 2/2")
-    expect(app.querySelector("#after-defence")?.textContent).toContain("84")
+    expect(app.querySelector("#after-defence")?.textContent).toContain("84.00")
+    expect(app.textContent).toContain("Blind score 84.00 out of 100")
     expect(app.querySelector("#status")?.textContent).toContain("after defence 84")
     expect(app.querySelector("#defence-sheet")?.textContent).toContain("full score sheet")
 

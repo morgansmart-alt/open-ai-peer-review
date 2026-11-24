@@ -26,7 +26,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Write public paper text
+      - name: Write public paper text from the board and the allow list
         env:
           VITE_SUPABASE_URL: https://lotswxboafsenmszijpf.supabase.co
           VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvdHN3eGJvYWZzZW5tc3ppanBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUxMTM0MDEsImV4cCI6MjExMDY4OTQwMX0.K0zYMdv3vkBMXiL4PePWemwodcDactb8rcZJc2cmi5w
