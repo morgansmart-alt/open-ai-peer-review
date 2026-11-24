@@ -621,22 +621,32 @@ function dispatchInput(el: Element, text: string): void {
   }
 }
 
-/** Editors collapse blank lines and runs of spaces. Compare that form, not the raw character count. */
+/** Keep single newlines. Used when comparing conversation text, not the composer. */
 export function normaliseComposerText(value: string): string {
   return value.replace(/\u00a0/g, " ").replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{2,}/g, "\n").replace(/[ \t]{2,}/g, " ").trim()
 }
 
+/** Drop every whitespace difference, and treat curly quotes and ellipsis as plain characters. */
+export function foldComposerText(value: string): string {
+  return value
+    .replace(/\u00a0/g, " ")
+    .replace(/[\u2018\u2019\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u2033]/g, '"')
+    .replace(/\u2026/g, "...")
+    .replace(/\s+/g, "")
+}
+
 export function composerTextMatches(actual: string, intended: string): boolean {
   if (!intended.trim()) return !actual.trim()
-  const left = normaliseComposerText(actual)
-  const right = normaliseComposerText(intended)
+  const left = foldComposerText(actual)
+  const right = foldComposerText(intended)
+  if (!right) return !left
   if (left === right) return true
-  if (left.length < 40 || right.length < 40) return false
-  const start = right.slice(0, Math.min(48, right.length))
-  const end = right.slice(-Math.min(48, right.length))
+  if (right.length < 40 || left.length < 40) return false
+  const head = right.slice(0, Math.min(200, right.length))
+  const tail = right.slice(-Math.min(200, right.length))
   const ratio = Math.min(left.length, right.length) / Math.max(left.length, right.length)
-  if (left.startsWith(start) && ratio >= 0.98) return true
-  return left.startsWith(start) && left.endsWith(end) && ratio >= 0.95
+  return left.includes(head) && left.includes(tail) && ratio >= 0.98
 }
 
 function messageMatches(actual: string, intended: string): boolean {
@@ -756,6 +766,9 @@ export async function confirmComposerText(
     if (messageMatches(actual, text)) return { ok: true, chunk: text, method: placed.method, actual }
     await wait.sleep(pollMs)
   }
+  actual = composerText(el)
+  if (messageMatches(actual, text)) return { ok: true, chunk: text, method: placed.method, actual }
+  await wait.sleep(1_500)
   actual = composerText(el)
   if (messageMatches(actual, text)) return { ok: true, chunk: text, method: placed.method, actual }
   const prefix = heldPrefix(actual, text)

@@ -912,11 +912,16 @@ describe("live chat composers", () => {
     expect(picked).not.toContain("UNIQUE RUBRIC SLICE")
   })
 
-  it("accepts a defence readback that is missing only its last few characters", () => {
-    const full = `Author defence, round 1 of 2. ${"Answer the criticism about the tabulated value. ".repeat(12)}(Mohr, Newell).`
-    const readback = full.slice(0, -4)
-    expect(readback.endsWith("(Mohr, Newe")).toBe(true)
-    expect(composerTextMatches(readback, full)).toBe(true)
+  it("accepts a 533-character defence when grok.com drops six newlines", () => {
+    const chunks = ["Author defence, round 1 of 2.", "A".repeat(80), "B".repeat(80), "C".repeat(80), "D".repeat(80), "E".repeat(80), "least-squares adjustment of all relevant"]
+    let message = chunks.join("\n")
+    message += "q".repeat(533 - message.length)
+    const readback = message.replaceAll("\n", "")
+    expect(message.length).toBe(533)
+    expect(readback.length).toBe(527)
+    expect(composerTextMatches(readback, message)).toBe(true)
+    const cut = message.slice(0, 120) + message.slice(220)
+    expect(composerTextMatches(cut, message)).toBe(false)
   })
 
   it("sends the prefix a composer kept instead of abandoning a cut-off defence", () => {

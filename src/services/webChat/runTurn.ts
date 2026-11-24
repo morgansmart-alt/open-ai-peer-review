@@ -20,6 +20,7 @@ import {
   addedText,
   chooseReplyBlock,
   confirmComposerText,
+  foldComposerText,
   liveTurnText,
   messageBlocks,
   replyAfter,
@@ -359,7 +360,12 @@ async function sendComposerText(
     const focused = await focusComposer(composer, hooks)
     note(hooks, label, focused ? "ready" : "waiting", focused ? `Composer focused. Inserting ${pending.length} characters.` : `Composer was not focused. Inserting ${pending.length} characters and re-reading the box.`)
     const placed = await confirmComposerText(composer, pending, { sleep: (ms) => hooks.sleep(ms), pollMs: Math.min(hooks.pollMs ?? 50, 50), timeoutMs: 2_000 })
-    note(hooks, label, placed.ok ? "ready" : "error", `Insert method ${placed.method}. Box holds ${placed.actual.length} characters.`)
+    note(
+      hooks,
+      label,
+      placed.ok ? "ready" : "error",
+      `Insert method ${placed.method}. Box holds ${placed.actual.length} raw, ${foldComposerText(placed.actual).length} normalised. Message has ${pending.length} raw, ${foldComposerText(pending).length} normalised.`,
+    )
     if (!placed.ok) {
       throw new TurnError(
         "insert-miss",
