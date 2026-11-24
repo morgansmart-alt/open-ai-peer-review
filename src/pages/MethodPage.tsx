@@ -74,13 +74,12 @@ export function MethodPage() {
         <Link className="underline" to="/nodes">
           the nodes
         </Link>
+        . For a short guide, including the browser extension, see{" "}
+        <Link className="underline" to="/guide">
+          How to use AIR
+        </Link>
         .
       </p>
-      <SectionArt
-        file="air_section_ai_reviewers.webp"
-        alt="Illustration of geometric nodes connected to a document card labelled 10.5555/EXAMPLE-DOI. The DOI is a placeholder, not a real record."
-        caption="Several assessors read the same public record. The DOI on the card is an example, not a paper on the board."
-      />
       <ol className="mt-6 space-y-3">
         {publishNotices.map((notice, index) => (
           <li key={notice.id} className="rounded-2xl border border-line bg-white/70 p-4">
@@ -91,11 +90,6 @@ export function MethodPage() {
           </li>
         ))}
       </ol>
-      <SectionArt
-        file="air_section_nodes_corroborate.webp"
-        alt="Illustration of independent nodes linked to a centre. Teal checks are passes and red checks are fails. The tick shape is the same; the colour carries the verdict."
-        caption="Independent nodes corroborate a reading or disagree with it. Teal is a pass and red is a fail."
-      />
       <SectionArt
         file="air_section_leaderboard.webp"
         alt="Decorative illustration of four ranked cards over a globe. The scores 8.7, 8.1, 7.6 and 7.2 are artwork, not live results."

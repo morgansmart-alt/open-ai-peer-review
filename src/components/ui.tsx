@@ -14,9 +14,9 @@ export function cx(...parts: Array<string | false | null | undefined>): string {
 }
 
 export const btnPrimary =
-  "inline-flex items-center justify-center rounded-full bg-teal px-4 py-2 text-sm font-medium text-paper transition hover:bg-teal-deep disabled:cursor-not-allowed disabled:opacity-50"
+  "inline-flex min-h-10 items-center justify-center rounded-full bg-teal px-4 py-2 text-sm font-medium text-paper transition hover:bg-teal-deep disabled:cursor-not-allowed disabled:opacity-50"
 export const btnQuiet =
-  "inline-flex items-center justify-center rounded-full border border-line bg-white/60 px-4 py-2 text-sm text-ink transition hover:border-teal disabled:cursor-not-allowed disabled:opacity-50"
+  "inline-flex min-h-10 items-center justify-center rounded-full border border-line bg-white/60 px-4 py-2 text-sm text-ink transition hover:border-teal disabled:cursor-not-allowed disabled:opacity-50"
 export const fieldClass =
   "w-full rounded-xl border border-line bg-white/80 px-3 py-2 text-sm text-ink outline-none placeholder:text-ink-soft/70"
 
@@ -43,4 +43,12 @@ export function formatWhen(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return iso
   return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+}
+
+export function scrollToId(id: string) {
+  const node = document.getElementById(id)
+  if (!node) return
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  node.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" })
+  if (node instanceof HTMLElement) node.focus({ preventScroll: true })
 }

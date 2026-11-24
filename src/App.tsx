@@ -3,6 +3,7 @@ import { HashRouter, Link, Route, Routes } from "react-router-dom"
 import { Shell } from "./components/Shell.tsx"
 import { AirProvider } from "./context/AirContext.tsx"
 import { CriteriaPage } from "./pages/CriteriaPage.tsx"
+import { GuidePage } from "./pages/GuidePage.tsx"
 import { HomePage } from "./pages/HomePage.tsx"
 import { MethodPage } from "./pages/MethodPage.tsx"
 import { NodePage, NodesPage, ReviewerPage, ReviewersPage } from "./pages/Profiles.tsx"
@@ -15,7 +16,7 @@ export default function App() {
     <AirProvider>
       <HashRouter>
         <Shell>
-          <Suspense fallback={<p className="px-4 py-8 text-sm text-ink-soft">Opening…</p>}>
+          <Suspense fallback={<p role="status" className="px-4 py-8 text-sm text-ink-soft">Loading the page…</p>}>
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/review" element={<ReviewPage />} />
@@ -24,13 +25,14 @@ export default function App() {
             <Route path="/reviewers/:assessorId" element={<ReviewerPage />} />
             <Route path="/nodes" element={<NodesPage />} />
             <Route path="/nodes/:nodeId" element={<NodePage />} />
+            <Route path="/guide" element={<GuidePage />} />
             <Route path="/criteria" element={<CriteriaPage />} />
             <Route path="/method" element={<MethodPage />} />
             <Route
               path="*"
               element={
-                <p className="px-4 py-10">
-                  That page is not on the board. <Link to="/">Return to the leaderboard</Link>
+                <p className="mx-auto max-w-3xl px-4 py-10 text-sm">
+                  That address is not a page on AIR. <Link to="/">Back to the board</Link>
                 </p>
               }
             />

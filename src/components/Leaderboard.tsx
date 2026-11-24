@@ -9,16 +9,18 @@ import { scoreLineage, type LineagePoint } from "../domain/versions.ts"
 import { officialCriteria } from "../domain/officialCriteria.ts"
 import { profileLabel } from "../domain/profiles.ts"
 import { WEB_CHAT_LABEL } from "../services/webChat/protocol.ts"
+import { boardErrorMessage, emptyBoardMessage, filterBoardRows, type BoardSlice } from "../browse/boardQuery.ts"
 import { useAir } from "../context/AirContext.tsx"
 import { loadCommunityReplyCounts } from "../services/moltbook.ts"
 import { AssessorMark, Sparkline } from "./charts.tsx"
-import { cx, fieldClass, ScoreValue } from "./ui.tsx"
+import { Banner, cx, fieldClass, ScoreValue } from "./ui.tsx"
 
 export function Leaderboard() {
   const air = useAir()
   const methods = useMemo(() => listRankingMethods(air.profiles), [air.profiles])
   const [methodId, setMethodId] = useState("panel")
   const [query, setQuery] = useState("")
+  const [slice, setSlice] = useState<BoardSlice>("all")
   const [hideSamples, setHideSamples] = useState(false)
   const [showWebChat, setShowWebChat] = useState(true)
   const [openKey, setOpenKey] = useState<string | null>(null)
@@ -44,13 +46,8 @@ export function Leaderboard() {
   }, [rankedAll])
   const rows = useMemo(() => {
     if (!method) return []
-    const ranked = sortRows(rankedAll, method).filter((row) => {
-      if (hideSamples && row.demo) return false
-      const haystack = [row.title, row.doi, row.creators.join(" "), row.keywords.join(" ")].join(" ").toLowerCase()
-      return haystack.includes(query.trim().toLowerCase())
-    })
-    return ranked
-  }, [hideSamples, method, query, rankedAll])
+    return filterBoardRows(sortRows(rankedAll, method), query, slice, hideSamples)
+  }, [hideSamples, method, query, rankedAll, slice])
   const keywords = useMemo(() => {
     const counts = new Map<string, number>()
     for (const row of buildRanking(air.db)) {
@@ -62,41 +59,51 @@ export function Leaderboard() {
       .map(([keyword]) => keyword)
   }, [air.db])
 
-  if (!air.ready && air.db.reviews.length === 0) return <p className="px-4 py-8 text-sm text-ink-soft">Opening the board…</p>
+  if (!air.ready && air.db.reviews.length === 0) {
+    return (
+      <p role="status" className="px-4 py-8 text-sm text-ink-soft">
+        Loading the board…
+      </p>
+    )
+  }
   if (!method) return null
 
   return (
-    <section aria-labelledby="board-heading" className="mx-auto max-w-6xl px-4 pb-8">
+    <section id="board" aria-labelledby="board-heading" className="mx-auto max-w-6xl scroll-mt-20 px-4 pb-8">
       <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
-        <h2 id="board-heading" className="font-serif text-xl">
+        <h2 id="board-heading" className="font-serif text-2xl">
           Records by AIR score
         </h2>
-        <p className="max-w-xl text-xs text-ink-soft">
-          Cells are medians on a 0–100 scale. Older 0–10 readings are multiplied by 10, and AIR v0.1 readings are stretched from 1–5. Order leans toward 50 until several readings exist. A reading whose own scores disagree is left out of the median.
-          Sort by impact, feasibility, physics, simulation, estimated value, global goals, idea, or the human review score. Records with no human review sort last on that ranking. Those scores open inside the row.{" "}
+        <p className="max-w-xl text-sm text-ink-soft">
+          Each cell is a median on a 0–100 scale. A reading that disagrees with itself is left out. Human reviews have their own column.{" "}
           <Link to="/method" className="underline">
             How this is calculated
           </Link>
         </p>
       </div>
-      <div className="no-print mb-3 flex flex-wrap items-center gap-2">
+      {!air.ready && (
+        <p role="status" className="mb-3 text-sm text-ink-soft">
+          Loading the shared board. Sample rows stay on screen until it answers.
+        </p>
+      )}
+      {air.backendError && (
+        <div className="mb-3">
+          <Banner>{boardErrorMessage(air.backendError)}</Banner>
+        </div>
+      )}
+      <div className="no-print mb-3 flex flex-wrap items-end gap-2">
         <label className="min-w-48 flex-1 text-sm">
-          <span className="sr-only">Filter</span>
+          <span className="mb-1 block text-xs font-medium text-ink">Search</span>
           <input
             className={fieldClass}
             value={query}
-            placeholder="Filter by title, keyword, DOI, or author"
+            placeholder="Title, keyword, DOI, or author"
             onChange={(event) => setQuery(event.target.value)}
           />
         </label>
-        <label className="text-sm text-ink-soft">
-          Rank by
-          <select
-            className={`${fieldClass} ml-2 w-auto`}
-            value={method.id}
-            aria-label="Rank by"
-            onChange={(event) => setMethodId(event.target.value)}
-          >
+        <label className="text-sm text-ink">
+          <span className="mb-1 block text-xs font-medium">Sort</span>
+          <select className={`${fieldClass} w-auto`} value={method.id} onChange={(event) => setMethodId(event.target.value)}>
             {methods.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.label}
@@ -104,24 +111,63 @@ export function Leaderboard() {
             ))}
           </select>
         </label>
-        <label className="flex items-center gap-2 text-sm text-ink-soft">
+        <label className="text-sm text-ink">
+          <span className="mb-1 block text-xs font-medium">Show</span>
+          <select className={`${fieldClass} w-auto`} value={slice} onChange={(event) => setSlice(event.target.value as BoardSlice)}>
+            <option value="all">All records</option>
+            <option value="open-issues">Open issues</option>
+            <option value="human">Has a human review</option>
+            <option value="samples">Samples and demos</option>
+          </select>
+        </label>
+        <label className="flex min-h-10 items-center gap-2 text-sm text-ink">
           <input type="checkbox" checked={hideSamples} onChange={(event) => setHideSamples(event.target.checked)} />
           Hide samples and demos
         </label>
-        <label className="flex items-center gap-2 text-sm text-ink-soft">
+        <label className="flex min-h-10 items-center gap-2 text-sm text-ink">
           <input type="checkbox" checked={showWebChat} onChange={(event) => setShowWebChat(event.target.checked)} />
           Uncalibrated web-chat
         </label>
+        {(query || slice !== "all" || hideSamples) && (
+          <button
+            type="button"
+            className="min-h-10 rounded-full border border-line px-3 text-sm"
+            onClick={() => {
+              setQuery("")
+              setSlice("all")
+              setHideSamples(false)
+            }}
+          >
+            Clear filters
+          </button>
+        )}
       </div>
       <div className="no-print mb-3 flex flex-wrap gap-2">
         {keywords.map((keyword) => (
-          <button key={keyword} type="button" aria-pressed={query.trim().toLowerCase() === keyword.toLowerCase()} className="rounded-full border border-line px-3 py-1 text-xs text-ink-soft hover:border-teal" onClick={() => setQuery(keyword)}>
+          <button key={keyword} type="button" aria-pressed={query.trim().toLowerCase() === keyword.toLowerCase()} aria-label={`Search for ${keyword}`} className="min-h-10 rounded-full border border-line px-3 text-sm text-ink hover:border-teal" onClick={() => setQuery(keyword)}>
             {keyword}
           </button>
         ))}
       </div>
+      <p aria-live="polite" className="mb-2 text-xs text-ink-soft">
+        {rows.length === 1 ? "1 record" : `${rows.length} records`}
+        <span className="md:hidden">. Swipe sideways to see every assessor. The title stays pinned.</span>
+      </p>
       {rows.length === 0 ? (
-        <p className="rounded-2xl border border-dashed border-line px-4 py-8 text-sm text-ink-soft">Nothing matches that filter yet.</p>
+        <div role="status" className="rounded-2xl border border-dashed border-line px-4 py-8 text-sm text-ink-soft">
+          <p>{emptyBoardMessage(query, slice, hideSamples)}</p>
+          <button
+            type="button"
+            className="mt-3 min-h-10 rounded-full border border-line px-3 text-ink"
+            onClick={() => {
+              setQuery("")
+              setSlice("all")
+              setHideSamples(false)
+            }}
+          >
+            Clear search and filters
+          </button>
+        </div>
       ) : (
         <div className="board-scroll rounded-2xl border border-line bg-white/40">
           <table>
