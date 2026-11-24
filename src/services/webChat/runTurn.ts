@@ -164,15 +164,13 @@ async function waitForReply(
   note(hooks, label, "waiting", `Waiting for the reply: ${label}.`)
   await hooks.keepAwake?.()
   const pollMs = hooks.pollMs ?? 400
-  const stableMs = hooks.stableMs ?? 2000
+  const stableMs = hooks.stableMs ?? 5_000
   const timeoutMs = hooks.stepTimeoutMs ?? 90_000
   const silentMs = hooks.replySilentMs ?? 45_000
   const startLimit = hooks.replyStartTimeoutMs ?? 20_000
   const start = Date.now()
   let lastReply = ""
   let stableFor = 0
-  let lastJson = ""
-  let jsonStable = 0
   let lastAck = ""
   let ackStable = 0
   let started = false
@@ -195,7 +193,6 @@ async function waitForReply(
     const ack = ackReply(doc, composer)
     const streaming = stopControlActive(doc, provider.selectors.stop)
     const sendReady = Boolean(findSubmit(doc, provider.selectors.submit, composer))
-    const idle = sendReady && !streaming
     if (reply || ack) started = true
     if (reply !== lastReply) lastChange = Date.now()
     const diagnostic = replyDiagnostic(selector, reply.length, lastChange)
@@ -203,17 +200,7 @@ async function waitForReply(
       note(hooks, label, reply ? "reading" : "waiting", `Waiting for the reply: ${label}.`, diagnostic)
       lastLog = Date.now()
     }
-    if (expect === "json" && json) {
-      if (json === lastJson && jsonStable >= stableMs && (!streaming || sendReady)) return json
-      if (json !== lastJson) {
-        lastJson = json
-        jsonStable = 0
-      } else jsonStable += pollMs
-    } else {
-      lastJson = ""
-      jsonStable = 0
-    }
-    if (expect === "text" && ack && !reply) {
+    if (expect === "text" && ack && !reply && !streaming) {
       if (ack === lastAck && ackStable >= stableMs) return ack
       if (ack !== lastAck) {
         lastAck = ack
@@ -231,9 +218,14 @@ async function waitForReply(
         )
       }
     }
-    const settled = Boolean(reply) && reply === lastReply && stableFor >= stableMs
+    const changed = reply !== lastReply
+    if (changed || streaming) {
+      if (changed) lastReply = reply
+      stableFor = 0
+    } else stableFor += pollMs
+    const settled = Boolean(reply) && !changed && !streaming && stableFor >= stableMs
     if (expect === "text" && settled) return reply
-    if (expect === "json" && settled && idle && json) return json
+    if (expect === "json" && settled && json) return json
     if (!reply && Date.now() - start >= silentMs) {
       const empty = replyDiagnostic(selector, 0, null)
       if (attempt < 2) {
@@ -242,12 +234,6 @@ async function waitForReply(
         return waitForReply(doc, provider, beforeMessages, hooks, composer, label, expect, attempt + 1, beforeRegion, sentPrompt, beforeLive)
       }
       throw new TurnError("timeout", `Reply step (${label}) on ${provider.label} timed out with no reply. ${empty}.`)
-    }
-    if (reply !== lastReply) {
-      lastReply = reply
-      stableFor = 0
-    } else {
-      stableFor += pollMs
     }
     await hooks.sleep(pollMs)
   }
@@ -360,12 +346,8 @@ async function sendComposerText(
     const focused = await focusComposer(composer, hooks)
     note(hooks, label, focused ? "ready" : "waiting", focused ? `Composer focused. Inserting ${pending.length} characters.` : `Composer was not focused. Inserting ${pending.length} characters and re-reading the box.`)
     const placed = await confirmComposerText(composer, pending, { sleep: (ms) => hooks.sleep(ms), pollMs: Math.min(hooks.pollMs ?? 50, 50), timeoutMs: 2_000 })
-    note(
-      hooks,
-      label,
-      placed.ok ? "ready" : "error",
-      `Insert method ${placed.method}. Box holds ${placed.actual.length} raw, ${foldComposerText(placed.actual).length} normalised. Message has ${pending.length} raw, ${foldComposerText(pending).length} normalised.`,
-    )
+    const verified = `Insert method ${placed.method}. Box holds ${placed.actual.length} raw, ${foldComposerText(placed.actual).length} normalised. Message has ${pending.length} raw, ${foldComposerText(pending).length} normalised.`
+    note(hooks, label, placed.ok ? "verified" : "error", verified, verified)
     if (!placed.ok) {
       throw new TurnError(
         "insert-miss",
