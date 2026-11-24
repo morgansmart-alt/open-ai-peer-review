@@ -1,4 +1,5 @@
 import type { ProviderAdapter } from "../../../extension/adapters/index.ts"
+import { lastScoreJson } from "../jsonText.ts"
 import type { WebChatFile } from "./protocol.ts"
 
 export type PageDiagnosis = "ready" | "signed-out" | "selector-miss"
@@ -340,49 +341,9 @@ export function visibleReplyText(root: ParentNode, composer: Element | null): st
   return chunks.join("\n")
 }
 
-function matchingBrace(text: string, start: number): number {
-  let depth = 0
-  let inString = false
-  let escaped = false
-  for (let index = start; index < text.length; index += 1) {
-    const char = text[index]
-    if (inString) {
-      if (escaped) escaped = false
-      else if (char === "\\") escaped = true
-      else if (char === "\"") inString = false
-      continue
-    }
-    if (char === "\"") inString = true
-    else if (char === "{") depth += 1
-    else if (char === "}") {
-      depth -= 1
-      if (depth === 0) return index
-    }
-  }
-  return -1
-}
-
 /** The last JSON object in the text whose overallScore is a number. The prompt schema is not a number. */
 export function reviewJsonBlock(text: string): string {
-  if (!text.includes("overallScore")) return ""
-  const windowText = text.length > 400_000 ? text.slice(-200_000) : text
-  let last = ""
-  for (let index = 0; index < windowText.length; index += 1) {
-    if (windowText[index] !== "{") continue
-    const end = matchingBrace(windowText, index)
-    if (end < 0) continue
-    const slice = windowText.slice(index, end + 1)
-    if (/"overallScore"\s*:\s*-?\d+/.test(slice)) {
-      try {
-        const value = JSON.parse(slice) as { overallScore?: unknown }
-        if (typeof value.overallScore === "number") last = slice
-      } catch {
-        // A later object may still be the review.
-      }
-    }
-    index = end
-  }
-  return last
+  return lastScoreJson(text)?.text ?? ""
 }
 
 export function reviewJsonOnPage(root: ParentNode, composer: Element | null): string {

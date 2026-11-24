@@ -1995,40 +1995,91 @@ ${output}
     const match = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
     return (match?.[1] ?? trimmed).trim();
   }
-  function objectSlice(body) {
-    const start = body.indexOf("{");
-    const end = body.lastIndexOf("}");
-    if (start >= 0 && end > start) return body.slice(start, end + 1);
-    return body;
+  function matchingBrace(text, start) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < text.length; index += 1) {
+      const char = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') inString = true;
+      else if (char === "{") depth += 1;
+      else if (char === "}") {
+        depth -= 1;
+        if (depth === 0) return index;
+      }
+    }
+    return -1;
   }
-  function parseModelJson(raw) {
-    const slice = objectSlice(fenced(raw));
-    if (!slice.includes("{")) return { ok: false, error: "No JSON object found in the model output." };
+  function parseSlice(slice) {
     try {
-      return { ok: true, value: JSON.parse(slice), text: slice, repaired: false };
-    } catch (strictError) {
+      return { value: JSON.parse(slice), text: slice, repaired: false };
+    } catch {
       try {
         const repaired = jsonrepair(slice);
-        return { ok: true, value: JSON.parse(repaired), text: repaired, repaired: true };
+        return { value: JSON.parse(repaired), text: repaired, repaired: true };
       } catch {
-        const message = strictError instanceof Error ? strictError.message : "The JSON could not be parsed.";
-        return { ok: false, error: message };
+        return null;
       }
     }
   }
-  function reaskJsonPrompt(error) {
-    const detail = error.replace(/\s+/g, " ").trim().slice(0, 240);
-    return `Your JSON did not parse (${detail}). Reply again with only the corrected JSON object.`;
+  function hasNumericScore(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value) && typeof value.overallScore === "number";
   }
-  async function settleChatJson(raw, ask, log) {
+  function lastScoreJson(raw) {
+    const windowText = raw.length > 4e5 ? raw.slice(-2e5) : raw;
+    let last = null;
+    for (let index = 0; index < windowText.length; index += 1) {
+      if (windowText[index] !== "{") continue;
+      const end = matchingBrace(windowText, index);
+      if (end < 0) continue;
+      const slice = windowText.slice(index, end + 1);
+      if (/"overallScore"\s*:/.test(slice)) {
+        const parsed = parseSlice(slice);
+        if (parsed && hasNumericScore(parsed.value)) last = parsed;
+      }
+      index = end;
+    }
+    return last;
+  }
+  function parseModelJson(raw) {
+    const scored = lastScoreJson(raw);
+    if (scored) return { ok: true, value: scored.value, text: scored.text, repaired: scored.repaired };
+    const slice = fenced(raw);
+    const parsed = slice.includes("{") ? parseSlice(slice) : null;
+    if (parsed) return { ok: true, ...parsed };
+    return { ok: false, error: "No JSON object found in the model output." };
+  }
+  function reaskJsonPrompt(problem) {
+    const detail = problem.replace(/\s+/g, " ").trim().slice(0, 500);
+    return `Your JSON did not validate (${detail}). Reply again with only the corrected JSON object.`;
+  }
+  async function settleChatJson(raw, ask, log, validate) {
+    const ready = (parsed) => {
+      if (!validate) return { ok: true };
+      return validate(parsed.text);
+    };
     const first = parseModelJson(raw);
     if (first.ok) {
-      if (first.repaired) log("Repaired the chat's JSON before scoring.");
-      return { text: first.repaired ? first.text : raw, repaired: first.repaired, reasked: false };
+      const checked = ready(first);
+      if (checked.ok) {
+        if (first.repaired) log("Repaired the chat's JSON before scoring.");
+        return { text: first.repaired ? first.text : raw, repaired: first.repaired, reasked: false };
+      }
+      const problem = checked.errors.join(" ");
+      log(`Asked once for corrected JSON. ${problem}`);
+      const follow2 = await ask(reaskJsonPrompt(problem));
+      const second2 = parseModelJson(follow2);
+      if (second2.ok && second2.repaired) log("Repaired the corrected JSON.");
+      return { text: second2.ok ? second2.repaired ? second2.text : follow2 : follow2, repaired: Boolean(second2.ok && second2.repaired), reasked: true };
     }
-    const prompt = reaskJsonPrompt(first.error);
-    log("Asked once for corrected JSON.");
-    const follow = await ask(prompt);
+    log(`Asked once for corrected JSON. ${first.error}`);
+    const follow = await ask(reaskJsonPrompt(first.error));
     const second = parseModelJson(follow);
     if (second.ok && second.repaired) log("Repaired the corrected JSON.");
     return { text: second.ok ? second.repaired ? second.text : follow : follow, repaired: Boolean(second.ok && second.repaired), reasked: true };
@@ -2060,8 +2111,41 @@ ${output}
     });
   }
   function stringArray(value, maxItems, maxLen) {
-    if (!Array.isArray(value)) return [];
-    return value.map((item) => clip2(item, maxLen)).filter(Boolean).slice(0, maxItems);
+    const items = typeof value === "string" ? [value] : Array.isArray(value) ? value : [];
+    return items.map((item) => clip2(item, maxLen)).filter((item) => Boolean(item) && item.toLowerCase() !== "string").slice(0, maxItems);
+  }
+  function criterionKey(raw, criteria) {
+    const compact = raw.toLowerCase().replace(/[_\s]+/g, "-").replace(/[^a-z0-9-]/g, "");
+    const found = criteria.criteria.find(
+      (item) => item.id === compact || item.id.replace(/-/g, "") === compact.replace(/-/g, "") || item.name.toLowerCase().replace(/[\s_]+/g, "-") === compact
+    );
+    return found?.id ?? compact;
+  }
+  function recommendationId(raw, criteria) {
+    const trimmed = raw.trim().toLowerCase().replace(/\s+/g, " ");
+    const cleaned = trimmed.replace(/[._]+$/g, "").replace(/[_/]+/g, " ").replace(/\s+/g, " ").trim();
+    const exact = criteria.recommendationCategories.find((item) => item.id.toLowerCase() === cleaned || item.id.replace(/-/g, " ") === cleaned || item.label.toLowerCase() === trimmed);
+    if (exact) return exact.id;
+    const synonyms = {
+      minor: "revise",
+      "minor revision": "revise",
+      "minor revisions": "revise",
+      "needs revision": "revise",
+      major: "major-revision",
+      "major revision": "major-revision",
+      "major revisions": "major-revision",
+      reject: "not-ready",
+      rejected: "not-ready",
+      rejection: "not-ready",
+      "not ready": "not-ready",
+      accepted: "accept",
+      sound: "accept",
+      "accept sound": "accept"
+    };
+    const alias = synonyms[cleaned];
+    if (alias && criteria.recommendationCategories.some((item) => item.id === alias)) return alias;
+    const hits = criteria.recommendationCategories.filter((item) => new RegExp(`\\b${item.id.replace("-", "[- ]")}\\b`, "i").test(cleaned));
+    return hits.length === 1 ? hits[0].id : "";
   }
   function validateReport(input, criteria) {
     const errors = [];
@@ -2070,7 +2154,7 @@ ${output}
     if (summary.length < 40) errors.push("summary must be at least 40 characters.");
     const scoresRaw = Array.isArray(input.scores) ? input.scores : [];
     const scores = criteria.criteria.map((criterion) => {
-      const found = scoresRaw.find((item) => isRecord2(item) && clip2(item.criterionId ?? item.id, 80) === criterion.id);
+      const found = scoresRaw.find((item) => isRecord2(item) && criterionKey(clip2(item.criterionId ?? item.id, 80), criteria) === criterion.id);
       if (!isRecord2(found)) {
         errors.push(`Missing score for ${criterion.id}.`);
         return null;
@@ -2089,11 +2173,8 @@ ${output}
       const normalizedConfidence = confidence === "high" ? "high" : confidence === "medium" || confidence === "med" ? "medium" : confidence === "low" ? "low" : void 0;
       return { criterionId: criterion.id, score, rationale, citations, confidence: normalizedConfidence };
     });
-    const recommendationRaw = clip2(input.recommendation, 120).toLowerCase();
-    const recommendation = criteria.recommendationCategories.find(
-      (item) => item.id.toLowerCase() === recommendationRaw || item.label.toLowerCase() === recommendationRaw
-    )?.id ?? "";
-    if (!recommendation) errors.push("recommendation must be one of the criteria category ids.");
+    const recommendation = recommendationId(clip2(input.recommendation, 160), criteria);
+    if (!recommendation) errors.push(`recommendation must be one of: ${criteria.recommendationCategories.map((item) => item.id).join(", ")}.`);
     const strengths = stringArray(input.strengths, 6, 400);
     const questions = stringArray(input.questionsForAuthors ?? input.questions, 6, 400);
     const nextSteps = stringArray(input.suggestedNextSteps ?? input.nextSteps, 6, 400);
@@ -2108,8 +2189,8 @@ ${output}
         return [{ criterionId: criteria.criteria[0]?.id ?? "clarity", claim: item.slice(0, 500), quotedPassage: "", reason: item.slice(0, 800) }];
       }
       if (!isRecord2(item)) return [];
-      const criterionId = clip2(item.criterionId ?? item.criterion, 80);
-      if (criterionId && !known.has(criterionId)) errors.push(`Unknown criterion on a major issue: ${criterionId}.`);
+      const criterionId = criterionKey(clip2(item.criterionId ?? item.criterion, 80), criteria);
+      if (clip2(item.criterionId ?? item.criterion, 80) && !known.has(criterionId)) errors.push(`Unknown criterion on a major issue: ${criterionId}.`);
       const claim = clip2(item.claim ?? item.summary ?? item.issue, 500);
       if (!claim) return [];
       return [
@@ -2825,46 +2906,8 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     walkReplyText(scope, composer, chunks);
     return chunks.join("\n");
   }
-  function matchingBrace(text, start) {
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    for (let index = start; index < text.length; index += 1) {
-      const char = text[index];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (char === "\\") escaped = true;
-        else if (char === '"') inString = false;
-        continue;
-      }
-      if (char === '"') inString = true;
-      else if (char === "{") depth += 1;
-      else if (char === "}") {
-        depth -= 1;
-        if (depth === 0) return index;
-      }
-    }
-    return -1;
-  }
   function reviewJsonBlock(text) {
-    if (!text.includes("overallScore")) return "";
-    const windowText = text.length > 4e5 ? text.slice(-2e5) : text;
-    let last = "";
-    for (let index = 0; index < windowText.length; index += 1) {
-      if (windowText[index] !== "{") continue;
-      const end = matchingBrace(windowText, index);
-      if (end < 0) continue;
-      const slice = windowText.slice(index, end + 1);
-      if (/"overallScore"\s*:\s*-?\d+/.test(slice)) {
-        try {
-          const value = JSON.parse(slice);
-          if (typeof value.overallScore === "number") last = slice;
-        } catch {
-        }
-      }
-      index = end;
-    }
-    return last;
+    return lastScoreJson(text)?.text ?? "";
   }
   function reviewJsonOnPage(root, composer) {
     return reviewJsonBlock(visibleReplyText(root, composer));
@@ -3530,13 +3573,17 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
         report({ type: "air-web-chat-done", requestId: message.requestId, ok: false, message: result.message, code: result.code });
         return;
       }
+      const criteria = readingCriteria(officialCriteria, message.packet.criterionProfile, false);
       const settled = await settleChatJson(
         result.text,
         (prompt) => sendFollowUp(document, provider, prompt, hooks),
-        (note) => hooks.onProgress?.(note)
+        (note) => hooks.onProgress?.(note),
+        (text) => {
+          const accepted2 = acceptWebChatResult(text, criteria);
+          return accepted2.ok ? { ok: true } : { ok: false, errors: accepted2.errors };
+        }
       );
       const rounds = Math.min(3, Math.max(0, Math.round(Number(message.defenceRounds) || 0)));
-      const criteria = readingCriteria(officialCriteria, message.packet.criterionProfile, false);
       const notice = result.notice;
       if (!rounds) {
         report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: settled.text, chatModel: observedModel(), notice });

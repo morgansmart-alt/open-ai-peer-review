@@ -46,11 +46,46 @@ function citationsFrom(value: unknown, errors: string[], path: string): Citation
 }
 
 function stringArray(value: unknown, maxItems: number, maxLen: number): string[] {
-  if (!Array.isArray(value)) return []
-  return value
+  const items = typeof value === "string" ? [value] : Array.isArray(value) ? value : []
+  return items
     .map((item) => clip(item, maxLen))
-    .filter(Boolean)
+    .filter((item) => Boolean(item) && item.toLowerCase() !== "string")
     .slice(0, maxItems)
+}
+
+function criterionKey(raw: string, criteria: CriteriaSet): string {
+  const compact = raw.toLowerCase().replace(/[_\s]+/g, "-").replace(/[^a-z0-9-]/g, "")
+  const found = criteria.criteria.find(
+    (item) => item.id === compact || item.id.replace(/-/g, "") === compact.replace(/-/g, "") || item.name.toLowerCase().replace(/[\s_]+/g, "-") === compact,
+  )
+  return found?.id ?? compact
+}
+
+function recommendationId(raw: string, criteria: CriteriaSet): string {
+  const trimmed = raw.trim().toLowerCase().replace(/\s+/g, " ")
+  const cleaned = trimmed.replace(/[._]+$/g, "").replace(/[_/]+/g, " ").replace(/\s+/g, " ").trim()
+  const exact = criteria.recommendationCategories.find((item) => item.id.toLowerCase() === cleaned || item.id.replace(/-/g, " ") === cleaned || item.label.toLowerCase() === trimmed)
+  if (exact) return exact.id
+  const synonyms: Record<string, string> = {
+    minor: "revise",
+    "minor revision": "revise",
+    "minor revisions": "revise",
+    "needs revision": "revise",
+    major: "major-revision",
+    "major revision": "major-revision",
+    "major revisions": "major-revision",
+    reject: "not-ready",
+    rejected: "not-ready",
+    rejection: "not-ready",
+    "not ready": "not-ready",
+    accepted: "accept",
+    sound: "accept",
+    "accept sound": "accept",
+  }
+  const alias = synonyms[cleaned]
+  if (alias && criteria.recommendationCategories.some((item) => item.id === alias)) return alias
+  const hits = criteria.recommendationCategories.filter((item) => new RegExp(`\\b${item.id.replace("-", "[- ]")}\\b`, "i").test(cleaned))
+  return hits.length === 1 ? hits[0].id : ""
 }
 
 export function validateReport(input: unknown, criteria: CriteriaSet): { ok: true; report: ReviewReport } | { ok: false; errors: string[] } {
@@ -61,7 +96,7 @@ export function validateReport(input: unknown, criteria: CriteriaSet): { ok: tru
 
   const scoresRaw = Array.isArray(input.scores) ? input.scores : []
   const scores = criteria.criteria.map((criterion) => {
-    const found = scoresRaw.find((item) => isRecord(item) && clip(item.criterionId ?? item.id, 80) === criterion.id)
+    const found = scoresRaw.find((item) => isRecord(item) && criterionKey(clip(item.criterionId ?? item.id, 80), criteria) === criterion.id)
     if (!isRecord(found)) {
       errors.push(`Missing score for ${criterion.id}.`)
       return null
@@ -82,12 +117,8 @@ export function validateReport(input: unknown, criteria: CriteriaSet): { ok: tru
     return { criterionId: criterion.id, score, rationale, citations, confidence: normalizedConfidence }
   })
 
-  const recommendationRaw = clip(input.recommendation, 120).toLowerCase()
-  const recommendation =
-    criteria.recommendationCategories.find(
-      (item) => item.id.toLowerCase() === recommendationRaw || item.label.toLowerCase() === recommendationRaw,
-    )?.id ?? ""
-  if (!recommendation) errors.push("recommendation must be one of the criteria category ids.")
+  const recommendation = recommendationId(clip(input.recommendation, 160), criteria)
+  if (!recommendation) errors.push(`recommendation must be one of: ${criteria.recommendationCategories.map((item) => item.id).join(", ")}.`)
 
   const strengths = stringArray(input.strengths, 6, 400)
   const questions = stringArray(input.questionsForAuthors ?? input.questions, 6, 400)
@@ -104,8 +135,8 @@ export function validateReport(input: unknown, criteria: CriteriaSet): { ok: tru
       return [{ criterionId: criteria.criteria[0]?.id ?? "clarity", claim: item.slice(0, 500), quotedPassage: "", reason: item.slice(0, 800) }]
     }
     if (!isRecord(item)) return []
-    const criterionId = clip(item.criterionId ?? item.criterion, 80)
-    if (criterionId && !known.has(criterionId)) errors.push(`Unknown criterion on a major issue: ${criterionId}.`)
+    const criterionId = criterionKey(clip(item.criterionId ?? item.criterion, 80), criteria)
+    if (clip(item.criterionId ?? item.criterion, 80) && !known.has(criterionId)) errors.push(`Unknown criterion on a major issue: ${criterionId}.`)
     const claim = clip(item.claim ?? item.summary ?? item.issue, 500)
     if (!claim) return []
     return [

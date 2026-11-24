@@ -58,13 +58,17 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
       report({ type: "air-web-chat-done", requestId: message.requestId, ok: false, message: result.message, code: result.code })
       return
     }
+    const criteria = readingCriteria(officialCriteria, message.packet.criterionProfile, false)
     const settled = await settleChatJson(
       result.text,
       (prompt) => sendFollowUp(document, provider, prompt, hooks),
       (note) => hooks.onProgress?.(note),
+      (text) => {
+        const accepted = acceptWebChatResult(text, criteria)
+        return accepted.ok ? { ok: true } : { ok: false, errors: accepted.errors }
+      },
     )
     const rounds = Math.min(3, Math.max(0, Math.round(Number(message.defenceRounds) || 0)))
-    const criteria = readingCriteria(officialCriteria, message.packet.criterionProfile, false)
     const notice = result.notice
     if (!rounds) {
       report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: settled.text, chatModel: observedModel(), notice })

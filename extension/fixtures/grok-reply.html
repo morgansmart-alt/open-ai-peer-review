@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+  <body>
+    <main>
+      <div class="message-row">
+        <div class="user-message" id="user">
+          Return JSON with this shape:
+          {"overallScore":"integer 0-100","recommendation":"accept | encourage | revise | major-revision | not-ready","strengths":["string"],"scores":[{"criterionId":"string","score":"0-100"}]}
+        </div>
+      </div>
+      <div class="message-row">
+        <div class="assistant-message" data-testid="assistant-message" id="assistant"></div>
+        <button type="button" aria-label="Copy">Copy</button>
+      </div>
+      <form>
+        <textarea id="composer" aria-label="Message Grok"></textarea>
+        <button id="send" type="submit" aria-label="Send">Send</button>
+      </form>
+    </main>
+  </body>
+</html>

@@ -148,6 +148,22 @@ describe("json repair and the text page check", () => {
     expect(notes.join(" ")).toContain("Asked once for corrected JSON.")
     expect(settled.reasked).toBe(true)
     expect(settled.text).toContain("84")
+    const schemaNotes: string[] = []
+    const schemaAsked: string[] = []
+    await settleChatJson(
+      '{"overallScore":88,"recommendation":"banana","strengths":[]}',
+      async (prompt) => {
+        schemaAsked.push(prompt)
+        return '{"overallScore":88}'
+      },
+      (note) => schemaNotes.push(note),
+      () => ({ ok: false, errors: ["recommendation must be one of: accept, encourage, revise, major-revision, not-ready.", "Add at least one strength."] }),
+    )
+    expect(schemaAsked).toHaveLength(1)
+    expect(schemaAsked[0]).toContain("Reply again with only the corrected JSON object.")
+    expect(schemaAsked[0]).toContain("Add at least one strength.")
+    expect(schemaAsked[0]).not.toContain("criteria category ids")
+    expect(schemaNotes.join(" ")).toContain("Asked once for corrected JSON.")
   })
 
   it("treats a 404 page as down and a scored reply that cites that 404 as untrusted", () => {

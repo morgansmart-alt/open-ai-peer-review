@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 import { webChatProvider } from "../../../extension/adapters/index.ts"
 import { CRITERION_PROFILES, readingCriteria } from "../../domain/profiles.ts"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
-import { ackReply, assistantText, attachmentReady, clickElement, describeCandidates, diagnose, findComposer, findSubmit, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
+import { ackReply, assistantText, attachmentReady, clickElement, describeCandidates, diagnose, findComposer, findSubmit, reviewJsonOnPage, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
 import { buildWebChatPacket } from "./packet.ts"
 import { runTurn } from "./runTurn.ts"
 import { acceptWebChatResult } from "./accept.ts"
@@ -506,6 +506,61 @@ describe("live chat composers", () => {
     expect(sent[0]).not.toContain("public text page")
     expect(sent.some((text) => text.includes("UNIQUEYIELD"))).toBe(true)
     expect(result.ok).toBe(true)
+  })
+
+  it("reads the last grok.com assistant score, not the prompt schema", () => {
+    loadFixture("grok-reply")
+    const review = {
+      summary: "The record states a narrow claim and shows the weighing steps that support it, with the limit written in the text.",
+      scores: officialCriteria.criteria.map((criterion) => ({
+        criterionId: criterion.id === "global-goals" ? "Global Goals" : criterion.id,
+        score: 88,
+        rationale: `${criterion.name} is supported by a passage a reader can find in the record.`,
+        citations: [{ quote: "Net B collected 1.8 litres.", location: "results" }],
+        confidence: "medium",
+      })),
+      recommendation: "Accept",
+      overallScore: 88,
+      strengths: "The tables are public and the weighing steps are written out.",
+      majorIssues: [],
+      minorIssues: ["The season is narrow."],
+      questionsForAuthors: ["What would a second season change?"],
+      suggestedNextSteps: ["Publish the weighing sheet beside the figure."],
+      ontologyClass: "physical-testable",
+      physics: { classification: "CONSISTENT", laws: ["conservation of mass"], howAddressed: "The mass balance is written out." },
+      simulation: { reported: 0, passed: 0, methods: "Simulation does not apply to this record.", inputsAvailable: false },
+      valueEstimate: { assumptions: ["The season is one site."], marketDisruption: "Not estimated." },
+      goals: [{ goalId: "sdg-6", level: "indirect", note: "Water collection is named." }],
+      air_feedback: {
+        criteria: "none: the criteria fit this data note.",
+        profile: "none: the data profile fits.",
+        missingContext: "none: the text page was not required for this check.",
+        prompt: "none: the instructions were clear.",
+        rubric: "none: no rubric change.",
+        scoringProcess: "I scored the pasted record, not another source.",
+      },
+    }
+    document.getElementById("assistant")!.textContent = `Here is the review:\n${JSON.stringify(review)}`
+    const composer = document.getElementById("composer")
+    const picked = reviewJsonOnPage(document, composer)
+    expect(picked).toContain('"overallScore":88')
+    expect(picked).not.toContain("integer 0-100")
+    const accepted = acceptWebChatResult(`${document.body.textContent}`, officialCriteria)
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) return
+    expect(accepted.report.recommendation).toBe("accept")
+    expect(accepted.report.strengths[0]).toContain("tables are public")
+    expect(accepted.report.scores.some((score) => score.criterionId === "global-goals")).toBe(true)
+    expect(accepted.report.airFeedback?.scoringProcess).toContain("pasted record")
+    const minor = acceptWebChatResult(JSON.stringify({ ...review, recommendation: "minor revision", strengths: review.strengths }), officialCriteria)
+    expect(minor.ok).toBe(true)
+    if (minor.ok) expect(minor.report.recommendation).toBe("revise")
+    const rejected = acceptWebChatResult(JSON.stringify({ ...review, recommendation: "nope" }), officialCriteria)
+    expect(rejected.ok).toBe(false)
+    if (!rejected.ok) {
+      expect(rejected.errors[0]).toContain("recommendation must be one of: accept, encourage, revise, major-revision, not-ready")
+      expect(rejected.errors.join(" ")).not.toContain("criteria category ids")
+    }
   })
 
   it("presses Enter once when Send has not been drawn", () => {
