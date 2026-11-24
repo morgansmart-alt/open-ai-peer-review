@@ -1,8 +1,11 @@
-import { useEffect, useId, useRef } from "react"
+import { useEffect, useId, useRef, useState } from "react"
 import { keySlot, providerLabel, providerOrder } from "../domain/assessors.ts"
+import { KEY_STAYS_LOCAL_NOTE } from "../content/freeKeyGuide.ts"
 import type { ProviderId } from "../domain/types.ts"
 import { clearBrowserData } from "../services/storage.ts"
+import { validateApiKey } from "../services/providers.ts"
 import { useAir } from "../context/AirContext.tsx"
+import { FreeKeyGuide } from "./FreeKeyGuide.tsx"
 import { btnPrimary, btnQuiet, fieldClass } from "./ui.tsx"
 
 export function KeysDialog() {
@@ -44,6 +47,12 @@ export function KeysDialog() {
             Close
           </button>
         </div>
+        <details className="mt-4 rounded-2xl border border-line bg-white/50 p-3">
+          <summary className="cursor-pointer text-sm font-medium">Get a free AI key in 2 minutes</summary>
+          <div className="mt-3">
+            <FreeKeyGuide id="keys-free-guide" />
+          </div>
+        </details>
         <label className="mt-5 flex items-start gap-3 text-sm">
           <input
             ref={first}
@@ -99,6 +108,9 @@ function ProviderFields({ provider }: { provider: ProviderId }) {
   const air = useAir()
   const slot = provider
   const profiles = air.profiles.filter((profile) => profile.builtin && profile.provider === provider)
+  const [check, setCheck] = useState<string | null>(null)
+  const [checking, setChecking] = useState(false)
+  const baseUrl = air.settings.baseUrls[slot] ?? profiles[0]?.defaultBaseUrl ?? ""
   return (
     <fieldset className="rounded-2xl border border-line bg-white/50 p-3">
       <legend className="px-1 text-sm font-medium">{providerLabel(provider)}</legend>
@@ -110,9 +122,33 @@ function ProviderFields({ provider }: { provider: ProviderId }) {
         className={fieldClass}
         type="password"
         autoComplete="off"
+        spellCheck={false}
         value={air.providerSettings.keys[slot] ?? ""}
-        onChange={(event) => air.setKey(slot, event.target.value)}
+        onChange={(event) => {
+          air.setKey(slot, event.target.value)
+          setCheck(null)
+        }}
       />
+      <p className="mt-1 text-xs text-ink-soft">{KEY_STAYS_LOCAL_NOTE}</p>
+      <button
+        type="button"
+        className={`${btnQuiet} mt-2`}
+        disabled={checking}
+        onClick={() => {
+          setChecking(true)
+          setCheck(null)
+          void validateApiKey({ provider, baseUrl, key: air.providerSettings.keys[slot] ?? "" })
+            .then((result) => setCheck(result.message))
+            .finally(() => setChecking(false))
+        }}
+      >
+        {checking ? "Checking…" : "Check key"}
+      </button>
+      {check && (
+        <p className="mt-2 text-xs" role="status">
+          {check}
+        </p>
+      )}
       <label className="mt-2 block text-xs text-ink-soft" htmlFor={`base-${slot}`}>
         Base URL
       </label>

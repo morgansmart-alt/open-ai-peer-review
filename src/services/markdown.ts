@@ -1,6 +1,8 @@
 import { categoryLabel } from "../domain/criteria.ts"
+import { profileLabel } from "../domain/profiles.ts"
 import { boardValue } from "../domain/scoring.ts"
 import { DISCLAIMER, type CriteriaSet, type StoredReview } from "../domain/types.ts"
+import { formatVersionLabel } from "./zenodo.ts"
 
 export function reportToMarkdown(review: StoredReview, criteria: CriteriaSet, assessorName: string): string {
   const lines = [
@@ -11,7 +13,8 @@ export function reportToMarkdown(review: StoredReview, criteria: CriteriaSet, as
     review.mock ? "_Demo reading. No model was called._" : "",
     "",
     `- DOI: ${review.doi}`,
-    `- Record version: ${review.recordVersion}`,
+    `- Record version: ${formatVersionLabel(review.recordVersion)}`,
+    review.criterionProfile ? `- Criterion profile: ${profileLabel(review.criterionProfile)}` : "",
     `- Assessor: ${assessorName}`,
     `- Model: ${review.modelId}`,
     `- Provider: ${review.provider}`,

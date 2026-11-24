@@ -1,6 +1,16 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js"
 import { emptyDatabase, type AirDatabase, type AuthorClaim, type IssueRound, type IssueStatus, type IssueThread, type NodeSubmission, type StoredReview } from "../domain/types.ts"
 import { fluidRoundPastLegacyCap, legacySixRoundMessage, LOCAL_FLUID_ROUND_NOTE } from "../domain/versions.ts"
+
+export const LOCAL_COMMENT_ROUND_NOTE =
+  "Saved on this browser. The shared board still rejects a comment until its database update is applied. A comment does not change the score or the issue status."
+
+/** The live append function rejects any kind it does not already list. Comment is one of those until the migration is applied. */
+export function commentRejectedByBoard(issue: IssueThread, message: string): boolean {
+  const added = issue.rounds[issue.rounds.length - 1]
+  if (added?.kind !== "comment") return false
+  return /that round is not valid/i.test(message)
+}
 import { loadLocalDatabase, loadOverlay, loadRateStamps, saveLocalDatabase, saveOverlay, saveRateStamps } from "./storage.ts"
 import { rateLimitDecision } from "./rateLimit.ts"
 
@@ -188,6 +198,14 @@ export async function saveIssue(mode: BackendMode, issue: IssueThread): Promise<
   const payload = publicPayload(issue)
   const rpc = await sb.rpc("air_append_issue_round", { p_issue_id: issue.id, p_payload: payload })
   if (!rpc.error) return null
+  if (commentRejectedByBoard(issue, rpc.error.message)) {
+    const overlay = loadOverlay()
+    const index = overlay.issues.findIndex((item) => item.id === issue.id)
+    if (index >= 0) overlay.issues[index] = issue
+    else overlay.issues.push(issue)
+    saveOverlay(overlay)
+    return LOCAL_COMMENT_ROUND_NOTE
+  }
   if (legacySixRoundMessage(rpc.error.message) && fluidRoundPastLegacyCap(issue)) {
     const overlay = loadOverlay()
     const index = overlay.issues.findIndex((item) => item.id === issue.id)

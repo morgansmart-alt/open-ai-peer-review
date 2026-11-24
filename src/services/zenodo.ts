@@ -476,9 +476,48 @@ export function isTextualFile(file: Pick<ZenodoFile, "extension">): boolean {
   return READABLE_EXTENSIONS.has(file.extension)
 }
 
-const SELECTION_FILE_CAP = 12
+export const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "tif", "tiff", "svg", "bmp"])
+
+export function isImageFile(file: Pick<ZenodoFile, "extension">): boolean {
+  return IMAGE_EXTENSIONS.has(file.extension)
+}
+
+/** Zips, code, and tabular data. Manuscripts (pdf, md, tex, txt, html) stay outside this set. */
+export const CODE_DATA_EXTENSIONS = new Set([
+  "zip",
+  "csv",
+  "tsv",
+  "json",
+  "yaml",
+  "yml",
+  "py",
+  "ipynb",
+  "r",
+  "jl",
+  "js",
+  "mjs",
+  "cjs",
+  "ts",
+  "tsx",
+  "jsx",
+  "c",
+  "h",
+  "cpp",
+  "cc",
+  "f",
+  "f90",
+  "f95",
+  "for",
+  "xml",
+])
+
+export function isDepositedCodeOrData(file: Pick<ZenodoFile, "extension">): boolean {
+  return CODE_DATA_EXTENSIONS.has(file.extension)
+}
+
+export const SELECTION_FILE_CAP = 12
 const SELECTION_FILE_BYTES = 8_000_000
-const SELECTION_TOTAL_BYTES = 8_000_000
+export const SELECTION_TOTAL_BYTES = 8_000_000
 
 function fileBase(key: string): string {
   return (key.split("/").pop() ?? key).toLowerCase()
@@ -506,10 +545,12 @@ function compareLeading(a: ZenodoFile, b: ZenodoFile): number {
   return b.size - a.size || a.key.localeCompare(b.key)
 }
 
-export function defaultFileSelection(files: ZenodoFile[]): string[] {
+export function defaultFileSelection(files: ZenodoFile[], options?: { includeCodeData?: boolean }): string[] {
+  const includeCodeData = options?.includeCodeData !== false
   const seen = new Set<string>()
   const readable = files.filter((file) => {
     if (!isTextualFile(file) || file.extension === "zip") return false
+    if (!includeCodeData && isDepositedCodeOrData(file)) return false
     if (!((file.size > 0 && file.size <= SELECTION_FILE_BYTES) || (file.size === 0 && file.extension === "pdf"))) return false
     const id = file.checksum || file.key
     if (seen.has(id) || seen.has(file.key)) return false
@@ -551,7 +592,34 @@ export function defaultFileSelection(files: ZenodoFile[]): string[] {
   for (const file of supplements) take(file)
   for (const file of otherPdfs) take(file)
   for (const file of texts) take(file)
+  if (includeCodeData) {
+    const zips = files
+      .filter((file) => file.extension === "zip" && file.size > 0 && file.size <= SELECTION_FILE_BYTES)
+      .sort((a, b) => a.size - b.size || a.key.localeCompare(b.key))
+    for (const file of zips) take(file)
+  }
   return picked.map((file) => file.key)
+}
+
+/** Add or remove deposited code and data without dropping the manuscript selection. */
+export function selectionWithCodeData(files: ZenodoFile[], selected: readonly string[], includeCodeData: boolean): string[] {
+  if (!includeCodeData) {
+    return selected.filter((key) => {
+      const file = files.find((item) => item.key === key)
+      return file ? !isDepositedCodeOrData(file) : true
+    })
+  }
+  const next = [...selected]
+  let total = files.filter((file) => next.includes(file.key)).reduce((sum, file) => sum + file.size, 0)
+  for (const key of defaultFileSelection(files, { includeCodeData: true })) {
+    const file = files.find((item) => item.key === key)
+    if (!file || !isDepositedCodeOrData(file) || next.includes(key)) continue
+    if (next.length >= SELECTION_FILE_CAP) break
+    if (total + file.size > SELECTION_TOTAL_BYTES) continue
+    next.push(key)
+    total += file.size
+  }
+  return next
 }
 
 /** Readable files from this record whose keys were chosen. Keys from another version do not match. */
@@ -560,11 +628,37 @@ export function selectedReadableFiles(files: ZenodoFile[], selectedKeys: readonl
   return files.filter((file) => isTextualFile(file) && allowed.has(file.key))
 }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+/** Stable calendar label. `2015-08-04` becomes `4 Aug 2015`. */
+export function friendlyDay(iso: string): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso.trim())
+  if (!match) return null
+  const month = MONTHS[Number(match[2]) - 1]
+  const day = Number(match[3])
+  if (!month || day < 1 || day > 31) return null
+  return `${day} ${month} ${match[1]}`
+}
+
+/**
+ * Display label for a stored recordVersion.
+ * `22826@2015-08-04` renders as `Published 4 Aug 2015`. The stored key is unchanged.
+ * A Zenodo version string such as `v8` is shown as stored.
+ */
+export function formatVersionLabel(recordVersion: string): string {
+  const stamped = recordVersion.trim().match(/^(\d{5,})@(\d{4}-\d{2}-\d{2})$/)
+  if (!stamped) return recordVersion
+  const day = friendlyDay(stamped[2] ?? "")
+  return day ? `Published ${day}` : recordVersion
+}
+
 export function formatRecordStamp(record: Pick<ZenodoRecord, "version" | "id" | "publicationDate">): string {
   const version = record.version.trim()
   const date = record.publicationDate.trim()
-  if (version && version !== date) return date ? `version ${version} · ${date}` : `version ${version}`
-  return `Record ${record.id} · ${date || "undated"}`
+  const friendly = friendlyDay(date)
+  if (version && version !== date) return friendly ? `version ${version} · ${friendly}` : `version ${version}`
+  if (friendly) return `Published ${friendly}`
+  return `Record ${record.id}${date ? ` · ${date}` : ""}`
 }
 
 export function formatBytes(size: number): string {

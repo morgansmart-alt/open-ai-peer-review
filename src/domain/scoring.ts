@@ -1,4 +1,5 @@
 import { round2, weightedMean } from "./criteria.ts"
+import { applyCriterionProfile } from "./profiles.ts"
 import { airCriteriaV01, officialCriteria } from "./officialCriteria.ts"
 import type { CriteriaSet, ReviewReport, StoredReview } from "./types.ts"
 
@@ -8,7 +9,9 @@ export const MISMATCH_POINTS = 10
 export const ASSESSOR_SPREAD = 30
 
 export function criteriaForReview(review: StoredReview): CriteriaSet {
-  return review.criteriaVersion.startsWith("0.1") ? airCriteriaV01 : officialCriteria
+  if (review.criteriaVersion.startsWith("0.1")) return airCriteriaV01
+  if (review.customCriteria) return officialCriteria
+  return applyCriterionProfile(officialCriteria, review.criterionProfile)
 }
 
 /** 5 means a stored 1–5 score, 10 a stored 0–10 score, 100 a stored 0–100 score. */
@@ -44,6 +47,16 @@ export function expectedVerdict(board: number): "encourage" | "revise" | "major-
   return "not-ready"
 }
 
+/**
+ * Accept / sound shares the top band with encourage. Both mean a 0–100 score of at least 80.
+ * Older readings that stored encourage stay in band. A non-proposal profile may store accept.
+ */
+export function recommendationMatchesBand(recommendation: string, board: number): boolean {
+  const expected = expectedVerdict(board)
+  if (recommendation === expected) return true
+  return recommendation === "accept" && expected === "encourage"
+}
+
 export function describeScoring(input: {
   scores: { criterionId: string; score: number }[]
   statedOverall: number | null
@@ -58,7 +71,7 @@ export function describeScoring(input: {
   if (internal !== null && stated !== null && Math.abs(stated - internal) > MISMATCH_POINTS) {
     reasons.push(`Stated overall ${stated} differs from the weighted score ${internal} by more than ${MISMATCH_POINTS}.`)
   }
-  if (internal !== null && input.recommendation && input.recommendation !== expectedVerdict(internal)) {
+  if (internal !== null && input.recommendation && !recommendationMatchesBand(input.recommendation, internal)) {
     reasons.push(`Verdict ${input.recommendation} does not match the score band for ${internal} (expected ${expectedVerdict(internal)}).`)
   }
   return {
@@ -86,7 +99,7 @@ export function scoringMismatch(review: StoredReview): { mismatch: boolean; reas
     reasons.push(`Stated overall ${stated} differs from the weighted score ${internal} by more than ${MISMATCH_POINTS}.`)
   }
   const expected = expectedVerdict(internal)
-  if (review.report.recommendation && review.report.recommendation !== expected) {
+  if (review.report.recommendation && !recommendationMatchesBand(review.report.recommendation, internal)) {
     reasons.push(`Verdict ${review.report.recommendation} does not match the score band for ${internal} (expected ${expected}).`)
   }
   const reason = reasons.join(" ")

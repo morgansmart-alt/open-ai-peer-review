@@ -68,7 +68,11 @@ export function buildDemoReport(options: {
       criterionId: criterion.id,
       score,
       confidence,
-      rationale: `Demo reading only — no model was called. ${signalSentence(criterion.id, signals[criterion.id] ?? 0)} Anchored to this passage: “${quote}” Raising it would mean: ${criterion.guidance}`,
+      rationale: `Demo reading only — no model was called. ${signalSentence(criterion.id, signals[criterion.id] ?? 0)} Anchored to this passage: “${quote}” Raising it would mean: ${criterion.guidance}${
+        criterion.id === "availability" && (/figures not read/i.test(text) || filenames.some((name) => /\.(png|jpe?g|gif|webp|tiff?|svg|bmp)$/i.test(name)))
+          ? " Figures not read: image pixels were not scored."
+          : ""
+      }`,
       citations: [{ quote, location: filenames[0] ? `${filenames[0]} (extracted text)` : "Record description" }],
     }
   })
@@ -154,19 +158,23 @@ function demoV2(criteria: CriteriaSet, text: string, quote: string): Partial<Rev
       methods: reported > 0 ? "The word simulation appears. The demo did not invent a tool name." : "No simulation count is reported in the text used here.",
       inputsAvailable: /code|script|\.py|dataset/.test(lowered),
     },
-    valueEstimate: {
-      confidence: "low",
-      assumptions: [
-        "No market filing or price list was in the text used for this demo.",
-        "Ranges below are placeholders, not a forecast.",
-      ],
-      marketDisruption: "Not estimated. The demo will not invent a market size.",
-      addressableMarket: { low: "not estimated", central: "not estimated", high: "not estimated", unit: "not estimated" },
-      units: { low: "not estimated", central: "not estimated", high: "not estimated", unit: "units" },
-      valuePerUnit: { low: "not estimated", central: "not estimated", high: "not estimated", unit: "per unit" },
-      overallBenefit: { low: "not estimated", central: "not estimated", high: "not estimated", unit: "not estimated" },
-      disclaimer: "AI estimate. Not a fact and not investment advice.",
-    },
+    ...(criteria.criteria.some((criterion) => criterion.id === "estimated-value")
+      ? {
+          valueEstimate: {
+            confidence: "low" as const,
+            assumptions: [
+              "No market filing or price list was in the text used for this demo.",
+              "Ranges below are placeholders, not a forecast.",
+            ],
+            marketDisruption: "Not estimated. The demo will not invent a market size.",
+            addressableMarket: { low: "not estimated", central: "not estimated", high: "not estimated", unit: "not estimated" },
+            units: { low: "not estimated", central: "not estimated", high: "not estimated", unit: "units" },
+            valuePerUnit: { low: "not estimated", central: "not estimated", high: "not estimated", unit: "per unit" },
+            overallBenefit: { low: "not estimated", central: "not estimated", high: "not estimated", unit: "not estimated" },
+            disclaimer: "AI estimate. Not a fact and not investment advice.",
+          },
+        }
+      : {}),
     goals: globalGoals.goals.map((goal) => ({
       goalId: goal.id,
       level: goalLevelForText(goal, text),

@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom"
 import { publishNotices } from "../content/notices.ts"
+import { PROFILE_RANKING_NOTE } from "../domain/profiles.ts"
 import { airCriteriaV02 } from "../domain/officialCriteria.ts"
 import { globalGoals } from "../domain/goals.ts"
 
@@ -7,6 +8,10 @@ const sections = [
   {
     title: "What a score is",
     body: "An assessor reads the Zenodo metadata and the files you selected, then scores every AIR criterion from 0 to 100. AIR recomputes the overall score from the published weights and stores that scale on the reading. It does not trust a total the model invented. If the model's stated overall is more than 10 points away, or the verdict sits in the wrong band, the reading is marked Scoring mismatch, needs re-check and left out of the median. AIR v0.2 is the default for new readings. Older readings stay valid. A stored 0–10 score is shown times 10, and an AIR v0.1 score is stretched from 1–5 onto 0–100.",
+  },
+  {
+    title: "Criterion profiles",
+    body: PROFILE_RANKING_NOTE,
   },
   {
     title: "The leaderboard",

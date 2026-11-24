@@ -25,8 +25,12 @@ export function reviewSystemPrompt(criteria: CriteriaSet): string {
     "Quote only passages that appear in the text you were given. Do not invent page numbers, results, or citations.",
     `Score every criterion with an integer from ${criteria.scale.min} to ${criteria.scale.max}.`,
     criteria.scale.max >= 100
-      ? "The board is out of 100. AIR weights the criterion scores itself. If you include overallScore, keep it within 10 points of that weighted total. recommendation must match the band: encourage from 80, revise from 60, major-revision from 40, otherwise not-ready."
+      ? "The board is out of 100. AIR weights the criterion scores itself. If you include overallScore, keep it within 10 points of that weighted total. recommendation must match the band: accept or encourage from 80 (accept means sound as it stands; encourage means the idea is ready to build on), revise from 60, major-revision from 40, otherwise not-ready."
       : "",
+    criteria.criteria.some((criterion) => criterion.id === "estimated-value")
+      ? ""
+      : "This profile does not score estimated project value. Omit valueEstimate. Use accept when the work is sound as it stands.",
+    "Image pixels are not read. When the text says Figures not read, say so on availability. Do not treat an unseen figure as missing data unless the claim needs the image itself.",
     criteria.reportSchema === "0.2"
       ? [
           "On every score set confidence to low, medium, or high. Untested is not the same as wrong. A CHALLENGES physics class is not an automatic fail.",
@@ -56,14 +60,18 @@ export function reviewUserPrompt(record: ZenodoRecord, criteria: CriteriaSet, pa
           ontologyClass: "physical-testable | physical-not-yet-testable | logical-mathematical | metaphysical-philosophical",
           physics: { classification: "CONSISTENT | EXTENDS | CHALLENGES", laws: ["named law"], howAddressed: "string" },
           simulation: { reported: "integer or null", passed: "integer or null", methods: "string", inputsAvailable: false },
-          valueEstimate: {
-            assumptions: ["string"],
-            marketDisruption: "string",
-            addressableMarket: { low: "string", central: "string", high: "string", unit: "string" },
-            units: { low: "string", central: "string", high: "string", unit: "string" },
-            valuePerUnit: { low: "string", central: "string", high: "string", unit: "string" },
-            overallBenefit: { low: "string", central: "string", high: "string", unit: "string" },
-          },
+          ...(criteria.criteria.some((criterion) => criterion.id === "estimated-value")
+            ? {
+                valueEstimate: {
+                  assumptions: ["string"],
+                  marketDisruption: "string",
+                  addressableMarket: { low: "string", central: "string", high: "string", unit: "string" },
+                  units: { low: "string", central: "string", high: "string", unit: "string" },
+                  valuePerUnit: { low: "string", central: "string", high: "string", unit: "string" },
+                  overallBenefit: { low: "string", central: "string", high: "string", unit: "string" },
+                },
+              }
+            : {}),
           goals: globalGoals.goals.map((goal) => ({ goalId: goal.id, level: "none | indirect | partial | direct", note: "string" })),
         }
       : {}),
@@ -110,7 +118,12 @@ export function reviewUserPrompt(record: ZenodoRecord, criteria: CriteriaSet, pa
 }
 
 export function buildPacket(record: ZenodoRecord, documents: { filename: string; text: string }[], summaries: string[] | null): string {
-  const fileList = record.files.map((file) => `- ${file.key} (${file.size} bytes)`).join("\n")
+  const images = record.files.filter((file) => /^(png|jpe?g|gif|webp|tiff?|svg|bmp)$/i.test(file.extension))
+  const figureLine =
+    images.length > 0
+      ? `Figures not read: ${images.map((file) => file.key).join(", ")}. Image pixels were not scored. Captions and alt text are included only when a PDF exposes them.`
+      : ""
+  const fileList = [record.files.map((file) => `- ${file.key} (${file.size} bytes)`).join("\n"), figureLine].filter(Boolean).join("\n")
   const description = record.description.slice(0, 4000)
   const verbatim = documents.map((document) => `## ${document.filename}\n${summaries ? anchorExcerpts(document.text) : document.text}`).join("\n\n")
   const body = summaries

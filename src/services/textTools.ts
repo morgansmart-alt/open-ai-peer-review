@@ -1,3 +1,4 @@
+import { normaliseQuoteText } from "../domain/quotes.ts"
 import { stripHtml } from "./zenodo.ts"
 
 export function decodeText(data: ArrayBuffer): string {
@@ -97,7 +98,7 @@ export function coverageAllowsPublish(reading: { coverage?: string; pagesRead?: 
 }
 
 export function normaliseForQuote(value: string): string {
-  return value.toLowerCase().replace(/\s+/g, " ").trim()
+  return normaliseQuoteText(value)
 }
 
 export function quoteMatchesCorpus(quote: string, corpus: string): boolean {

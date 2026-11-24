@@ -2,10 +2,12 @@ import type { ReactNode } from "react"
 import { GoalsHeatmap, PhysicsGauge, QuadrantChart, RadarChart, RangeBars } from "./charts.tsx"
 import { publicContextCount } from "../domain/conversationLinks.ts"
 import { categoryLabel, impactFeasibilityQuadrant } from "../domain/criteria.ts"
+import { profileLabel, showsProjectValue } from "../domain/profiles.ts"
 import { scoringMismatch, storedScale, toBoard } from "../domain/scoring.ts"
 import { globalGoals } from "../domain/goals.ts"
 import { DISCLAIMER, type CriteriaSet, type ReviewReport, type StoredReview } from "../domain/types.ts"
 import { downloadText, reportToMarkdown } from "../services/markdown.ts"
+import { formatVersionLabel } from "../services/zenodo.ts"
 import { btnQuiet } from "./ui.tsx"
 import { formatWhen } from "./ui.tsx"
 
@@ -58,6 +60,7 @@ export function ReportView({
   const scale = storedScale(report, meta.criteriaVersion)
   const shown = (score: number) => toBoard(score, scale)
   const check = scoringMismatch(exportReview)
+  const showValue = showsProjectValue(meta.stored?.criterionProfile) && Boolean(report.valueEstimate)
 
   return (
     <article data-testid="report-card" className="rounded-3xl border border-line bg-white/70 p-4 sm:p-6">
@@ -83,9 +86,9 @@ export function ReportView({
         <dl className="mt-3 grid gap-1 text-xs text-ink-soft sm:grid-cols-2">
           <div>Model: {meta.modelId}</div>
           <div>Provider: {meta.provider}</div>
-          <div>Criteria: {meta.criteriaVersion}{meta.customCriteria ? " · custom, unranked" : ""}</div>
+          <div>Criteria: {meta.criteriaVersion}{meta.customCriteria ? " · custom, unranked" : ""}{meta.stored?.criterionProfile ? ` · ${profileLabel(meta.stored.criterionProfile)}` : ""}</div>
           <div>DOI: {meta.doi}</div>
-          <div>Record version: {meta.recordVersion}</div>
+          <div title={meta.recordVersion}>Record version: {formatVersionLabel(meta.recordVersion)}</div>
           <div>Generated: {formatWhen(meta.createdAt)}</div>
           {meta.outputHash && <div className="sm:col-span-2 break-all">Output hash: {meta.outputHash}</div>}
         </dl>
@@ -120,12 +123,12 @@ export function ReportView({
           Print / save PDF
         </button>
       </div>
-      <Matrices report={report} criteria={criteria} scale={scale} />
+      <Matrices report={report} criteria={criteria} scale={scale} showValue={showValue} />
       <div className="mt-4 grid gap-3 lg:grid-cols-2">
         <RadarChart scores={report.scores.slice(0, 8).map((score) => ({ label: criteria.criteria.find((item) => item.id === score.criterionId)?.name ?? score.criterionId, score: shown(score.score), max: 100 }))} />
         {report.physics && <PhysicsGauge classification={report.physics.classification} />}
         {report.goals && <GoalsHeatmap goals={report.goals} />}
-        {report.valueEstimate && <RangeBars low={report.valueEstimate.overallBenefit.low} central={report.valueEstimate.overallBenefit.central} high={report.valueEstimate.overallBenefit.high} />}
+        {showValue && report.valueEstimate && <RangeBars low={report.valueEstimate.overallBenefit.low} central={report.valueEstimate.overallBenefit.central} high={report.valueEstimate.overallBenefit.high} />}
       </div>
       <Section title="Summary" open>
         <p>{report.summary}</p>
@@ -195,7 +198,7 @@ export function ReportView({
   )
 }
 
-function Matrices({ report, criteria, scale }: { report: ReviewReport; criteria: CriteriaSet; scale: number }) {
+function Matrices({ report, criteria, scale, showValue }: { report: ReviewReport; criteria: CriteriaSet; scale: number; showValue: boolean }) {
   if (criteria.reportSchema !== "0.2" && !report.physics && !report.goals) return null
   const impactRaw = report.scores.find((score) => score.criterionId === "impact")?.score
   const feasibilityRaw = report.scores.find((score) => score.criterionId === "feasibility")?.score
@@ -243,7 +246,7 @@ function Matrices({ report, criteria, scale }: { report: ReviewReport; criteria:
           </ul>
         </section>
       )}
-      {report.valueEstimate && (
+      {showValue && report.valueEstimate && (
         <section className="rounded-2xl border border-line p-3 lg:col-span-2">
           <h3 className="text-sm font-medium">Estimated project value · confidence {report.valueEstimate.confidence}</h3>
           <p className="mt-1 text-sm">{report.valueEstimate.disclaimer}</p>

@@ -190,6 +190,10 @@ describe("scoring the whole paper", () => {
     const corpus = "The cold-side pump is specified at 582 kg/s in section 6.6.22."
     expect(quoteMatchesCorpus("582 kg/s in section 6.6.22", corpus)).toBe(true)
     expect(quoteMatchesCorpus("the pump was never specified", corpus)).toBe(false)
+    const ligature = "The \uFB01nal ﬂow is 582 kg/s."
+    expect(quoteMatchesCorpus("The final flow is 582 kg/s.", ligature)).toBe(true)
+    expect(quoteMatchesCorpus("“582 kg/s”", "The pump is \u201C582 kg/s\u201D today.")).toBe(true)
+    expect(quoteMatchesCorpus("pages 3-4", "See pages 3\u20134.")).toBe(true)
   })
 
   it("ranks the weighted score and keeps the model's total beside it", () => {

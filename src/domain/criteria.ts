@@ -142,7 +142,9 @@ export function onFivePointScale(score: number, criteria: CriteriaSet): number {
 export function recommendationFor(score: number, criteria: CriteriaSet): string {
   const ids = criteria.recommendationCategories.map((item) => item.id)
   const scaled = onFivePointScale(score, criteria)
-  const preferred = scaled >= 4.2 ? ["encourage"] : scaled >= 3.4 ? ["revise"] : scaled >= 2.6 ? ["major-revision"] : ["not-ready"]
+  const proposal = criteria.criteria.some((item) => item.id === "estimated-value")
+  const top = !proposal && ids.includes("accept") ? "accept" : "encourage"
+  const preferred = scaled >= 4.2 ? [top, "encourage", "accept"] : scaled >= 3.4 ? ["revise"] : scaled >= 2.6 ? ["major-revision"] : ["not-ready"]
   for (const id of preferred) {
     if (ids.includes(id)) return id
   }

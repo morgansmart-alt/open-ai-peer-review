@@ -1,5 +1,5 @@
-import type { AuthorClaim, AuthorRole, IssueRound, IssueStatus, IssueThread, MajorIssue, NodeSubmission, SourceResult, StoredReview } from "./types.ts"
-import { canAppendRound, ROUND_LIMIT, roundWindowVersion, samePublication } from "./versions.ts"
+import type { AuthorClaim, AuthorRole, Citation, IssueRound, IssueStatus, IssueThread, MajorIssue, NodeSubmission, SourceResult, StoredReview } from "./types.ts"
+import { canAppendRound, quoteInPublication, ROUND_LIMIT, roundWindowVersion, samePublication, settleCheckResult } from "./versions.ts"
 
 export { canAppendRound, ROUND_LIMIT }
 
@@ -18,6 +18,47 @@ type RoundWindowSlice = Pick<IssueRound, "kind" | "recordVersionChecked">
 export function roundsInVersionWindow(issueVersion: string, rounds: readonly RoundWindowSlice[], checkedVersion: string): number {
   if (!checkedVersion) return rounds.length
   return rounds.filter((_, index) => roundWindowVersion(issueVersion, rounds, index) === checkedVersion).length
+}
+
+/**
+ * A person can mark a source check by quoting the loaded version.
+ * The quote has to be in that text. No model is called.
+ * ADDRESSED and PARTIALLY_ADDRESSED need a verified quote.
+ */
+export function humanQuoteCheck(input: {
+  quote: string
+  note: string
+  result: SourceResult
+  publicationText: string
+}): { ok: true; result: SourceResult; citations: Citation[]; body: string } | { ok: false; error: string } {
+  const quote = input.quote.trim()
+  const note = input.note.trim()
+  if (!input.publicationText.trim()) {
+    return { ok: false, error: "Load this version's files before a quote check." }
+  }
+  if ((input.result === "ADDRESSED" || input.result === "PARTIALLY_ADDRESSED") && quote.length < 12) {
+    return { ok: false, error: "Quote the new version before marking the issue addressed." }
+  }
+  if (quote && !quoteInPublication(quote, input.publicationText)) {
+    return { ok: false, error: "That quotation is not in this version's loaded text." }
+  }
+  if (!quote && !note) return { ok: false, error: "Write a note, or quote this version." }
+  const settled = settleCheckResult(
+    input.result,
+    quote ? [{ quote: quote.slice(0, 500), location: "Quoted from this version" }] : [],
+    input.publicationText,
+  )
+  return {
+    ok: true,
+    result: settled.result,
+    citations: settled.citations.map((citation) => ({ ...citation, quoteVerified: true })),
+    body: note || "Quoted from this version.",
+  }
+}
+
+/** A comment is discussion. It does not choose a new issue status. */
+export function commentStatus(status: IssueStatus): IssueStatus {
+  return status
 }
 
 export function statusFromCheck(
