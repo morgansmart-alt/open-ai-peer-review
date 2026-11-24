@@ -7,6 +7,7 @@ import { weightedMean } from "../domain/criteria.ts"
 import { sha256Hex } from "./hash.ts"
 import { chunkText } from "./textTools.ts"
 import { extractJsonValue, validateReport } from "./validateReport.ts"
+import { parseModelJson, reaskJsonPrompt } from "./jsonText.ts"
 
 const good = {
   summary: "The record states a narrow claim and shows the weighing steps that support it, with the season limit written in the text.",
@@ -105,6 +106,58 @@ describe("validateReport", () => {
     expect(prompt).toContain("https://zenodo.org/records/1")
     expect(prompt).toContain("https://doi.org/10.5281/zenodo.1")
     expect(prompt).toContain("Concept record (all versions): https://zenodo.org/records/1")
+  })
+
+  it("does not block on a missing global-goals citation or score, and accepts a scores object", () => {
+    const scores = officialCriteria.criteria.map((criterion) => ({
+      criterionId: criterion.id,
+      score: 80,
+      rationale: `${criterion.name} is supported by a passage a reader can find, with the remaining gap named.`,
+      citations: [{ quote: "Net B collected 1.8 litres.", location: "results" }],
+      confidence: "medium" as const,
+    }))
+    const base = {
+      summary: "The record states a narrow claim and shows the weighing steps that support it, with the season limit written in the text.",
+      strengths: ["The files are public."],
+      majorIssues: [],
+      minorIssues: ["The season is narrow."],
+      questionsForAuthors: ["What would a second season change?"],
+      suggestedNextSteps: ["Publish the weighing sheet beside the figure."],
+      ontologyClass: "physical-testable",
+      physics: { classification: "CONSISTENT", laws: ["conservation of mass"], howAddressed: "The mass balance is written out." },
+      simulation: { reported: 0, passed: 0, methods: "Simulation does not apply to this record.", inputsAvailable: false },
+      valueEstimate: { assumptions: ["The season is one site."], marketDisruption: "Not estimated." },
+      goals: [{ goalId: "clean-water", level: "indirect", note: "The record is about collection, not a target." }],
+      recommendation: "encourage",
+      overallScore: 80,
+    }
+    const bareBonus = validateReport({
+      ...base,
+      scores: scores.map((score) => (score.criterionId === "global-goals" ? { ...score, citations: [] } : score)),
+    }, officialCriteria)
+    expect(bareBonus.ok).toBe(true)
+    const omitted = validateReport({ ...base, scores: scores.filter((score) => score.criterionId !== "global-goals") }, officialCriteria)
+    expect(omitted.ok).toBe(true)
+    if (omitted.ok) expect(omitted.report.scores.some((score) => score.criterionId === "global-goals")).toBe(false)
+    const keyed = parseModelJson(JSON.stringify({ ...base, scores: Object.fromEntries(scores.map((score) => [score.criterionId, score])) }))
+    expect(keyed.ok).toBe(true)
+    if (keyed.ok) expect(validateReport(keyed.value, officialCriteria).ok).toBe(true)
+    const { scores: dropped, ...rest } = { ...base, scores }
+    void dropped
+    const top = { ...rest } as Record<string, unknown>
+    for (const score of scores) top[score.criterionId] = score
+    const lifted = parseModelJson(JSON.stringify(top))
+    expect(lifted.ok).toBe(true)
+    if (lifted.ok) {
+      const scoresOut = (lifted.value as { scores?: { criterionId?: string; score?: number }[] }).scores ?? []
+      expect(scoresOut.find((score) => score.criterionId === "impact")?.score).toBe(80)
+      expect(scoresOut.find((score) => score.criterionId === "physics")?.score).toBe(80)
+    }
+    const prompt = reaskJsonPrompt("summary must be at least 40 characters. Missing score for impact.", ["impact", "clarity"])
+    expect(prompt).toContain("scores must be an array")
+    expect(prompt).toContain("at least 40 characters")
+    expect(prompt).toContain("impact, clarity")
+    expect(prompt).toContain('"criterionId":"impact"')
   })
 
   it("puts Zenodo, DOI, and concept links in the shared prompt and leaves private chat links out of that block", () => {

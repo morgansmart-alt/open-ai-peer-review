@@ -52,14 +52,18 @@ function isProgress(entry: StepLogEntry): boolean {
   return entry.status === "reading" || entry.status === "waiting"
 }
 
-/** Reading polls update one line. Sent, verify, round, and score lines stay. */
+export function formatStepLog(log: readonly StepLogEntry[]): string {
+  return log.map((entry) => `${entry.at} · ${entry.step} · ${entry.status}${entry.detail ? ` · ${entry.detail}` : ""}`).join("\n")
+}
+
+function sameLine(left: StepLogEntry, right: StepLogEntry): boolean {
+  return left.step === right.step && left.status === right.status && (left.detail ?? "") === (right.detail ?? "")
+}
+
+/** Reading polls update one line and stay in time order. An identical line is not stored twice. */
 export function recordStep(log: StepLogEntry[], entry: StepLogEntry, cap = LOG_CAP): StepLogEntry[] {
-  const next = log.slice()
-  if (isProgress(entry)) {
-    const index = next.findIndex((item) => item.step === entry.step && isProgress(item))
-    if (index >= 0) next[index] = entry
-    else next.push(entry)
-  } else next.push(entry)
+  if (log.some((item) => sameLine(item, entry))) return log
+  const next = (isProgress(entry) ? log.filter((item) => !(item.step === entry.step && isProgress(item))) : log.slice()).concat(entry)
   if (next.length <= cap) return next
   const overflow = next.length - cap
   let dropped = 0
@@ -265,16 +269,26 @@ export function renderReviewApp(root: HTMLElement, model: ReviewModel, actions: 
     const log = el(form, "ol", undefined, "note")
     log.id = "step-log"
     for (const entry of model.stepLog) {
-      el(log, "li", `${entry.at} · ${entry.step} · ${entry.status}${entry.detail ? ` · ${entry.detail}` : ""}`)
+      el(log, "li", formatStepLog([entry]))
     }
+    const text = formatStepLog(model.stepLog)
     const copy = el(form, "button", "Copy log", "quiet")
     copy.type = "button"
     copy.id = "copy-log"
     copy.addEventListener("click", () => {
-      const text = (model.stepLog ?? [])
-        .map((entry) => `${entry.at} · ${entry.step} · ${entry.status}${entry.detail ? ` · ${entry.detail}` : ""}`)
-        .join("\n")
       void navigator.clipboard?.writeText(text)
+    })
+    const download = el(form, "button", "Download log", "quiet")
+    download.type = "button"
+    download.id = "download-log"
+    download.addEventListener("click", () => {
+      const blob = new Blob([text.endsWith("\n") ? text : `${text}\n`], { type: "text/plain" })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement("a")
+      anchor.href = url
+      anchor.download = "air-web-chat-log.txt"
+      anchor.click()
+      URL.revokeObjectURL(url)
     })
   }
   if (model.status) {

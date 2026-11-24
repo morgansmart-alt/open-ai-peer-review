@@ -17,7 +17,7 @@ import { planDelivery, splitText } from "./webChat/deliver.ts"
 import { diagnose, queryDeep } from "./webChat/dom.ts"
 import { buildWebChatPacket, WEB_CHAT_FILE_CHARS } from "./webChat/packet.ts"
 import { originAllowed, validatePacket, WEB_CHAT_LABEL } from "./webChat/protocol.ts"
-import { recordStep, renderReviewApp, type ReviewActions, type ReviewModel } from "./webChat/reviewView.ts"
+import { formatStepLog, recordStep, renderReviewApp, type ReviewActions, type ReviewModel } from "./webChat/reviewView.ts"
 import { runTurn } from "./webChat/runTurn.ts"
 import { exportBundle, packetForLocalPaper, parseExport, resultCard, sourceRecordFromText, storedLocalReview, textFromPdfDocument } from "./webChat/standalone.ts"
 
@@ -456,6 +456,18 @@ describe("extension panel", () => {
     expect(app.querySelector("#step-log")?.textContent).toContain("5:21:03 PM · defence round 1 of 2 · waiting")
     expect(app.querySelector("#step-log")?.textContent).toContain("5:21:04 PM · Stop · idle")
     expect(app.querySelector("#copy-log")?.textContent).toBe("Copy log")
+    expect(app.querySelector("#download-log")?.textContent).toBe("Download log")
+    expect(formatStepLog([
+      { at: "1", step: "public text link", status: "sent", detail: "Method that sent: pointer." },
+      { at: "2", step: "public text link", status: "reading", detail: "candidate assistant-message, 10 characters" },
+    ])).toBe("1 · public text link · sent · Method that sent: pointer.\n2 · public text link · reading · candidate assistant-message, 10 characters")
+    let ordered = recordStep([], { at: "1", step: "public text link", status: "sent", detail: "Method that sent: pointer." })
+    ordered = recordStep(ordered, { at: "2", step: "public text link", status: "reading", detail: "candidate assistant-message, 10 characters" })
+    ordered = recordStep(ordered, { at: "3", step: "public text link", status: "sent", detail: "Method that sent: pointer." })
+    ordered = recordStep(ordered, { at: "4", step: "public text link", status: "reading", detail: "candidate assistant-message, 20 characters" })
+    expect(ordered.map((entry) => entry.status)).toEqual(["sent", "reading"])
+    expect(ordered[1]?.at).toBe("4")
+    expect(ordered[1]?.detail).toContain("20 characters")
     let collapsed = recordStep([], { at: "1", step: "defence round 1 of 2", status: "ready", detail: "Box holds 527 raw, 480 normalised." })
     for (let i = 0; i < 320; i += 1) {
       collapsed = recordStep(collapsed, { at: String(i), step: "defence round 1 of 2", status: "reading", detail: `candidate assistant, ${i} characters` })

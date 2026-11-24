@@ -728,7 +728,10 @@ function weightedMean(scores, criteria, ids) {
     if (!wanted.has(criterion.id)) continue;
     if (!ids && isBonusCriterion(criterion.id)) continue;
     const found = scores.find((item) => item.criterionId === criterion.id);
-    if (!found) return null;
+    if (!found) {
+      if (isBonusCriterion(criterion.id)) continue;
+      return null;
+    }
     weight += criterion.weight;
     total += criterion.weight * found.score;
   }

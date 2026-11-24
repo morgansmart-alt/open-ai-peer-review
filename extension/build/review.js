@@ -1016,7 +1016,10 @@
       if (!wanted.has(criterion.id)) continue;
       if (!ids && isBonusCriterion(criterion.id)) continue;
       const found = scores.find((item) => item.criterionId === criterion.id);
-      if (!found) return null;
+      if (!found) {
+        if (isBonusCriterion(criterion.id)) continue;
+        return null;
+      }
       weight += criterion.weight;
       total += criterion.weight * found.score;
     }
@@ -2146,12 +2149,60 @@ ${output}
     }
     return last;
   }
+  var SCORE_KEY_SKIP = /* @__PURE__ */ new Set([
+    "summary",
+    "overallscore",
+    "recommendation",
+    "strengths",
+    "scores",
+    "questions",
+    "questionsforauthors",
+    "suggestednextsteps",
+    "nextsteps",
+    "minorissues",
+    "majorissues",
+    "ontologyclass",
+    "valueestimate",
+    "goals",
+    "air_feedback",
+    "airfeedback",
+    "reading",
+    "scale",
+    "ideascore",
+    "statedoverall",
+    "scoringcheck",
+    "confidence"
+  ]);
+  function scoreEntry(key, field) {
+    if (SCORE_KEY_SKIP.has(key.toLowerCase().replace(/[_-]/g, ""))) return null;
+    if (typeof field === "number" && Number.isFinite(field)) return { criterionId: key, score: field };
+    if (field && typeof field === "object" && !Array.isArray(field) && "score" in field) return { criterionId: key, ...field };
+    return null;
+  }
+  function normaliseScoreShape(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const row = { ...value };
+    if (row.scores && typeof row.scores === "object" && !Array.isArray(row.scores)) {
+      row.scores = Object.entries(row.scores).flatMap(([key, field]) => {
+        const entry = scoreEntry(key, field) ?? (typeof field === "number" ? { criterionId: key, score: field } : null);
+        return entry ? [entry] : [];
+      });
+    }
+    if (!Array.isArray(row.scores)) {
+      const lifted = Object.entries(row).flatMap(([key, field]) => {
+        const entry = scoreEntry(key, field);
+        return entry ? [entry] : [];
+      });
+      if (lifted.length > 0) row.scores = lifted;
+    }
+    return row;
+  }
   function parseModelJson(raw) {
     const scored = lastScoreJson(raw);
-    if (scored) return { ok: true, value: scored.value, text: scored.text, repaired: scored.repaired };
+    if (scored) return { ok: true, value: normaliseScoreShape(scored.value), text: scored.text, repaired: scored.repaired };
     const slice = fenced(raw);
     const parsed2 = slice.includes("{") ? parseSlice(slice) : null;
-    if (parsed2) return { ok: true, ...parsed2 };
+    if (parsed2) return { ok: true, value: normaliseScoreShape(parsed2.value), text: parsed2.text, repaired: parsed2.repaired };
     return { ok: false, error: "No JSON object found in the model output." };
   }
 
@@ -2224,24 +2275,27 @@ ${output}
     if (summary.length < 40) errors.push("summary must be at least 40 characters.");
     const scoresRaw = Array.isArray(input.scores) ? input.scores : [];
     const scores = criteria.criteria.map((criterion) => {
+      const bonus = isBonusCriterion(criterion.id);
       const found = scoresRaw.find((item) => isRecord2(item) && criterionKey(clip2(item.criterionId ?? item.id, 80), criteria) === criterion.id);
       if (!isRecord2(found)) {
-        errors.push(`Missing score for ${criterion.id}.`);
+        if (!bonus) errors.push(`Missing score for ${criterion.id}.`);
         return null;
       }
       const score = Number(found.score);
       if (!Number.isInteger(score) || score < criteria.scale.min || score > criteria.scale.max) {
+        if (bonus) return null;
         errors.push(`${criterion.id} score must be an integer from ${criteria.scale.min} to ${criteria.scale.max}.`);
       }
       const rationale = clip2(found.rationale ?? found.reason, 2e3);
-      if (rationale.length < 20) errors.push(`${criterion.id} rationale is too short.`);
-      const citations = citationsFrom(found.citations ?? found.quotes, errors, criterion.id);
-      if (citations.length === 0) errors.push(`${criterion.id} needs at least one citation.`);
+      if (!bonus && rationale.length < 20) errors.push(`${criterion.id} rationale is too short.`);
+      const citations = citationsFrom(found.citations ?? found.quotes, bonus ? [] : errors, criterion.id);
+      if (!bonus && citations.length === 0) errors.push(`${criterion.id} needs at least one citation.`);
       const confidenceRaw = clip2(found.confidence, 16).toLowerCase();
       const confidence = confidenceRaw === "low" || confidenceRaw === "med" || confidenceRaw === "medium" || confidenceRaw === "high" ? confidenceRaw : "";
-      if (criteria.reportSchema === "0.2" && !confidence) errors.push(`${criterion.id} needs a confidence of low, medium, or high.`);
+      if (!bonus && criteria.reportSchema === "0.2" && !confidence) errors.push(`${criterion.id} needs a confidence of low, medium, or high.`);
       const normalizedConfidence = confidence === "high" ? "high" : confidence === "medium" || confidence === "med" ? "medium" : confidence === "low" ? "low" : void 0;
-      return { criterionId: criterion.id, score, rationale, citations, confidence: normalizedConfidence };
+      if (bonus && (!Number.isInteger(score) || score < criteria.scale.min || score > criteria.scale.max)) return null;
+      return { criterionId: criterion.id, score, rationale: rationale || (bonus ? "Bonus score. Not counted in the overall." : ""), citations, confidence: normalizedConfidence };
     });
     const recommendation = recommendationId(clip2(input.recommendation, 160), criteria);
     if (!recommendation) errors.push(`recommendation must be one of: ${criteria.recommendationCategories.map((item) => item.id).join(", ")}.`);
@@ -2274,7 +2328,8 @@ ${output}
     });
     const includeValue = criteria.criteria.some((criterion) => criterion.id === "estimated-value");
     const v2 = criteria.reportSchema === "0.2" ? readV2(input, errors, includeValue) : {};
-    if (errors.length || scores.some((score) => score === null)) return { ok: false, errors };
+    const blocked = scores.some((score, index) => score === null && !isBonusCriterion(criteria.criteria[index]?.id ?? ""));
+    if (errors.length || blocked) return { ok: false, errors };
     const ready = scores.filter((score) => score !== null);
     const overall = weightedMean(ready, criteria);
     const idea = weightedMean(ready, criteria, criteria.ideaCriterionIds);
@@ -2954,13 +3009,15 @@ ${output}
   function isProgress(entry) {
     return entry.status === "reading" || entry.status === "waiting";
   }
+  function formatStepLog(log) {
+    return log.map((entry) => `${entry.at} \xB7 ${entry.step} \xB7 ${entry.status}${entry.detail ? ` \xB7 ${entry.detail}` : ""}`).join("\n");
+  }
+  function sameLine(left, right) {
+    return left.step === right.step && left.status === right.status && (left.detail ?? "") === (right.detail ?? "");
+  }
   function recordStep(log, entry, cap = LOG_CAP) {
-    const next = log.slice();
-    if (isProgress(entry)) {
-      const index = next.findIndex((item) => item.step === entry.step && isProgress(item));
-      if (index >= 0) next[index] = entry;
-      else next.push(entry);
-    } else next.push(entry);
+    if (log.some((item) => sameLine(item, entry))) return log;
+    const next = (isProgress(entry) ? log.filter((item) => !(item.step === entry.step && isProgress(item))) : log.slice()).concat(entry);
     if (next.length <= cap) return next;
     const overflow = next.length - cap;
     let dropped = 0;
@@ -3118,14 +3175,27 @@ ${output}
       const log = el(form, "ol", void 0, "note");
       log.id = "step-log";
       for (const entry of model.stepLog) {
-        el(log, "li", `${entry.at} \xB7 ${entry.step} \xB7 ${entry.status}${entry.detail ? ` \xB7 ${entry.detail}` : ""}`);
+        el(log, "li", formatStepLog([entry]));
       }
+      const text2 = formatStepLog(model.stepLog);
       const copy = el(form, "button", "Copy log", "quiet");
       copy.type = "button";
       copy.id = "copy-log";
       copy.addEventListener("click", () => {
-        const text2 = (model.stepLog ?? []).map((entry) => `${entry.at} \xB7 ${entry.step} \xB7 ${entry.status}${entry.detail ? ` \xB7 ${entry.detail}` : ""}`).join("\n");
         void navigator.clipboard?.writeText(text2);
+      });
+      const download = el(form, "button", "Download log", "quiet");
+      download.type = "button";
+      download.id = "download-log";
+      download.addEventListener("click", () => {
+        const blob = new Blob([text2.endsWith("\n") ? text2 : `${text2}
+`], { type: "text/plain" });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = "air-web-chat-log.txt";
+        anchor.click();
+        URL.revokeObjectURL(url);
       });
     }
     if (model.status) {
