@@ -38,8 +38,16 @@ export function critiquesFromReport(report: Pick<ReviewReport, "majorIssues" | "
   return summary ? [{ criterionId: "summary", claim: summary.slice(0, 500), reason: "", quotedPassage: "" }] : []
 }
 
-export function rebuttalPrompt(options: { round: number; rounds: number; critiques: Critique[]; paperText: string }): string {
-  const excerpt = options.paperText.replace(/\s+/g, " ").trim().slice(0, 6_000)
+export function rebuttalPrompt(options: {
+  round: number
+  rounds: number
+  critiques: Critique[]
+  paperText: string
+  /** False when the review used the public text link. The defence must not paste the PDF. */
+  includeExcerpt?: boolean
+}): string {
+  const includeExcerpt = options.includeExcerpt !== false
+  const excerpt = includeExcerpt ? options.paperText.replace(/\s+/g, " ").trim().slice(0, 6_000) : ""
   const lines = options.critiques.map((critique, index) => {
     const quote = critique.quotedPassage ? ` Quoted passage: "${critique.quotedPassage}"` : ""
     const reason = critique.reason ? ` Why it was raised: ${critique.reason}` : ""
@@ -47,15 +55,15 @@ export function rebuttalPrompt(options: { round: number; rounds: number; critiqu
   })
   return [
     `Author defence, round ${options.round} of ${options.rounds}.`,
-    "Answer only from the paper text already in this chat and the excerpt below.",
+    includeExcerpt
+      ? "Answer only from the paper text already in this chat and the excerpt below."
+      : "The paper is already in this chat. Do not paste it again. Answer only from that text.",
     "Quote a section or a page when the paper itself states one. If a criticism is fair, say so plainly.",
     "Do not invent data, experiments, citations, or page numbers.",
     "",
     "Criticisms to answer:",
     ...lines,
-    "",
-    "Paper excerpt:",
-    excerpt || "(The paper text is in the earlier messages.)",
+    ...(includeExcerpt ? ["", "Paper excerpt:", excerpt || "(The paper text is in the earlier messages.)"] : []),
   ].join("\n")
 }
 
@@ -72,7 +80,8 @@ export async function runDefenceLoop(options: {
   rounds: number
   critiques: Critique[]
   paperText: string
-  send: (prompt: string) => Promise<string>
+  includeExcerpt?: boolean
+  send: (prompt: string, label?: string) => Promise<string>
   aborted: () => boolean
   pause?: () => Promise<void>
   onProgress?: (message: string) => void
@@ -80,12 +89,13 @@ export async function runDefenceLoop(options: {
   const rounds = clampDefenceRounds(options.rounds)
   const transcript: DefenceTurn[] = []
   const pause = options.pause ?? (async () => undefined)
+  const includeExcerpt = options.includeExcerpt !== false
   for (let round = 1; round <= rounds; round += 1) {
     if (options.aborted()) return { transcript, defendedText: null, stopped: true }
     options.onProgress?.(`Defence round ${round} of ${rounds}. Stay on the chat tab.`)
-    const prompt = rebuttalPrompt({ round, rounds, critiques: options.critiques, paperText: options.paperText })
+    const prompt = rebuttalPrompt({ round, rounds, critiques: options.critiques, paperText: options.paperText, includeExcerpt })
     transcript.push({ round, kind: "rebuttal", text: prompt })
-    const reply = await options.send(prompt)
+    const reply = await options.send(prompt, `defence round ${round} of ${rounds}`)
     if (options.aborted()) return { transcript, defendedText: null, stopped: true }
     transcript.push({ round, kind: "reply", text: reply })
     await pause()
@@ -94,7 +104,7 @@ export async function runDefenceLoop(options: {
   options.onProgress?.("Asking for the score after author defence.")
   const prompt = rescorePrompt()
   transcript.push({ round: rounds, kind: "rescore", text: prompt })
-  const defendedText = await options.send(prompt)
+  const defendedText = await options.send(prompt, "score after author defence")
   if (options.aborted()) return { transcript, defendedText: null, stopped: true }
   transcript.push({ round: rounds, kind: "rescore-reply", text: defendedText })
   return { transcript, defendedText, stopped: false }

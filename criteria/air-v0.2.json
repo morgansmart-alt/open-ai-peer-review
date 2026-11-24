@@ -296,7 +296,7 @@
       "name": "Global goals alignment",
       "description": "Which documented public goals the work addresses, how directly, and what contribution the record itself supports.",
       "weight": 1.1,
-      "guidance": "Use only the goals in criteria/global-goals.json. For each goal set a level: none, indirect, partial, or direct. Quote the passage that creates the link. Do not award direct alignment for a slogan. A work that addresses none of these goals can still score well on other criteria; say that plainly.",
+      "guidance": "Use only the goals in criteria/global-goals.json. For each goal set a level: none, indirect, partial, or direct. Quote the passage that creates the link. Do not award direct alignment for a slogan. Working towards a documented public goal is a nice-to-have, not a requirement. This score is optional recognition. It must not change overallScore or the score band. A work that addresses none of these goals can still score well on the other criteria; say that plainly.",
       "bands": [
         {
           "min": 0,

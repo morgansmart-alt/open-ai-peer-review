@@ -420,7 +420,7 @@ var air_v0_2_default = {
       name: "Global goals alignment",
       description: "Which documented public goals the work addresses, how directly, and what contribution the record itself supports.",
       weight: 1.1,
-      guidance: "Use only the goals in criteria/global-goals.json. For each goal set a level: none, indirect, partial, or direct. Quote the passage that creates the link. Do not award direct alignment for a slogan. A work that addresses none of these goals can still score well on other criteria; say that plainly.",
+      guidance: "Use only the goals in criteria/global-goals.json. For each goal set a level: none, indirect, partial, or direct. Quote the passage that creates the link. Do not award direct alignment for a slogan. Working towards a documented public goal is a nice-to-have, not a requirement. This score is optional recognition. It must not change overallScore or the score band. A work that addresses none of these goals can still score well on the other criteria; say that plainly.",
       bands: [
         {
           min: 0,
@@ -716,12 +716,17 @@ function parseCriteria(input) {
     }
   };
 }
+var BONUS_CRITERION_ID = "global-goals";
+function isBonusCriterion(criterionId) {
+  return criterionId === BONUS_CRITERION_ID;
+}
 function weightedMean(scores, criteria, ids) {
   const wanted = new Set(ids ?? criteria.criteria.map((item) => item.id));
   let weight = 0;
   let total = 0;
   for (const criterion of criteria.criteria) {
     if (!wanted.has(criterion.id)) continue;
+    if (!ids && isBonusCriterion(criterion.id)) continue;
     const found = scores.find((item) => item.criterionId === criterion.id);
     if (!found) return null;
     weight += criterion.weight;
@@ -791,7 +796,8 @@ var CRITERION_PROFILES = [
     ideaCriterionIds: ["availability", "clarity"],
     guidance: {
       availability: "Score whether the data, code, or reference file is public and matches the claim. Figures that were not read are not missing data unless the claim depends on the image itself.",
-      impact: "Score who can use the dataset or reference, not a product market."
+      impact: "Score who can use the dataset or reference, not a product market.",
+      "global-goals": "Optional recognition. Score the enabling value when the dataset or reference helps a documented public goal. This score is a bonus and is not part of the overall."
     }
   },
   {
@@ -813,7 +819,8 @@ var CRITERION_PROFILES = [
     ideaCriterionIds: ["impact", "clarity"],
     guidance: {
       feasibility: "Score whether a reader can follow the path the report describes. A missing prototype is not a fail when the work is a map, not a build.",
-      impact: "Score the benefit the report itself traces, not an estimated sale price."
+      impact: "Score the benefit the report itself traces, not an estimated sale price.",
+      "global-goals": "Optional recognition. Score a documented public goal the report helps, including by enabling other work. This score is a bonus and is not part of the overall."
     }
   },
   {
@@ -891,6 +898,11 @@ function recommendationMatchesBand(recommendation, board) {
   if (recommendation === expected) return true;
   return recommendation === "accept" && expected === "encourage";
 }
+function verdictBandNote(recommendation, board) {
+  if (!recommendation || recommendationMatchesBand(recommendation, board)) return null;
+  const rounded = Math.round(board);
+  return `The model said ${recommendation}. The band for ${rounded} is ${expectedVerdict(rounded)}.`;
+}
 function describeScoring(input) {
   const scale = input.criteria.scale.max >= 100 ? 100 : input.criteria.scale.max <= 5 ? 5 : 10;
   const internalRaw = weightedMean(input.scores, input.criteria);
@@ -900,9 +912,6 @@ function describeScoring(input) {
   if (internal !== null && stated !== null && Math.abs(stated - internal) > MISMATCH_POINTS) {
     reasons.push(`Stated overall ${stated} differs from the weighted score ${internal} by more than ${MISMATCH_POINTS}.`);
   }
-  if (internal !== null && input.recommendation && !recommendationMatchesBand(input.recommendation, internal)) {
-    reasons.push(`Verdict ${input.recommendation} does not match the score band for ${internal} (expected ${expectedVerdict(internal)}).`);
-  }
   return {
     scale,
     statedOverall: input.statedOverall,
@@ -910,7 +919,8 @@ function describeScoring(input) {
       internal: internal ?? 0,
       statedOverall: stated,
       mismatch: reasons.length > 0,
-      reason: reasons.join(" ") || null
+      reason: reasons.join(" ") || null,
+      verdictNote: internal !== null ? verdictBandNote(input.recommendation, internal) : null
     }
   };
 }

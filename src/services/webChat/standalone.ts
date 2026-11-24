@@ -1,7 +1,8 @@
 import type { CriteriaSet, ReviewReport, StoredReview } from "../../domain/types.ts"
 import type { ZenodoRecord } from "../zenodo.ts"
 import { sha256Hex, uid } from "../hash.ts"
-import { scoringMismatch } from "../../domain/scoring.ts"
+import { categoryLabel } from "../../domain/criteria.ts"
+import { criteriaForReview, rankedBoardScore, scoringMismatch } from "../../domain/scoring.ts"
 import { draftWebChatReview, scrubPrivateUrls } from "./accept.ts"
 import { buildWebChatPacket } from "./packet.ts"
 import { paperTextRecordId } from "./paperText.ts"
@@ -208,6 +209,7 @@ export function resultCard(review: StoredReview): {
   recommendation: string
   summary: string
   mismatch: string | null
+  verdictNote: string | null
   label: string
   defendedOverall: number | null
   defendedLabel: string
@@ -217,6 +219,7 @@ export function resultCard(review: StoredReview): {
   notice: string
 } {
   const check = scoringMismatch(review)
+  const criteria = criteriaForReview(review)
   const feedback = hasAirFeedback(review.report.airFeedback) ? review.report.airFeedback : undefined
   const labels: { key: keyof NonNullable<typeof feedback>; label: string }[] = [
     { key: "criteria", label: "Criteria" },
@@ -228,10 +231,11 @@ export function resultCard(review: StoredReview): {
   ]
   return {
     title: review.title,
-    overall: review.report.overallScore,
-    recommendation: review.report.recommendation,
+    overall: check.internal ?? rankedBoardScore(review),
+    recommendation: categoryLabel(criteria, check.shownRecommendation),
     summary: review.report.summary,
     mismatch: check.mismatch ? `Scoring mismatch, needs re-check. ${check.reason ?? ""}`.trim() : null,
+    verdictNote: check.verdictNote,
     label: WEB_CHAT_LABEL,
     defendedOverall: review.defended?.overallScore ?? null,
     defendedLabel: review.defended?.label ?? "",

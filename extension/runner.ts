@@ -48,10 +48,23 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
   showBanner(provider.label)
   sendResponse({ ok: true, started: true })
   const observedModel = () => detectChatModel(document, provider.id)
+  let lastFocus = 0
+  const focusChat = () => {
+    lastFocus = Date.now()
+    chrome.runtime.sendMessage({ type: "air-web-chat-focus" })
+  }
   const hooks: TurnHooks = {
     aborted: () => aborted,
     onProgress: (text) => report({ type: "air-web-chat-progress", requestId: message.requestId, message: text }),
-    sleep: (ms) => new Promise((resolve) => window.setTimeout(resolve, ms)),
+    sleep: (ms) => {
+      if (document.hidden && Date.now() - lastFocus > 2000) focusChat()
+      return new Promise((resolve) => window.setTimeout(resolve, ms))
+    },
+    keepAwake: () =>
+      new Promise((resolve) => {
+        lastFocus = Date.now()
+        chrome.runtime.sendMessage({ type: "air-web-chat-focus" }, () => resolve())
+      }),
   }
   void runTurn(document, provider, message.packet, hooks).then(async (result) => {
     if (!result.ok) {
@@ -61,7 +74,7 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
     const criteria = readingCriteria(officialCriteria, message.packet.criterionProfile, false)
     const settled = await settleChatJson(
       result.text,
-      (prompt) => sendFollowUp(document, provider, prompt, hooks),
+      (prompt) => sendFollowUp(document, provider, prompt, hooks, "corrected JSON"),
       (note) => hooks.onProgress?.(note),
       (text) => {
         const accepted = acceptWebChatResult(text, criteria)
@@ -79,16 +92,18 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
       report({ type: "air-web-chat-done", requestId: message.requestId, ok: true, text: settled.text, defendedText: null, transcript: [], stopped: false, chatModel: observedModel(), notice })
       return
     }
-    const paperText = message.packet.files.map((file) => file.text).join("\n\n")
+    const linked = result.route === "link"
+    const paperText = linked ? "" : message.packet.files.map((file) => file.text).join("\n\n")
     try {
       const defence = await runDefenceLoop({
         rounds,
         critiques: critiquesFromReport(accepted.report),
         paperText,
+        includeExcerpt: !linked,
         aborted: () => aborted,
         pause: () => new Promise((resolve) => window.setTimeout(resolve, DEFENCE_PAUSE_MS)),
         onProgress: (text) => report({ type: "air-web-chat-progress", requestId: message.requestId, message: text }),
-        send: (prompt) => sendFollowUp(document, provider, prompt, hooks),
+        send: (prompt, label) => sendFollowUp(document, provider, prompt, hooks, label ?? "author defence"),
       })
       report({
         type: "air-web-chat-done",

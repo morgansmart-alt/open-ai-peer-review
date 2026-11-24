@@ -113,6 +113,17 @@ export function parseCriteria(input: unknown): { ok: true; criteria: CriteriaSet
   }
 }
 
+/** Optional recognition. Scored and shown, and left out of every overall average. */
+export const BONUS_CRITERION_ID = "global-goals"
+
+export function isBonusCriterion(criterionId: string): boolean {
+  return criterionId === BONUS_CRITERION_ID
+}
+
+export function globalGoalsBadge(score: number): string {
+  return `Global goals: ${Math.round(score)} (bonus, not counted in overall)`
+}
+
 export function weightedMean(
   scores: { criterionId: string; score: number }[],
   criteria: CriteriaSet,
@@ -123,6 +134,8 @@ export function weightedMean(
   let total = 0
   for (const criterion of criteria.criteria) {
     if (!wanted.has(criterion.id)) continue
+    // The overall average skips the bonus. An explicit list, such as the idea score, may still include it.
+    if (!ids && isBonusCriterion(criterion.id)) continue
     const found = scores.find((item) => item.criterionId === criterion.id)
     if (!found) return null
     weight += criterion.weight

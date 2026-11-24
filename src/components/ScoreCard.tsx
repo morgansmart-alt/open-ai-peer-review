@@ -98,7 +98,9 @@ export function ScoreCard({
           {bars.map((bar) => (
             <li key={bar.id}>
               <div className="flex items-baseline justify-between gap-3 text-sm">
-                <span className="font-medium">{bar.name}</span>
+                <span className="font-medium">
+                  {bar.bonus ? `Global goals: ${bar.median === null ? "—" : bar.median.toFixed(0)} (bonus, not counted in overall)` : bar.name}
+                </span>
                 <span className="tabular-nums text-ink-soft">{bar.median === null ? "—" : bar.median.toFixed(0)}</span>
               </div>
               <div className="score-track mt-1" role="img" aria-label={`${bar.name} median ${bar.median === null ? "unavailable" : bar.median.toFixed(0)} out of 100`}>
@@ -139,6 +141,7 @@ export function ScoreCard({
               <span className="font-medium">{line.name}</span>
               <span className="tabular-nums">{line.score.toFixed(0)} / 100</span>
               <span>{line.verdict}</span>
+              {line.verdictNote ? <span className="text-ink-soft">{line.verdictNote}</span> : null}
               {line.mismatch ? <span className="text-bad">Scoring mismatch, needs re-check</span> : null}
               {line.possible > 0 ? <span className="text-ink-soft">{line.possible} marked possible</span> : null}
               {line.proven > 0 ? <span className="text-ink-soft">{line.proven} marked proven</span> : null}

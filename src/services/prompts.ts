@@ -26,7 +26,7 @@ export function reviewSystemPrompt(criteria: CriteriaSet): string {
     `Score every criterion with an integer from ${criteria.scale.min} to ${criteria.scale.max}.`,
     "Include air_feedback about AIR itself. Give at least one concrete, honest item: an unclear or misfitting criterion, a profile that does not fit, missing context or files, a prompt problem, a rubric suggestion, or a correction to your own scoring. If a field does not apply, write \"none\" and the reason, for example \"none: the data profile matched this record\". Never use an empty string. This note must not change any score.",
     criteria.scale.max >= 100
-      ? "The board is out of 100. AIR weights the criterion scores itself. If you include overallScore, keep it within 10 points of that weighted total. recommendation must match the band: accept or encourage from 80 (accept means sound as it stands; encourage means the idea is ready to build on), revise from 60, major-revision from 40, otherwise not-ready."
+      ? "The board is out of 100. AIR weights the criterion scores itself and leaves global-goals out of that weighted total. Working towards a documented public goal is a nice-to-have, not a requirement, and it must not change overallScore or the score band. Score global-goals anyway, including when the work enables other work. If you include overallScore, keep it within 10 points of the weighted total of the other criteria. recommendation must match the band for that total: accept or encourage from 80 (accept means sound as it stands; encourage means the idea is ready to build on), revise from 60, major-revision from 40, otherwise not-ready."
       : "",
     criteria.criteria.some((criterion) => criterion.id === "estimated-value")
       ? ""

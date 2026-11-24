@@ -469,7 +469,52 @@ describe("live chat composers", () => {
     expect(sent[0]).not.toContain("UNIQUEYIELD")
     expect(sent[1]).toContain("UNIQUEYIELD")
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.notice).toContain("text page unreachable, model used other sources")
+    if (!result.ok) return
+    expect(result.route).toBe("paste")
+    expect(result.notice).toContain("text page unreachable, model used other sources")
+  })
+
+  it("keeps a live text page as the only route when the model scores it", async () => {
+    document.body.innerHTML = `<main><textarea id="box" aria-label="Message Grok"></textarea><button id="send" type="submit" aria-label="Send">Send</button><div id="reply" class="assistant-message"></div></main>`
+    const provider = webChatProvider("grok")
+    if (!provider) throw new Error("missing grok")
+    const sent: string[] = []
+    const progress: string[] = []
+    document.getElementById("send")?.addEventListener("click", () => {
+      const text = (document.getElementById("box") as HTMLTextAreaElement).value
+      sent.push(text)
+      ;(document.getElementById("box") as HTMLTextAreaElement).value = ""
+      document.getElementById("reply")!.textContent = '{"overallScore":86}'
+    })
+    const packet = buildWebChatPacket({
+      requestId: "link-only",
+      providerId: "grok",
+      criteria: officialCriteria,
+      record,
+      documents: [{ filename: "paper.md", text: "UNIQUEYIELD in one season." }],
+      useTextPage: true,
+    })
+    const livePage = `${"The public paper text is long enough to count as the record. ".repeat(12)}\nZenodo record: https://zenodo.org/records/1\nVersion DOI: https://doi.org/10.5281/zenodo.1`
+    const result = await runTurn(document, { ...provider, fileUpload: false, pasteLimit: 200_000 }, packet, {
+      aborted: () => false,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      pollMs: 5,
+      stableMs: 0,
+      stepTimeoutMs: 2000,
+      replyStartTimeoutMs: 400,
+      submitStableMs: 0,
+      submitReadyMs: 20,
+      sendVerifyMs: 20,
+      loadTextPage: async () => ({ status: 200, body: livePage }),
+      onProgress: (message) => progress.push(message),
+    })
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toContain("paper-text/1.txt")
+    expect(sent.join("\n")).not.toContain("UNIQUEYIELD")
+    expect(progress.some((message) => message.startsWith("Review route: public text link."))).toBe(true)
+    expect(progress.some((message) => message.includes("Waiting for the reply: public text link."))).toBe(true)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.route).toBe("link")
   })
 
   it("pastes the paper when the public text page is not available", async () => {
@@ -506,6 +551,7 @@ describe("live chat composers", () => {
     expect(sent[0]).not.toContain("public text page")
     expect(sent.some((text) => text.includes("UNIQUEYIELD"))).toBe(true)
     expect(result.ok).toBe(true)
+    if (result.ok) expect(result.route).toBe("paste")
   })
 
   it("reads the last grok.com assistant score, not the prompt schema", () => {

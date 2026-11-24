@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react"
 import { Link } from "react-router-dom"
 import { assessorById } from "../domain/assessors.ts"
-import { categoryLabel } from "../domain/criteria.ts"
-import { boardValue, scoringMismatch } from "../domain/scoring.ts"
+import { categoryLabel, isBonusCriterion } from "../domain/criteria.ts"
+import { boardValue, criteriaForReview, rankedBoardScore, scoringMismatch } from "../domain/scoring.ts"
 import { statusLabel } from "../domain/issues.ts"
 import { buildRanking, listRankingMethods, sortRows, type RankRow } from "../domain/ranking.ts"
 import { scoreLineage, type LineagePoint } from "../domain/versions.ts"
@@ -399,7 +399,9 @@ function Expanded({ row }: { row: RankRow }) {
             <tbody>
               {criteria.criteria.map((criterion) => (
                 <tr key={criterion.id} className="border-t border-line/70">
-                  <th className="py-1 pr-2 text-left font-normal">{criterion.name}</th>
+                  <th className="py-1 pr-2 text-left font-normal">
+                    {isBonusCriterion(criterion.id) ? `${criterion.name} (bonus, not counted in overall)` : criterion.name}
+                  </th>
                   {row.reviews.map((review) => (
                     <td key={review.id} className="py-1 tabular-nums">
                       {review.report.scores.find((score) => score.criterionId === criterion.id)?.score ?? "—"}
@@ -411,16 +413,21 @@ function Expanded({ row }: { row: RankRow }) {
           </table>
         </div>
         <div className="mt-3 space-y-2">
-          {row.reviews.map((review) => (
+          {row.reviews.map((review) => {
+            const check = scoringMismatch(review)
+            const shown = check.internal ?? rankedBoardScore(review)
+            return (
             <details key={review.id}>
               <summary className="cursor-pointer text-sm">
-                {assessorById(review.assessorId, air.profiles)?.name ?? review.assessorId} · {boardValue(review.report.overallScore, review.report, review.criteriaVersion).toFixed(0)} / 100 ·{" "}
-                {categoryLabel(criteria, review.report.recommendation)}
-                {scoringMismatch(review).mismatch ? " · Scoring mismatch, needs re-check" : ""}
+                {assessorById(review.assessorId, air.profiles)?.name ?? review.assessorId} · {shown.toFixed(0)} / 100 ·{" "}
+                {categoryLabel(criteriaForReview(review), check.shownRecommendation)}
+                {check.verdictNote ? ` · ${check.verdictNote}` : ""}
+                {check.mismatch ? " · Scoring mismatch, needs re-check" : ""}
               </summary>
               <p className="mt-1 text-sm text-ink-soft">{review.report.summary}</p>
             </details>
-          ))}
+            )
+          })}
         </div>
       </div>
       <div className="space-y-3 text-sm">
@@ -434,7 +441,9 @@ function Expanded({ row }: { row: RankRow }) {
         <ul className="grid grid-cols-2 gap-1 text-xs">
           {Object.entries(row.subscores).map(([id, cell]) => (
             <li key={id}>
-              {id}: {cell.median === null ? "—" : cell.median.toFixed(1)}
+              {isBonusCriterion(id)
+                ? `Global goals: ${cell.median === null ? "—" : cell.median.toFixed(0)} (bonus, not counted in overall)`
+                : `${id}: ${cell.median === null ? "—" : cell.median.toFixed(1)}`}
             </li>
           ))}
         </ul>
@@ -445,7 +454,8 @@ function Expanded({ row }: { row: RankRow }) {
           <ul className="mt-1 space-y-1">
             {row.humanReviews.map((review) => (
               <li key={review.id}>
-                Human reviewer · {boardValue(review.report.overallScore, review.report, review.criteriaVersion).toFixed(0)} / 100
+                Human reviewer · {(scoringMismatch(review).internal ?? boardValue(review.report.overallScore, review.report, review.criteriaVersion)).toFixed(0)} / 100
+                {scoringMismatch(review).verdictNote ? ` · ${scoringMismatch(review).verdictNote}` : ""}
                 {scoringMismatch(review).mismatch ? " · Scoring mismatch, needs re-check" : ""}
               </li>
             ))}

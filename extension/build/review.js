@@ -695,7 +695,7 @@
         name: "Global goals alignment",
         description: "Which documented public goals the work addresses, how directly, and what contribution the record itself supports.",
         weight: 1.1,
-        guidance: "Use only the goals in criteria/global-goals.json. For each goal set a level: none, indirect, partial, or direct. Quote the passage that creates the link. Do not award direct alignment for a slogan. A work that addresses none of these goals can still score well on other criteria; say that plainly.",
+        guidance: "Use only the goals in criteria/global-goals.json. For each goal set a level: none, indirect, partial, or direct. Quote the passage that creates the link. Do not award direct alignment for a slogan. Working towards a documented public goal is a nice-to-have, not a requirement. This score is optional recognition. It must not change overallScore or the score band. A work that addresses none of these goals can still score well on the other criteria; say that plainly.",
         bands: [
           {
             min: 0,
@@ -994,12 +994,17 @@
       }
     };
   }
+  var BONUS_CRITERION_ID = "global-goals";
+  function isBonusCriterion(criterionId) {
+    return criterionId === BONUS_CRITERION_ID;
+  }
   function weightedMean(scores, criteria, ids) {
     const wanted = new Set(ids ?? criteria.criteria.map((item) => item.id));
     let weight = 0;
     let total = 0;
     for (const criterion of criteria.criteria) {
       if (!wanted.has(criterion.id)) continue;
+      if (!ids && isBonusCriterion(criterion.id)) continue;
       const found = scores.find((item) => item.criterionId === criterion.id);
       if (!found) return null;
       weight += criterion.weight;
@@ -1007,6 +1012,9 @@
     }
     if (weight <= 0) return null;
     return round2(total / weight);
+  }
+  function categoryLabel(criteria, id) {
+    return criteria.recommendationCategories.find((item) => item.id === id)?.label ?? id;
   }
 
   // src/domain/officialCriteria.ts
@@ -1069,7 +1077,8 @@ ${parsed2.errors.join("\n")}`);
       ideaCriterionIds: ["availability", "clarity"],
       guidance: {
         availability: "Score whether the data, code, or reference file is public and matches the claim. Figures that were not read are not missing data unless the claim depends on the image itself.",
-        impact: "Score who can use the dataset or reference, not a product market."
+        impact: "Score who can use the dataset or reference, not a product market.",
+        "global-goals": "Optional recognition. Score the enabling value when the dataset or reference helps a documented public goal. This score is a bonus and is not part of the overall."
       }
     },
     {
@@ -1091,7 +1100,8 @@ ${parsed2.errors.join("\n")}`);
       ideaCriterionIds: ["impact", "clarity"],
       guidance: {
         feasibility: "Score whether a reader can follow the path the report describes. A missing prototype is not a fail when the work is a map, not a build.",
-        impact: "Score the benefit the report itself traces, not an estimated sale price."
+        impact: "Score the benefit the report itself traces, not an estimated sale price.",
+        "global-goals": "Optional recognition. Score a documented public goal the report helps, including by enabling other work. This score is a bonus and is not part of the overall."
       }
     },
     {
@@ -1167,6 +1177,16 @@ ${parsed2.errors.join("\n")}`);
     if (scale <= 5) return round2((score - 1) / 4 * BOARD_MAX);
     return round2(score * (BOARD_MAX / scale));
   }
+  function boardValue(score, report, criteriaVersion) {
+    return toBoard(score, storedScale(report, criteriaVersion));
+  }
+  function rankedBoardScore(review) {
+    const criteria = criteriaForReview(review);
+    const weighted = weightedMean(review.report.scores, criteria);
+    const scale = storedScale(review.report, review.criteriaVersion);
+    if (weighted === null) return boardValue(review.report.overallScore, review.report, review.criteriaVersion);
+    return toBoard(weighted, scale);
+  }
   function expectedVerdict(board) {
     if (board >= 80) return "encourage";
     if (board >= 60) return "revise";
@@ -1178,6 +1198,15 @@ ${parsed2.errors.join("\n")}`);
     if (recommendation === expected) return true;
     return recommendation === "accept" && expected === "encourage";
   }
+  function bandRecommendation(recommendation, board) {
+    if (!recommendation || recommendationMatchesBand(recommendation, board)) return recommendation;
+    return expectedVerdict(Math.round(board));
+  }
+  function verdictBandNote(recommendation, board) {
+    if (!recommendation || recommendationMatchesBand(recommendation, board)) return null;
+    const rounded = Math.round(board);
+    return `The model said ${recommendation}. The band for ${rounded} is ${expectedVerdict(rounded)}.`;
+  }
   function describeScoring(input) {
     const scale = input.criteria.scale.max >= 100 ? 100 : input.criteria.scale.max <= 5 ? 5 : 10;
     const internalRaw = weightedMean(input.scores, input.criteria);
@@ -1187,9 +1216,6 @@ ${parsed2.errors.join("\n")}`);
     if (internal !== null && stated !== null && Math.abs(stated - internal) > MISMATCH_POINTS) {
       reasons.push(`Stated overall ${stated} differs from the weighted score ${internal} by more than ${MISMATCH_POINTS}.`);
     }
-    if (internal !== null && input.recommendation && !recommendationMatchesBand(input.recommendation, internal)) {
-      reasons.push(`Verdict ${input.recommendation} does not match the score band for ${internal} (expected ${expectedVerdict(internal)}).`);
-    }
     return {
       scale,
       statedOverall: input.statedOverall,
@@ -1197,14 +1223,17 @@ ${parsed2.errors.join("\n")}`);
         internal: internal ?? 0,
         statedOverall: stated,
         mismatch: reasons.length > 0,
-        reason: reasons.join(" ") || null
+        reason: reasons.join(" ") || null,
+        verdictNote: internal !== null ? verdictBandNote(input.recommendation, internal) : null
       }
     };
   }
   function scoringMismatch(review) {
     const criteria = criteriaForReview(review);
     const internalRaw = weightedMean(review.report.scores, criteria);
-    if (internalRaw === null) return { mismatch: false, reason: null, internal: null };
+    if (internalRaw === null) {
+      return { mismatch: false, reason: null, internal: null, verdictNote: null, shownRecommendation: review.report.recommendation };
+    }
     const scale = storedScale(review.report, review.criteriaVersion);
     const internal = toBoard(internalRaw, scale);
     const statedSource = review.report.statedOverall != null ? review.report.statedOverall : review.report.overallScore;
@@ -1213,12 +1242,14 @@ ${parsed2.errors.join("\n")}`);
     if (Math.abs(stated - internal) > MISMATCH_POINTS) {
       reasons.push(`Stated overall ${stated} differs from the weighted score ${internal} by more than ${MISMATCH_POINTS}.`);
     }
-    const expected = expectedVerdict(internal);
-    if (review.report.recommendation && !recommendationMatchesBand(review.report.recommendation, internal)) {
-      reasons.push(`Verdict ${review.report.recommendation} does not match the score band for ${internal} (expected ${expected}).`);
-    }
     const reason = reasons.join(" ");
-    return { mismatch: reasons.length > 0, reason: reason || null, internal };
+    return {
+      mismatch: reasons.length > 0,
+      reason: reason || null,
+      internal,
+      verdictNote: verdictBandNote(review.report.recommendation, internal),
+      shownRecommendation: bandRecommendation(review.report.recommendation, internal)
+    };
   }
 
   // src/services/airFeedback.ts
@@ -2702,7 +2733,7 @@ ${output}
       "Quote only passages that appear in the text you were given. Do not invent page numbers, results, or citations.",
       `Score every criterion with an integer from ${criteria.scale.min} to ${criteria.scale.max}.`,
       'Include air_feedback about AIR itself. Give at least one concrete, honest item: an unclear or misfitting criterion, a profile that does not fit, missing context or files, a prompt problem, a rubric suggestion, or a correction to your own scoring. If a field does not apply, write "none" and the reason, for example "none: the data profile matched this record". Never use an empty string. This note must not change any score.',
-      criteria.scale.max >= 100 ? "The board is out of 100. AIR weights the criterion scores itself. If you include overallScore, keep it within 10 points of that weighted total. recommendation must match the band: accept or encourage from 80 (accept means sound as it stands; encourage means the idea is ready to build on), revise from 60, major-revision from 40, otherwise not-ready." : "",
+      criteria.scale.max >= 100 ? "The board is out of 100. AIR weights the criterion scores itself and leaves global-goals out of that weighted total. Working towards a documented public goal is a nice-to-have, not a requirement, and it must not change overallScore or the score band. Score global-goals anyway, including when the work enables other work. If you include overallScore, keep it within 10 points of the weighted total of the other criteria. recommendation must match the band for that total: accept or encourage from 80 (accept means sound as it stands; encourage means the idea is ready to build on), revise from 60, major-revision from 40, otherwise not-ready." : "",
       criteria.criteria.some((criterion) => criterion.id === "estimated-value") ? "" : "This profile does not score estimated project value. Omit valueEstimate. Use accept when the work is sound as it stands.",
       "Image pixels are not read. When the text says Figures not read, say so on availability. Do not treat an unseen figure as missing data unless the claim needs the image itself.",
       criteria.reportSchema === "0.2" ? [
@@ -2727,7 +2758,7 @@ ${output}
     return `https://zenodo.org/records/${cleaned}`;
   }
   function sourceRecordBlock(record) {
-    const versionUrl = zenodoRecordsUrl(record.id) || (record.htmlUrl?.startsWith("https://zenodo.org/records/") ? record.htmlUrl : "");
+    const versionUrl = zenodoRecordsUrl(record.id) || ((record.htmlUrl ?? "").startsWith("https://zenodo.org/records/") ? record.htmlUrl : "");
     const doiUrl = publicDoiUrl(record.doi);
     const conceptUrl = zenodoRecordsUrl(record.conceptId);
     const conceptDoiUrl = publicDoiUrl(record.conceptDoi);
@@ -2965,7 +2996,10 @@ ${output}
     const linkLabel = el(form, "label", "Publication link");
     const link2 = document.createElement("input");
     link2.id = "publication-link";
-    link2.type = "url";
+    link2.type = "text";
+    link2.inputMode = "url";
+    link2.autocomplete = "off";
+    link2.spellcheck = false;
     link2.placeholder = "https://zenodo.org/records/\u2026";
     link2.value = model.link;
     link2.addEventListener("input", () => actions.onLink(link2.value));
@@ -3039,13 +3073,18 @@ ${output}
         const note = el(card, "p", model.result.notice, "mismatch");
         note.id = "text-page-note";
       }
+      if (model.result.verdictNote) {
+        const note = el(card, "p", model.result.verdictNote, "note");
+        note.id = "verdict-note";
+      }
       if (model.result.mismatch) el(card, "p", model.result.mismatch, "mismatch");
       el(card, "p", model.result.summary);
       if (model.result.scores && model.result.scores.length > 0) {
         const list = el(card, "ul");
         list.id = "criterion-scores";
         for (const score of model.result.scores) {
-          el(list, "li", `${score.criterionId}: ${Math.round(score.score)}`);
+          const line = score.criterionId === "global-goals" ? `Global goals: ${Math.round(score.score)} (bonus, not counted in overall)` : `${score.criterionId}: ${Math.round(score.score)}`;
+          el(list, "li", line);
         }
       }
       if (model.result.feedback && model.result.feedback.length > 0) {
@@ -3349,6 +3388,7 @@ ${JSON.stringify(report)}`),
   }
   function resultCard(review) {
     const check = scoringMismatch(review);
+    const criteria = criteriaForReview(review);
     const feedback = hasAirFeedback(review.report.airFeedback) ? review.report.airFeedback : void 0;
     const labels = [
       { key: "criteria", label: "Criteria" },
@@ -3360,10 +3400,11 @@ ${JSON.stringify(report)}`),
     ];
     return {
       title: review.title,
-      overall: review.report.overallScore,
-      recommendation: review.report.recommendation,
+      overall: check.internal ?? rankedBoardScore(review),
+      recommendation: categoryLabel(criteria, check.shownRecommendation),
       summary: review.report.summary,
       mismatch: check.mismatch ? `Scoring mismatch, needs re-check. ${check.reason ?? ""}`.trim() : null,
+      verdictNote: check.verdictNote,
       label: WEB_CHAT_LABEL,
       defendedOverall: review.defended?.overallScore ?? null,
       defendedLabel: review.defended?.label ?? "",
@@ -3599,7 +3640,7 @@ ${JSON.stringify(report)}`),
     return {
       id: review.id,
       title: review.title,
-      overall: review.report.overallScore,
+      overall: card.overall,
       doi: review.doi === "local-file" ? "" : review.doi,
       url: review.paperUrl,
       site: review.modelId,
@@ -3610,6 +3651,9 @@ ${JSON.stringify(report)}`),
     };
   }
   function paint() {
+    const typing = document.activeElement instanceof HTMLInputElement && document.activeElement.id === "publication-link";
+    const draft = typing ? document.activeElement.value : null;
+    const caret = typing ? document.activeElement.selectionStart : null;
     const latest = reviews[0];
     renderReviewApp(
       root,
@@ -3692,6 +3736,14 @@ ${JSON.stringify(report)}`),
         }
       }
     );
+    if (draft !== null) {
+      const field = document.getElementById("publication-link");
+      if (field instanceof HTMLInputElement) {
+        field.value = draft;
+        field.focus();
+        if (caret !== null) field.setSelectionRange(caret, caret);
+      }
+    }
   }
   async function readPaper(next) {
     const filename = next.name || "paper.txt";

@@ -76,7 +76,8 @@ describe("validateReport", () => {
     expect(drifted.report.statedOverall).toBe(40)
     expect(drifted.report.scoringCheck?.mismatch).toBe(true)
     expect(drifted.report.scoringCheck?.reason).toContain("differs from the weighted score")
-    expect(drifted.report.scoringCheck?.reason).toContain("Verdict")
+    expect(drifted.report.scoringCheck?.reason ?? "").not.toContain("Verdict")
+    expect(drifted.report.scoringCheck?.verdictNote).toContain("The model said revise")
     const record = {
       id: "1",
       conceptId: "1",

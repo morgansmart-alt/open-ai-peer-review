@@ -156,7 +156,8 @@ describe("web chat JSON and the uncalibrated tier", () => {
     expect(accepted.report.statedOverall).toBe(95)
     expect(accepted.report.scoringCheck?.mismatch).toBe(true)
     expect(accepted.report.scoringCheck?.reason).toContain("differs from the weighted score")
-    expect(accepted.report.scoringCheck?.reason).toContain("Verdict")
+    expect(accepted.report.scoringCheck?.reason ?? "").not.toContain("Verdict")
+    expect(accepted.report.scoringCheck?.verdictNote).toContain("The model said encourage")
     const echoed = scrubPrivateUrls(
       { ...accepted.report, summary: `${accepted.report.summary} See https://share.google/aimode/EXAMPLE` },
       ["https://share.google/aimode/EXAMPLE"],
@@ -434,8 +435,11 @@ describe("extension panel", () => {
     input.dispatchEvent(new Event("change", { bubbles: true }))
     expect(picked).toBe("note.txt")
 
-    renderReviewApp(app, model({ fileName: "note.txt", providerId: "grok-x" }), actions({ onReview() { reviewed = true } }))
+    renderReviewApp(app, model({ fileName: "note.txt", providerId: "grok-x", link: "h" }), actions({ onReview() { reviewed = true } }))
     expect((document.querySelector("#provider") as HTMLSelectElement).value).toBe("grok-x")
+    const link = document.getElementById("publication-link") as HTMLInputElement
+    expect(link.type).toBe("text")
+    expect(link.value).toBe("h")
     ;(document.getElementById("review") as HTMLButtonElement).click()
     expect(reviewed).toBe(true)
 
@@ -491,13 +495,17 @@ describe("extension panel", () => {
         fileName: "note.txt",
         result: {
           ...card,
-          scores: [{ criterionId: "clarity", score: 80 }],
+          scores: [
+            { criterionId: "clarity", score: 80 },
+            { criterionId: "global-goals", score: 25 },
+          ],
           feedback: [{ label: "Missing context or files", text: "The supplement was not attached." }],
         },
       }),
       actions(),
     )
     expect(app.querySelector("#criterion-scores")?.textContent).toContain("clarity: 80")
+    expect(app.querySelector("#criterion-scores")?.textContent).toContain("Global goals: 25 (bonus, not counted in overall)")
     expect(app.querySelector("#air-feedback")?.textContent).toContain("Feedback on AIR")
     expect(app.querySelector("#air-feedback")?.textContent).toContain("supplement was not attached")
     expect(app.textContent).toContain("Scoring mismatch, needs re-check")

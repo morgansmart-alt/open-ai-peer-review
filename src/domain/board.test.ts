@@ -328,8 +328,8 @@ describe("score consistency", () => {
     expect(split?.panelMedian).toBe(65)
     expect(rows.find((row) => row.recordId === "42")?.assessorsDisagree).toBe(false)
     const band = rows.find((row) => row.recordId === "43")
-    expect(band?.mismatchCount).toBe(1)
-    expect(band?.panelMedian).toBeNull()
+    expect(band?.mismatchCount).toBe(0)
+    expect(band?.panelMedian).toBe(70)
   })
 })
 

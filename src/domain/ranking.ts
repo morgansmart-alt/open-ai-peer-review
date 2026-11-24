@@ -251,7 +251,7 @@ export const SUBSCORE_IDS: { id: string; label: string; hint: string }[] = [
   { id: "physics", label: "Physics check", hint: "How well the work meets the laws it uses" },
   { id: "simulation", label: "Simulation", hint: "Reported simulation evidence" },
   { id: "estimated-value", label: "Estimated value", hint: "Quality of the AI value estimate, not a dollar forecast" },
-  { id: "global-goals", label: "Global goals", hint: "Alignment with documented public goals" },
+  { id: "global-goals", label: "Global goals", hint: "Optional recognition. Not counted in the overall score." },
 ]
 
 export function listRankingMethods(profiles: AssessorProfile[]): RankingMethod[] {

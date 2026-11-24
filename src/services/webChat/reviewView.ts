@@ -7,6 +7,7 @@ export interface ReviewCard {
   recommendation: string
   summary: string
   mismatch: string | null
+  verdictNote?: string | null
   label: string
   defendedOverall?: number | null
   defendedLabel?: string
@@ -169,7 +170,10 @@ export function renderReviewApp(root: HTMLElement, model: ReviewModel, actions: 
   const linkLabel = el(form, "label", "Publication link")
   const link = document.createElement("input")
   link.id = "publication-link"
-  link.type = "url"
+  link.type = "text"
+  link.inputMode = "url"
+  link.autocomplete = "off"
+  link.spellcheck = false
   link.placeholder = "https://zenodo.org/records/…"
   link.value = model.link
   link.addEventListener("input", () => actions.onLink(link.value))
@@ -247,13 +251,21 @@ export function renderReviewApp(root: HTMLElement, model: ReviewModel, actions: 
       const note = el(card, "p", model.result.notice, "mismatch")
       note.id = "text-page-note"
     }
+    if (model.result.verdictNote) {
+      const note = el(card, "p", model.result.verdictNote, "note")
+      note.id = "verdict-note"
+    }
     if (model.result.mismatch) el(card, "p", model.result.mismatch, "mismatch")
     el(card, "p", model.result.summary)
     if (model.result.scores && model.result.scores.length > 0) {
       const list = el(card, "ul")
       list.id = "criterion-scores"
       for (const score of model.result.scores) {
-        el(list, "li", `${score.criterionId}: ${Math.round(score.score)}`)
+        const line =
+          score.criterionId === "global-goals"
+            ? `Global goals: ${Math.round(score.score)} (bonus, not counted in overall)`
+            : `${score.criterionId}: ${Math.round(score.score)}`
+        el(list, "li", line)
       }
     }
     if (model.result.feedback && model.result.feedback.length > 0) {
