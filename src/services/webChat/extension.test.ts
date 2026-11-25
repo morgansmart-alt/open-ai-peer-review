@@ -1107,4 +1107,45 @@ describe("live chat composers", () => {
     expect(asks).toEqual([])
     expect(settled.reasked).toBe(false)
   })
+
+  it("returns a finished X reply that has no numeric overallScore instead of waiting out the timeout", async () => {
+    const nested = '{"criterionId":"availability","score":98,"rationale":"The Zenodo record holds the tables and the files are public.","citations":[{"quote":"Zenodo record: 10.5281/zenodo.22826","citations":[{"quote":"all data available up to 31 December 2014.","location":"abstract"}],"confidence":"high"}]}'
+    document.body.innerHTML = `<main>
+      <textarea id="box" aria-label="Ask anything"></textarea>
+      <button id="send" type="button" aria-label="Send">Send</button>
+      <div class="group"><div class="whitespace-normal" id="reply"></div></div>
+    </main>`
+    const provider = webChatProvider("grok-x")
+    if (!provider) throw new Error("missing grok-x")
+    document.getElementById("send")?.addEventListener("click", () => {
+      ;(document.getElementById("box") as HTMLTextAreaElement).value = ""
+      document.getElementById("reply")!.textContent = nested
+    })
+    const notes: string[] = []
+    const started = Date.now()
+    const returned = await sendFollowUp(
+      document,
+      provider,
+      "Score this paper and return JSON.",
+      {
+        aborted: () => false,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        pollMs: 10,
+        stableMs: 40,
+        stepTimeoutMs: 2_000,
+        replyStartTimeoutMs: 400,
+        submitStableMs: 0,
+        submitReadyMs: 20,
+        sendVerifyMs: 20,
+        onProgress: (message, meta) => notes.push(`${meta?.detail ?? ""} ${message}`),
+      },
+      "public text link",
+      "json",
+    )
+    expect(Date.now() - started).toBeLessThan(1_000)
+    expect(returned).toContain('"criterionId":"availability"')
+    expect(returned).toContain("31 December 2014")
+    expect(notes.join("\n")).not.toContain("Still waiting")
+    expect(reviewJsonBlock(nested)).toBe("")
+  })
 })

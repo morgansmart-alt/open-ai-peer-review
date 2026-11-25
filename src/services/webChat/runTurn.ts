@@ -232,8 +232,7 @@ async function waitForReply(
       }
     }
     const settled = replySettled(quietFor, stableMs, streaming, Boolean(reply) && !changed)
-    if (expect === "text" && settled) return reply
-    if (expect === "json" && settled && json) return json
+    if (settled) return expect === "json" && json ? json : reply
     if (!reply && Date.now() - start >= silentMs) {
       const empty = replyDiagnostic(selector, 0, null, 0, stableMs, streaming)
       if (attempt < 2) {

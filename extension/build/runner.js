@@ -2154,6 +2154,184 @@ ${output}
     if (keys > 0) return 1;
     return 0;
   }
+  function isCriterionRow(value) {
+    const id = value.criterionId ?? value.id;
+    if (typeof id !== "string" || !id.trim()) return false;
+    return parseScoreValue(value.score) != null;
+  }
+  function criterionOnly(value) {
+    const score = parseScoreValue(value.score);
+    const row = {
+      criterionId: String(value.criterionId ?? value.id).trim(),
+      ...score != null ? { score } : {}
+    };
+    const rationale = typeof value.rationale === "string" ? value.rationale : typeof value.reason === "string" ? value.reason : "";
+    if (rationale) row.rationale = rationale;
+    if (Array.isArray(value.citations)) row.citations = value.citations;
+    if (typeof value.confidence === "string" && value.confidence.trim()) row.confidence = value.confidence.trim();
+    if (value.uncited === true) row.uncited = true;
+    return row;
+  }
+  function flattenCitations(value) {
+    if (Array.isArray(value)) {
+      let changed2 = false;
+      const next2 = value.map((item) => {
+        const flat = flattenCitations(item);
+        changed2 = changed2 || flat.changed;
+        return flat.value;
+      });
+      return { value: next2, changed: changed2 };
+    }
+    if (!isRecord2(value)) return { value, changed: false };
+    let changed = false;
+    const next = {};
+    for (const [key, child] of Object.entries(value)) {
+      const flat = flattenCitations(child);
+      changed = changed || flat.changed;
+      next[key] = flat.value;
+    }
+    if (!Array.isArray(next.citations)) return { value: next, changed };
+    const citations = [];
+    const spilledScores = [];
+    const spilled = {};
+    let nested = false;
+    const parentId = String(next.criterionId ?? next.id ?? "");
+    for (const entry of next.citations) {
+      if (!isRecord2(entry)) {
+        citations.push(entry);
+        continue;
+      }
+      if (Array.isArray(entry.citations)) {
+        nested = true;
+        for (const inner of entry.citations) citations.push(inner);
+        const extra = {};
+        for (const [key, child] of Object.entries(entry)) {
+          if (key === "citations" || key === "quote" || key === "location") continue;
+          extra[key] = child;
+        }
+        const extraId = String(extra.criterionId ?? extra.id ?? "");
+        if (isCriterionRow(extra) && extraId && extraId !== parentId) {
+          spilledScores.push(criterionOnly(extra));
+          if (Array.isArray(extra.scores)) {
+            const list = Array.isArray(spilled.scores) ? spilled.scores : [];
+            spilled.scores = [...list, ...extra.scores];
+          }
+          for (const [key, child] of Object.entries(extra)) {
+            if (["criterionId", "id", "score", "rationale", "reason", "citations", "confidence", "uncited", "scores"].includes(key)) continue;
+            if (spilled[key] == null) spilled[key] = child;
+          }
+          continue;
+        }
+        for (const [key, child] of Object.entries(extra)) {
+          if (key === "scores" && Array.isArray(child)) {
+            const list = Array.isArray(spilled.scores) ? spilled.scores : [];
+            spilled.scores = [...list, ...child];
+            continue;
+          }
+          if (spilled[key] == null) spilled[key] = child;
+        }
+        continue;
+      }
+      if (isCriterionRow(entry)) {
+        nested = true;
+        spilledScores.push(criterionOnly(entry));
+        continue;
+      }
+      citations.push(entry);
+    }
+    if (!nested) return { value: next, changed };
+    next.citations = citations;
+    const carried = [...Array.isArray(next.scores) ? next.scores : [], ...Array.isArray(spilled.scores) ? spilled.scores : [], ...spilledScores];
+    if (carried.length > 0) next.scores = carried;
+    delete spilled.scores;
+    for (const [key, child] of Object.entries(spilled)) {
+      if (next[key] == null) next[key] = child;
+    }
+    return { value: next, changed: true };
+  }
+  function attachRootCriterion(value) {
+    if (!isRecord2(value) || !isCriterionRow(value)) return { value, changed: false };
+    const id = String(value.criterionId ?? value.id).trim();
+    const scores = Array.isArray(value.scores) ? [...value.scores] : [];
+    if (scores.some((item) => isRecord2(item) && String(item.criterionId ?? item.id ?? "") === id)) return { value, changed: false };
+    scores.push(criterionOnly(value));
+    return { value: { ...value, scores }, changed: true };
+  }
+  function prepareCandidate(value) {
+    const flat = flattenCitations(value);
+    const rooted = attachRootCriterion(flat.value);
+    return { value: rooted.value, changed: flat.changed || rooted.changed };
+  }
+  function requiredCriterionIds(ids) {
+    const source = ids && ids.length > 0 ? ids : officialCriteria.criteria.map((item) => item.id);
+    return source.filter((id) => !isBonusCriterion(id));
+  }
+  function coversCriteria(value, required) {
+    if (!isRecord2(value) || !Array.isArray(value.scores)) return false;
+    const ids = new Set(value.scores.flatMap((item) => isRecord2(item) && typeof (item.criterionId ?? item.id) === "string" ? [String(item.criterionId ?? item.id)] : []));
+    return required.every((id) => ids.has(id));
+  }
+  function rememberField(fields, row) {
+    if (typeof row.summary === "string" && row.summary.trim().length > String(fields.summary ?? "").trim().length) fields.summary = row.summary.trim();
+    const overall = numericScore(row.overallScore);
+    if (overall != null) fields.overallScore = overall;
+    if (typeof row.recommendation === "string" && row.recommendation.trim()) fields.recommendation = row.recommendation.trim();
+    if (typeof row.ontologyClass === "string" && row.ontologyClass.trim()) fields.ontologyClass = row.ontologyClass.trim();
+    for (const key of ["questionsForAuthors", "questions", "strengths", "suggestedNextSteps", "nextSteps", "minorIssues"]) {
+      if (Array.isArray(row[key]) && row[key].length > 0) fields[key] = row[key];
+    }
+    if (isRecord2(row.physics) && !isCriterionRow(row.physics)) fields.physics = row.physics;
+    if (isRecord2(row.simulation) && !isCriterionRow(row.simulation)) fields.simulation = row.simulation;
+    if (isRecord2(row.valueEstimate) && !isCriterionRow(row.valueEstimate)) fields.valueEstimate = row.valueEstimate;
+    if (Array.isArray(row.goals)) fields.goals = row.goals;
+    if (Array.isArray(row.majorIssues)) fields.majorIssues = row.majorIssues;
+    if (isRecord2(row.airFeedback)) fields.airFeedback = row.airFeedback;
+    if (isRecord2(row.air_feedback)) fields.air_feedback = row.air_feedback;
+  }
+  function walkRecords(value, visit) {
+    if (Array.isArray(value)) {
+      for (const item of value) walkRecords(item, visit);
+      return;
+    }
+    if (!isRecord2(value)) return;
+    visit(value);
+    for (const child of Object.values(value)) walkRecords(child, visit);
+  }
+  function assembleReview(raw, required) {
+    if (required.length === 0) return null;
+    const prepared = prepareJsonSource(raw.length > 4e5 ? raw.slice(-2e5) : raw);
+    const scores = /* @__PURE__ */ new Map();
+    const fields = {};
+    const take = (value) => {
+      const preparedValue = prepareCandidate(value).value;
+      walkRecords(preparedValue, (row) => {
+        rememberField(fields, row);
+        if (Array.isArray(row.scores)) {
+          for (const item of row.scores) {
+            if (!isRecord2(item) || !isCriterionRow(item)) continue;
+            const id = String(item.criterionId ?? item.id).trim();
+            scores.set(id, criterionOnly(item));
+          }
+        }
+        if (isCriterionRow(row)) scores.set(String(row.criterionId ?? row.id).trim(), criterionOnly(row));
+      });
+    };
+    for (let index = 0; index < prepared.length; index += 1) {
+      if (prepared[index] !== "{") continue;
+      const end = matchingBrace(prepared, index);
+      const balanced = end >= 0;
+      const slice = balanced ? prepared.slice(index, end + 1) : closeTruncated(prepared.slice(index));
+      const parsed = parseSlice(slice);
+      if (!parsed) {
+        if (balanced) index = end;
+        continue;
+      }
+      take(parsed.value);
+      if (balanced) index = end;
+    }
+    if (!required.every((id) => scores.has(id))) return null;
+    return { value: { ...fields, scores: [...scores.values()] } };
+  }
   function chooseReviewJson(raw) {
     const prepared = prepareJsonSource(raw.length > 4e5 ? raw.slice(-2e5) : raw);
     let best = null;
@@ -2167,11 +2345,13 @@ ${output}
         if (balanced) index = end;
         continue;
       }
-      const rank = reviewRank(parsed.value);
-      const keys = isRecord2(parsed.value) ? criterionKeyCount(parsed.value) : 0;
-      const repaired = parsed.repaired || !balanced;
-      if (rank > 0 && (!best || rank > best.rank || rank === best.rank && (keys > best.keys || keys === best.keys && slice.length > best.text.length))) {
-        best = { value: parsed.value, text: parsed.text, repaired, rank, keys };
+      const preparedValue = prepareCandidate(parsed.value);
+      const rank = reviewRank(preparedValue.value);
+      const keys = isRecord2(preparedValue.value) ? criterionKeyCount(preparedValue.value) : 0;
+      const text = preparedValue.changed ? JSON.stringify(preparedValue.value) : parsed.text;
+      const repaired = parsed.repaired || !balanced || preparedValue.changed;
+      if (rank > 0 && (!best || rank > best.rank || rank === best.rank && (keys > best.keys || keys === best.keys && text.length > best.text.length))) {
+        best = { value: preparedValue.value, text, repaired, rank, keys };
       }
       if (balanced) index = end;
     }
@@ -2305,9 +2485,19 @@ ${output}
     }
     return normaliseScoreShape(left);
   }
-  function parseModelJson(raw) {
+  function parseModelJson(raw, criterionIds) {
+    const required = requiredCriterionIds(criterionIds);
     const review = chooseReviewJson(raw);
-    if (review) return { ok: true, value: normaliseScoreShape(review.value), text: review.text, repaired: review.repaired };
+    const shaped = review ? normaliseScoreShape(review.value) : null;
+    if (review && coversCriteria(shaped, required)) {
+      return { ok: true, value: shaped, text: review.text, repaired: review.repaired };
+    }
+    const assembled = assembleReview(raw, required);
+    if (assembled) {
+      const value = normaliseScoreShape(assembled.value);
+      return { ok: true, value, text: JSON.stringify(value), repaired: true };
+    }
+    if (review && shaped) return { ok: true, value: shaped, text: review.text, repaired: review.repaired };
     const scored = lastScoreJson(raw);
     if (scored) return { ok: true, value: normaliseScoreShape(scored.value), text: scored.text, repaired: scored.repaired };
     const slice = fenced(raw);
@@ -2321,10 +2511,11 @@ ${output}
     const exampleId = criterionIds[0] ?? "impact";
     return [
       `Your JSON did not validate (${detail}).`,
-      "Return the FULL corrected JSON object, not a patch. Repeat every field that was already valid.",
+      "Return ONE flat JSON object and nothing else. Not a patch, and not one criterion. Repeat every field that was already valid.",
       "summary must be a string of at least 40 characters.",
       "scores must be an array with one object for each criterion id.",
-      "Each scores object needs criterionId, score (integer 0-100), rationale (at least 20 characters), citations (an array of {quote, location}), and confidence (low, medium, or high).",
+      "Each scores object needs criterionId, score (integer 0-100), rationale (at least 20 characters), citations, and confidence (low, medium, or high).",
+      "citations must be an array of {quote, location} only. Never nest a citation inside another citation, and never put other fields inside a citation.",
       `Criterion ids: ${ids}.`,
       "Also include overallScore (number 0-100), recommendation (accept, encourage, revise, major-revision, or not-ready), strengths (array of strings), questionsForAuthors (array of strings), and suggestedNextSteps (array of strings).",
       `Example: {"summary":"The paper states its claim and the limit of that claim in the text.","scores":[{"criterionId":"${exampleId}","score":70,"rationale":"The text states this in a sentence a reader can find.","citations":[{"quote":"a sentence from the paper","location":"abstract"}],"confidence":"medium"}],"overallScore":70,"recommendation":"revise","strengths":["The files are public."],"questionsForAuthors":["Which table changed?"],"suggestedNextSteps":["Publish the table beside the text."]}.`,
@@ -2354,7 +2545,7 @@ ${output}
       if (!validate) return { ok: true };
       return validate(parsed.text);
     };
-    const first = parseModelJson(raw);
+    const first = parseModelJson(raw, criterionIds);
     if (first.ok) {
       const template = rubricTemplateProblem(first.value);
       const checked = template ? { ok: false, errors: [template] } : ready(first);
@@ -2365,7 +2556,7 @@ ${output}
       const problem = checked.errors.join(" ");
       log(rejectionNote(problem, first.text || raw));
       const follow2 = await ask(template ? FILL_REVIEW_PROMPT : reaskJsonPrompt(problem, criterionIds));
-      const second2 = parseModelJson(follow2);
+      const second2 = parseModelJson(follow2, criterionIds);
       const merged = mergeReviewFields(first.value, second2.ok ? second2.value : {});
       const mergedText = JSON.stringify(merged);
       const mergedCheck = validate ? validate(mergedText) : { ok: true };
@@ -2384,7 +2575,7 @@ ${output}
     }
     log(rejectionNote(first.error, raw));
     const follow = await ask(reaskJsonPrompt(first.error, criterionIds));
-    const second = parseModelJson(follow);
+    const second = parseModelJson(follow, criterionIds);
     if (second.ok && second.repaired) log("Repaired the corrected JSON.");
     return { text: second.ok ? second.repaired ? second.text : follow : follow, repaired: Boolean(second.ok && second.repaired), reasked: true };
   }
@@ -3980,8 +4171,7 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
         }
       }
       const settled = replySettled(quietFor, stableMs, streaming, Boolean(reply2) && !changed);
-      if (expect === "text" && settled) return reply2;
-      if (expect === "json" && settled && json) return json;
+      if (settled) return expect === "json" && json ? json : reply2;
       if (!reply2 && Date.now() - start >= silentMs) {
         const empty = replyDiagnostic(selector, 0, null, 0, stableMs, streaming);
         if (attempt < 2) {
