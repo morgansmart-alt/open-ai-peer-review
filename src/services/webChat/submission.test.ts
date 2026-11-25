@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest"
+import { afterDefenceLine } from "../../domain/criteria.ts"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
 import { weightedMean } from "../../domain/criteria.ts"
 import { buildRanking } from "../../domain/ranking.ts"
 import { ladderTier } from "../../domain/fidelity.ts"
-import { decideWebChatSubmission, submissionFromReview, toSubmissionRow, validateWebChatSubmission, WEB_CHAT_SUBMIT_URL } from "./submission.ts"
+import { decideWebChatSubmission, submissionFromReview, submissionToStored, toSubmissionRow, validateWebChatSubmission, WEB_CHAT_SUBMIT_URL } from "./submission.ts"
 import { WEB_CHAT_SOURCE, UNCALIBRATED_WEB_CHAT_TIER } from "./protocol.ts"
 import type { StoredReview } from "../../domain/types.ts"
 
@@ -229,5 +230,82 @@ describe("web-chat submission", () => {
     })
     expect(fullWeight.ok).toBe(false)
     if (!fullWeight.ok) expect(fullWeight.error).toContain("Scoring mismatch")
+  })
+
+  it("keeps an after-defence overall when the sheet is incomplete or disagrees with its own weights", () => {
+    const near = validateWebChatSubmission(payload(65.02, "encourage", {
+      defended: {
+        label: "after author defence",
+        overallScore: 65,
+        recommendation: "encourage",
+        summary: payload(65, "encourage").summary,
+        scores: scores(80),
+      },
+    }))
+    expect(near.ok).toBe(true)
+    if (!near.ok) return
+    expect(near.submission.overallScore).toBe(65.02)
+    expect(near.submission.defended?.overallScore).toBe(65)
+    expect(toSubmissionRow(near.submission).defended_score).toBe(65)
+    const stored = submissionToStored(near.submission)
+    expect(afterDefenceLine(stored.defended?.overallScore)).toBe(" · after author defence 65.00")
+    expect(afterDefenceLine(stored.report.overallScore)).toBe(" · after author defence 65.02")
+    expect(afterDefenceLine(0)).toBe(" · after author defence 0.00")
+    expect(afterDefenceLine(undefined)).toBe("")
+    const review = {
+      id: "web-defended",
+      sample: false,
+      mock: false,
+      doi: "10.5281/zenodo.18706746",
+      recordId: "18706746",
+      conceptRecordId: "18706746",
+      recordVersion: "web-chat",
+      title: "Quantized Inertia",
+      creators: [],
+      keywords: [],
+      publicationDate: "",
+      license: "",
+      assessorId: "Grok",
+      modelId: "Grok on grok.com · Auto (web chat, uncalibrated)",
+      provider: "compatible",
+      criteriaId: "air",
+      criteriaVersion: "0.2.0",
+      customCriteria: false,
+      tier: "uncalibrated web-chat",
+      source: "web-chat extension",
+      paperUrl: "https://zenodo.org/records/18706746",
+      report: {
+        summary: payload(70, "encourage").summary,
+        scores: scores(70).map((score) => ({ ...score, rationale: "Cited in the record.", citations: [] as { quote: string; location: string }[] })),
+        overallScore: 70,
+        ideaScore: 70,
+        recommendation: "encourage",
+        scale: 100,
+        strengths: [],
+        majorIssues: [],
+        minorIssues: [],
+        questionsForAuthors: [],
+        suggestedNextSteps: [],
+      },
+      defended: {
+        label: "after author defence" as const,
+        overallScore: 65,
+        recommendation: "encourage",
+        summary: "short",
+        scores: [{ criterionId: "clarity", score: 70, uncited: true }],
+      },
+      outputHash: "x",
+      createdAt: "2026-11-25T00:47:32.000Z",
+    } satisfies StoredReview
+    const client = submissionFromReview(review, review.modelId)
+    expect(client.ok).toBe(true)
+    if (!client.ok) return
+    expect(client.submission.defended?.overallScore).toBe(65)
+    expect(client.submission.defended?.scores.find((score) => score.criterionId === "clarity")?.uncited).toBe(true)
+    const server = validateWebChatSubmission(client.submission)
+    expect(server.ok).toBe(true)
+    if (!server.ok) return
+    expect(toSubmissionRow(server.submission).defended_score).toBe(65)
+    expect(server.submission.defended?.scores).toEqual([{ criterionId: "clarity", score: 70, uncited: true }])
   })
 })

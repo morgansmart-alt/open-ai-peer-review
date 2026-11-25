@@ -16,6 +16,9 @@ import {
   exportBundle,
   ONBOARD_STORAGE_KEY,
   packetForLocalPaper,
+  PUBLISHED_STORAGE_KEY,
+  publishedResultKey,
+  rememberedSendState,
   RESULT_STORAGE_KEY,
   resultCard,
   storedLocalReview,
@@ -43,6 +46,7 @@ let busy = false
 let stepLog: StepLogEntry[] = []
 let reviews: StoredReview[] = []
 let sendState: Record<string, "sending" | "published" | "duplicate"> = {}
+let publishedKeys: Record<string, "published" | "duplicate"> = {}
 let requestId = ""
 let pendingPaper: { filename: string; text: string; note?: string } | null = null
 
@@ -76,7 +80,7 @@ function historyItem(review: StoredReview) {
     createdAt: review.createdAt,
     mismatch: Boolean(card.mismatch),
     selected: selected.has(review.id),
-    sendState: sendState[review.id] ?? "",
+    sendState: sendState[review.id] || rememberedSendState(review, publishedKeys),
   }
 }
 
@@ -389,9 +393,11 @@ async function sendScores(ids: string[]): Promise<void> {
         failures.push(response.error || `The board returned ${response.status}.`)
       } else if (response.duplicate) {
         sendState[review.id] = "duplicate"
+        publishedKeys[publishedResultKey(review)] = "duplicate"
         notes.push("Already on board")
       } else {
         sendState[review.id] = "published"
+        publishedKeys[publishedResultKey(review)] = "published"
         notes.push("Published")
       }
     } catch {
@@ -403,12 +409,16 @@ async function sendScores(ids: string[]): Promise<void> {
   busy = false
   status = notes.join(" ")
   error = failures.join(" ")
+  if (notes.length > 0) await storageSet(PUBLISHED_STORAGE_KEY, publishedKeys)
   paint()
 }
 
 function restoreSaved(): Promise<void> {
   return storageGet(ONBOARD_STORAGE_KEY).then((seen) => {
     showOnboarding = seen !== true
+    return storageGet(PUBLISHED_STORAGE_KEY)
+  }).then((savedKeys) => {
+    publishedKeys = savedKeys && typeof savedKeys === "object" && !Array.isArray(savedKeys) ? savedKeys as Record<string, "published" | "duplicate"> : {}
     return storageGet(RESULT_STORAGE_KEY)
   }).then((saved) => {
     reviews = Array.isArray(saved) ? (saved as StoredReview[]) : []

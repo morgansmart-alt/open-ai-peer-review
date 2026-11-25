@@ -128,16 +128,24 @@ export async function runDefenceLoop(options: {
   return { transcript, defendedText, stopped: false }
 }
 
+function roundedOverall(value: unknown): number | null {
+  const score = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN
+  if (!Number.isFinite(score)) return null
+  const rounded = Math.round(score * 100) / 100
+  if (rounded < 0 || rounded > 100) return null
+  return rounded
+}
+
 /** The number a reply states when it does not return a full score sheet. */
 export function statedDefenceOverall(raw: string): number | null {
   const scored = lastScoreJson(raw)
-  const fromJson = scored && typeof scored.value === "object" && scored.value ? Number((scored.value as { overallScore?: unknown }).overallScore) : NaN
-  if (Number.isInteger(fromJson) && fromJson >= 0 && fromJson <= 100) return fromJson
-  const match = raw.match(/overall(?:\s+score)?\s+(?:remains|stays|stayed|is|was|of|:)\s*(?:at\s+)?(\d{1,3})\b/i)
+  const fromJson = scored && typeof scored.value === "object" && scored.value
+    ? roundedOverall((scored.value as { overallScore?: unknown }).overallScore)
+    : null
+  if (fromJson !== null) return fromJson
+  const match = raw.match(/overall(?:\s+score)?\s+(?:remains|stays|stayed|is|was|of|:)\s*(?:at\s+)?(\d{1,3}(?:\.\d+)?)\b/i)
   if (!match) return null
-  const score = Number(match[1])
-  if (!Number.isInteger(score) || score < 0 || score > 100) return null
-  return score
+  return roundedOverall(Number(match[1]))
 }
 
 function partialDefended(raw: string, overall: number): DefendedScore {
@@ -151,10 +159,12 @@ function partialDefended(raw: string, overall: number): DefendedScore {
   const scores = Array.isArray(row.scores)
     ? row.scores.flatMap((item) => {
         if (!item || typeof item !== "object") return []
-        const record = item as { criterionId?: unknown; score?: unknown }
+        const record = item as { criterionId?: unknown; score?: unknown; uncited?: unknown }
         const criterionId = typeof record.criterionId === "string" ? record.criterionId.trim() : ""
         const score = Number(record.score)
-        return criterionId && Number.isInteger(score) ? [{ criterionId, score }] : []
+        return criterionId && Number.isInteger(score)
+          ? [{ criterionId, score, ...(record.uncited === true ? { uncited: true as const } : {}) }]
+          : []
       })
     : []
   return { label: DEFENDED_LABEL, overallScore: overall, recommendation, summary, scores }
@@ -174,7 +184,11 @@ export function defendedFromReply(
         overallScore: accepted.report.overallScore,
         recommendation: accepted.report.recommendation,
         summary: accepted.report.summary,
-        scores: accepted.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score })),
+        scores: accepted.report.scores.map((score) => ({
+          criterionId: score.criterionId,
+          score: score.score,
+          ...(score.uncited ? { uncited: true } : {}),
+        })),
       },
     }
   }

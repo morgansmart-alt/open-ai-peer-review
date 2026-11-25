@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
 import { readingCriteria } from "../../domain/profiles.ts"
-import { critiquesFromReport, chooseDefendedText, defenceFailureNotice, rebuttalPrompt, rescorePrompt, runDefenceLoop, defendedFromReply, DEFENCE_PAUSE_MS } from "./defence.ts"
+import { critiquesFromReport, chooseDefendedText, defenceFailureNotice, rebuttalPrompt, rescorePrompt, runDefenceLoop, defendedFromReply, statedDefenceOverall, DEFENCE_PAUSE_MS } from "./defence.ts"
 import { runSummary } from "./runSummary.ts"
 import { validateWebChatSubmission, WEB_CHAT_SUBMIT_URL } from "./submission.ts"
 import { WEB_CHAT_SOURCE, UNCALIBRATED_WEB_CHAT_TIER } from "./protocol.ts"
@@ -119,6 +119,20 @@ describe("defend my paper", () => {
     const corrected = reviewJson(80, 89, "encourage")
     expect(chooseDefendedText(prose, corrected, officialCriteria)).toBe(corrected)
     expect(chooseDefendedText(prose, "I cannot return JSON.", officialCriteria)).toBe(prose)
+    const sheet = JSON.parse(reviewJson(80, 80, "encourage")) as { scores: { criterionId: string; citations?: unknown[] }[] }
+    const impact = sheet.scores.find((score) => score.criterionId === "impact")
+    if (impact) impact.citations = []
+    const marked = defendedFromReply(JSON.stringify(sheet))
+    expect(marked.ok).toBe(true)
+    if (marked.ok) expect(marked.defended.scores.find((score) => score.criterionId === "impact")?.uncited).toBe(true)
+    const repaired = defendedFromReply('{"overallScore":65.00,"summary":"short","scores":[{"criterionId":"clarity","score":70,"uncited":true}]}')
+    expect(repaired.ok).toBe(true)
+    if (repaired.ok) {
+      expect(repaired.partial).toBe(true)
+      expect(repaired.defended.overallScore).toBe(65)
+      expect(repaired.defended.scores[0]?.uncited).toBe(true)
+    }
+    expect(statedDefenceOverall("The overall remains 65.02 after the reply.")).toBe(65.02)
     expect(runSummary({ completed: 2, requested: 2, blind: 84, after: 84 })).toBe("Rounds 2/2 · blind 84 · after defence 84")
     expect(runSummary({ completed: 2, requested: 2, blind: 84, after: null })).toBe("Rounds 2/2 · blind 84 · after defence not read")
   })

@@ -11,6 +11,8 @@ import { WEB_CHAT_LABEL, type WebChatPacket } from "./protocol.ts"
 import { defenceRoundsLabel } from "./runSummary.ts"
 
 export const RESULT_STORAGE_KEY = "air-web-chat-results"
+/** DOI, site, and model for a score that has already been posted. Survives a panel reopen. */
+export const PUBLISHED_STORAGE_KEY = "air-web-chat-published"
 export const ONBOARD_STORAGE_KEY = "air-web-chat-seen"
 export const EXPORT_SOURCE = "air-web-chat-extension"
 export const RESULT_CAP = 30
@@ -202,6 +204,21 @@ export function parseExport(raw: string): { ok: true; reviews: StoredReview[] } 
   }
   if (reviews.length === 0) return { ok: false, error: "That file has no readings AIR can keep." }
   return { ok: true, reviews }
+}
+
+export function publishedResultKey(review: { doi?: string; paperUrl?: string; site?: string; model?: string; modelId?: string }): string {
+  const paper = (review.doi && review.doi !== "local-file" ? review.doi : review.paperUrl || "").trim().toLowerCase()
+  const model = (review.model || review.modelId || "").trim().toLowerCase()
+  const site = (review.site || model).trim().toLowerCase()
+  return `${paper}|${site}|${model}`
+}
+
+export function rememberedSendState(
+  review: { doi?: string; paperUrl?: string; site?: string; model?: string; modelId?: string },
+  keys: Readonly<Record<string, string>>,
+): "published" | "duplicate" | "" {
+  const state = keys[publishedResultKey(review)]
+  return state === "published" || state === "duplicate" ? state : ""
 }
 
 export function resultCard(review: StoredReview): {

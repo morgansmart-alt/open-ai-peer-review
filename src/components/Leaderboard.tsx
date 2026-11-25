@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { Link } from "react-router-dom"
 import { assessorById } from "../domain/assessors.ts"
-import { categoryLabel, formatScore, isBonusCriterion } from "../domain/criteria.ts"
+import { afterDefenceLine, categoryLabel, formatScore, isBonusCriterion } from "../domain/criteria.ts"
 import { boardValue, criteriaForReview, rankedBoardScore, scoringMismatch } from "../domain/scoring.ts"
 import { statusLabel } from "../domain/issues.ts"
 import { buildRanking, listRankingMethods, sortRows, type RankRow } from "../domain/ranking.ts"
@@ -384,7 +384,7 @@ function WebChatBoard() {
             {review.title}
             {review.doi ? ` · ${review.doi}` : ""} · blind {formatScore(boardValue(review.report.overallScore, review.report, review.criteriaVersion))} / 100
             {uncitedCriteria(review.report.scores)}
-            {review.defended ? ` · after author defence ${formatScore(review.defended.overallScore)}` : ""}
+            {afterDefenceLine(review.defended?.overallScore)}
             {review.defended ? uncitedCriteria(review.defended.scores) : ""} · {storedProfileLabel(review.criterionProfile)} · {review.modelId}
           </li>
         ))}

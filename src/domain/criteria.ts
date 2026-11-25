@@ -9,6 +9,12 @@ export function formatScore(value: number): string {
   return value.toFixed(2)
 }
 
+/** Board text for a second score. Zero and a value equal to the blind score both stay visible. */
+export function afterDefenceLine(overall: number | null | undefined): string {
+  if (typeof overall !== "number" || !Number.isFinite(overall)) return ""
+  return ` · after author defence ${formatScore(overall)}`
+}
+
 export function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n))
 }
