@@ -71,7 +71,7 @@ export function verdictBandNote(recommendation: string, board: number): string |
 }
 
 export function describeScoring(input: {
-  scores: { criterionId: string; score: number }[]
+  scores: { criterionId: string; score: number; uncited?: boolean }[]
   statedOverall: number | null
   recommendation: string
   criteria: CriteriaSet

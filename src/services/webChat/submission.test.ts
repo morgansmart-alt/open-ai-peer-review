@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
+import { weightedMean } from "../../domain/criteria.ts"
 import { buildRanking } from "../../domain/ranking.ts"
 import { ladderTier } from "../../domain/fidelity.ts"
 import { decideWebChatSubmission, submissionFromReview, toSubmissionRow, validateWebChatSubmission, WEB_CHAT_SUBMIT_URL } from "./submission.ts"
@@ -149,5 +150,84 @@ describe("web-chat submission", () => {
       "Grok",
     )
     expect(blocked.ok).toBe(false)
+  })
+
+  it("posts uncited scores and an optional global-goals bonus that the server accepts", () => {
+    const uncitedIds = new Set(["impact", "world-class", "testability", "estimated-value"])
+    const reportScores = officialCriteria.criteria.flatMap((criterion) => {
+      if (criterion.id === "global-goals") return []
+      return [{
+        criterionId: criterion.id,
+        score: uncitedIds.has(criterion.id) ? 0 : 100,
+        rationale: `${criterion.name} is supported by a passage a reader can find, with the remaining gap named.`,
+        citations: [] as { quote: string; location: string }[],
+        ...(uncitedIds.has(criterion.id) ? { uncited: true } : {}),
+      }]
+    })
+    const overall = weightedMean(reportScores, officialCriteria)
+    expect(overall).not.toBeNull()
+    const review = {
+      ...({
+        id: "web-uncited",
+        sample: false,
+        mock: false,
+        doi: "10.5281/zenodo.18916931",
+        recordId: "18916931",
+        conceptRecordId: "18916931",
+        recordVersion: "web-chat",
+        title: "A public note",
+        creators: [],
+        keywords: [],
+        publicationDate: "",
+        license: "",
+        assessorId: "Grok",
+        modelId: "Grok on grok.com (web chat, uncalibrated)",
+        provider: "compatible",
+        criteriaId: "air",
+        criteriaVersion: "0.2.0",
+        customCriteria: false,
+        tier: "uncalibrated web-chat",
+        source: "web-chat extension",
+        paperUrl: "https://zenodo.org/records/18916931",
+        report: {
+          summary: payload(80, "encourage").summary,
+          scores: reportScores,
+          overallScore: overall ?? 0,
+          ideaScore: overall ?? 0,
+          recommendation: "encourage",
+          scale: 100,
+          strengths: [],
+          majorIssues: [],
+          minorIssues: [],
+          questionsForAuthors: [],
+          suggestedNextSteps: [],
+        },
+        outputHash: "x",
+        createdAt: "2026-11-22T00:00:00.000Z",
+      } satisfies StoredReview),
+    }
+    const client = submissionFromReview(review, "Grok")
+    expect(client.ok).toBe(true)
+    if (!client.ok) return
+    expect(client.submission.scores.some((score) => score.criterionId === "global-goals")).toBe(false)
+    expect(client.submission.scores.find((score) => score.criterionId === "estimated-value")?.uncited).toBe(true)
+    expect(client.submission.overallScore).toBe(overall)
+    const server = validateWebChatSubmission(client.submission)
+    expect(server.ok).toBe(true)
+    if (!server.ok) return
+    expect(server.submission.overallScore).toBe(client.submission.overallScore)
+    expect(server.submission.scores.find((score) => score.criterionId === "estimated-value")?.uncited).toBe(true)
+    const row = toSubmissionRow(server.submission)
+    expect(row.payload.scores.find((score) => score.criterionId === "estimated-value")?.uncited).toBe(true)
+    expect(row.blind_score).toBe(overall)
+    const fullWeight = validateWebChatSubmission({
+      ...client.submission,
+      scores: client.submission.scores.map(({ uncited: dropped, ...score }) => {
+        void dropped
+        return score
+      }),
+    })
+    expect(fullWeight.ok).toBe(false)
+    if (!fullWeight.ok) expect(fullWeight.error).toContain("Scoring mismatch")
   })
 })

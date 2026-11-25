@@ -35,6 +35,63 @@ function matchingBrace(text: string, start: number): number {
   return -1
 }
 
+function prepareJsonSource(raw: string): string {
+  const quotes = raw.replace(/[\u201c\u201d\u2033]/g, "\"").replace(/[\u2018\u2019\u2032]/g, "'")
+  let out = ""
+  let inString = false
+  let escaped = false
+  for (const char of quotes) {
+    if (inString) {
+      if (escaped) {
+        out += char
+        escaped = false
+        continue
+      }
+      if (char === "\\") {
+        out += char
+        escaped = true
+        continue
+      }
+      if (char === "\"") {
+        inString = false
+        out += char
+        continue
+      }
+      if (char === "\n") {
+        out += "\\n"
+        continue
+      }
+      if (char === "\r") continue
+      out += char
+      continue
+    }
+    if (char === "\"") inString = true
+    out += char
+  }
+  return out
+}
+
+function closeTruncated(slice: string): string {
+  const stack: string[] = []
+  let inString = false
+  let escaped = false
+  for (const char of slice) {
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === "\\") escaped = true
+      else if (char === "\"") inString = false
+      continue
+    }
+    if (char === "\"") inString = true
+    else if (char === "{" || char === "[") stack.push(char)
+    else if ((char === "}" || char === "]") && stack.length > 0) stack.pop()
+  }
+  let closed = slice
+  if (inString) closed += "\""
+  for (let index = stack.length - 1; index >= 0; index -= 1) closed += stack[index] === "{" ? "}" : "]"
+  return closed
+}
+
 function parseSlice(slice: string): { value: unknown; text: string; repaired: boolean } | null {
   try {
     return { value: JSON.parse(slice), text: slice, repaired: false }
@@ -76,6 +133,56 @@ function hasNumericScore(value: unknown): boolean {
   const questions = row.questionsForAuthors
   if (Array.isArray(questions) && questions.length === 1 && (questions[0] === "string" || questions[0] === "<question>")) return false
   return true
+}
+
+function criterionKeyCount(value: Record<string, unknown>): number {
+  if (Array.isArray(value.scores)) return value.scores.length
+  if (isRecord(value.scores)) return Object.keys(value.scores).length
+  return Object.keys(value).filter((key) => {
+    const norm = key.toLowerCase().replace(/[_-]/g, "")
+    if (SCORE_KEY_SKIP.has(norm) || norm === "criterionid" || norm === "score") return false
+    const field = value[key]
+    return typeof field === "number" || (isRecord(field) && "score" in field)
+  }).length
+}
+
+function reviewRank(value: unknown): number {
+  if (!isRecord(value)) return 0
+  if (rubricTemplateProblem(value)) return 0
+  const summary = typeof value.summary === "string" && value.summary.trim().length > 0
+  const keys = criterionKeyCount(value)
+  if (summary && keys > 0) return 2
+  if (keys > 0) return 1
+  return 0
+}
+
+/**
+ * The largest balanced object that looks like a review.
+ * A small criterion fragment loses to an object that has summary and scores.
+ * A truncated tail is closed, then repaired.
+ */
+export function chooseReviewJson(raw: string): { value: unknown; text: string; repaired: boolean } | null {
+  const prepared = prepareJsonSource(raw.length > 400_000 ? raw.slice(-200_000) : raw)
+  let best: { value: unknown; text: string; repaired: boolean; rank: number; keys: number } | null = null
+  for (let index = 0; index < prepared.length; index += 1) {
+    if (prepared[index] !== "{") continue
+    const end = matchingBrace(prepared, index)
+    const balanced = end >= 0
+    const slice = balanced ? prepared.slice(index, end + 1) : closeTruncated(prepared.slice(index))
+    const parsed = parseSlice(slice)
+    if (!parsed) {
+      if (balanced) index = end
+      continue
+    }
+    const rank = reviewRank(parsed.value)
+    const keys = isRecord(parsed.value) ? criterionKeyCount(parsed.value) : 0
+    const repaired = parsed.repaired || !balanced
+    if (rank > 0 && (!best || rank > best.rank || (rank === best.rank && (keys > best.keys || (keys === best.keys && slice.length > best.text.length))))) {
+      best = { value: parsed.value, text: parsed.text, repaired, rank, keys }
+    }
+    if (balanced) index = end
+  }
+  return best ? { value: best.value, text: best.text, repaired: best.repaired } : null
 }
 
 /**
@@ -225,6 +332,8 @@ export function mergeReviewFields(base: unknown, patch: unknown): unknown {
 
 /** Strict JSON first. A repair pass covers trailing commas, missing commas, and similar damage. */
 export function parseModelJson(raw: string): ParsedModelJson | { ok: false; error: string } {
+  const review = chooseReviewJson(raw)
+  if (review) return { ok: true, value: normaliseScoreShape(review.value), text: review.text, repaired: review.repaired }
   const scored = lastScoreJson(raw)
   if (scored) return { ok: true, value: normaliseScoreShape(scored.value), text: scored.text, repaired: scored.repaired }
   const slice = fenced(raw)

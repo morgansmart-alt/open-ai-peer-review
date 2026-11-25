@@ -42,6 +42,7 @@ let error = ""
 let busy = false
 let stepLog: StepLogEntry[] = []
 let reviews: StoredReview[] = []
+let sendState: Record<string, "sending" | "published" | "duplicate"> = {}
 let requestId = ""
 let pendingPaper: { filename: string; text: string; note?: string } | null = null
 
@@ -75,6 +76,7 @@ function historyItem(review: StoredReview) {
     createdAt: review.createdAt,
     mismatch: Boolean(card.mismatch),
     selected: selected.has(review.id),
+    sendState: sendState[review.id] ?? "",
   }
 }
 
@@ -359,35 +361,48 @@ async function finish(raw: string, defendedRaw: string | null, transcript: { rou
 }
 
 async function sendScores(ids: string[]): Promise<void> {
-  const chosen = reviews.filter((review) => ids.includes(review.id))
+  const chosen = reviews.filter((review) => ids.includes(review.id) && !sendState[review.id])
   if (chosen.length === 0) return
+  for (const review of chosen) sendState[review.id] = "sending"
   busy = true
   error = ""
-  status = "Sending the selected scores…"
+  status = "Sending…"
   paint()
   const notes: string[] = []
+  const failures: string[] = []
   for (const review of chosen) {
     const built = submissionFromReview(review, review.modelId)
     if (!built.ok) {
-      notes.push(`${review.title}: ${built.error}`)
+      delete sendState[review.id]
+      failures.push(built.error)
       continue
     }
     try {
       const response = await postWebChatSubmission(built.submission)
       if (response.status === 404 || response.status === 405) {
-        notes.push("The leaderboard is not accepting web-chat scores yet. The submission service still has to be deployed. Your score stays on this browser.")
+        delete sendState[review.id]
+        failures.push("The leaderboard is not accepting web-chat scores yet. The submission service still has to be deployed. Your score stays on this browser.")
         break
       }
-      if (!response.ok) notes.push(response.error || `The board returned ${response.status}.`)
-      else notes.push(response.duplicate ? `${review.title} was already on the board.` : `${review.title} was sent. It is labelled uncalibrated web-chat.`)
+      if (!response.ok) {
+        delete sendState[review.id]
+        failures.push(response.error || `The board returned ${response.status}.`)
+      } else if (response.duplicate) {
+        sendState[review.id] = "duplicate"
+        notes.push("Already on board")
+      } else {
+        sendState[review.id] = "published"
+        notes.push("Published")
+      }
     } catch {
-      notes.push("The browser could not reach the leaderboard. Your score stays on this browser.")
+      delete sendState[review.id]
+      failures.push("The browser could not reach the leaderboard. Your score stays on this browser.")
       break
     }
   }
   busy = false
   status = notes.join(" ")
-  error = ""
+  error = failures.join(" ")
   paint()
 }
 

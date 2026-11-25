@@ -1,3 +1,4 @@
+import { isBonusCriterion } from "../../domain/criteria.ts"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
 import { criteriaForReview, describeScoring } from "../../domain/scoring.ts"
 import type { AirFeedback, CriteriaSet, StoredReview } from "../../domain/types.ts"
@@ -20,7 +21,14 @@ export interface DefendedScore {
   overallScore: number
   recommendation: string
   summary: string
-  scores: { criterionId: string; score: number }[]
+  scores: PostedScore[]
+}
+
+export interface PostedScore {
+  criterionId: string
+  score: number
+  /** True when the model scored the criterion and cited nothing. Half weight. */
+  uncited?: boolean
 }
 
 export interface WebChatSubmission {
@@ -32,7 +40,7 @@ export interface WebChatSubmission {
   criteriaVersion: string
   /** Paper-type profile. Absent means the device or engineering set. */
   criterionProfile?: string
-  scores: { criterionId: string; score: number }[]
+  scores: PostedScore[]
   summary: string
   /** Blind score. This is the ranking value. */
   overallScore: number
@@ -90,9 +98,37 @@ function boardOverall(value: unknown): number | null {
   return rounded
 }
 
+function readPostedScores(value: unknown): PostedScore[] | null {
+  if (!Array.isArray(value)) return null
+  const scores: PostedScore[] = []
+  for (const item of value) {
+    if (!isRecord(item)) return null
+    if (Object.keys(item).some((key) => key !== "criterionId" && key !== "score" && key !== "uncited")) return null
+    if ("uncited" in item && typeof item.uncited !== "boolean") return null
+    const criterionId = clip(item.criterionId, 80)
+    const score = Number(item.score)
+    if (!criterionId || !Number.isInteger(score)) return null
+    scores.push({ criterionId, score, ...(item.uncited === true ? { uncited: true } : {}) })
+  }
+  return scores
+}
+
+/** global-goals may be absent. Every other criterion in the profile needs one integer score. */
+function scoresCoverProfile(scores: PostedScore[], criteria: CriteriaSet): boolean {
+  const known = new Set(criteria.criteria.map((item) => item.id))
+  const ids = scores.map((item) => item.criterionId)
+  if (new Set(ids).size !== ids.length) return false
+  if (ids.some((id) => !known.has(id))) return false
+  return criteria.criteria.every((item) => isBonusCriterion(item.id) || ids.includes(item.id))
+}
+
 export function submissionFromReview(review: StoredReview, site: string): { ok: true; submission: WebChatSubmission } | { ok: false; error: string } {
   const criteria = criteriaForReview(review)
-  const checkScores = review.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score }))
+  const checkScores = review.report.scores.map((score) => ({
+    criterionId: score.criterionId,
+    score: score.score,
+    ...(score.uncited ? { uncited: true as const } : {}),
+  }))
   const described = describeScoring({
     scores: checkScores,
     statedOverall: review.report.overallScore,
@@ -158,18 +194,9 @@ export function validateWebChatSubmission(
   const criteriaVersion = clip(input.criteriaVersion, 40)
   if (!criteriaVersion.startsWith("0.2")) return { ok: false, error: "The board accepts AIR v0.2 scores." }
   const criterionProfile = clip(input.criterionProfile, 40)
-  if (!Array.isArray(input.scores)) return { ok: false, error: "The criterion scores are missing." }
-  const scores = input.scores.map((item) => {
-    if (!isRecord(item)) return null
-    if (Object.keys(item).some((key) => key !== "criterionId" && key !== "score")) return null
-    const criterionId = clip(item.criterionId, 80)
-    const score = Number(item.score)
-    return { criterionId, score }
-  })
-  if (scores.some((item) => item === null)) return { ok: false, error: "A criterion score had extra text." }
-  const ready = scores.filter((item): item is { criterionId: string; score: number } => item !== null)
-  const wanted = new Set(criteria.criteria.map((item) => item.id))
-  if (ready.length !== wanted.size || ready.some((item) => !wanted.has(item.criterionId) || !Number.isInteger(item.score))) {
+  const ready = readPostedScores(input.scores)
+  if (!ready) return { ok: false, error: "A criterion score had extra text." }
+  if (!scoresCoverProfile(ready, criteria)) {
     return { ok: false, error: "Every criterion in this profile needs an integer score." }
   }
   const summary = stripChatShareLinks(clip(input.summary, 4000))
@@ -220,15 +247,9 @@ function readDefended(
     if (!DEFENDED_KEYS.has(key)) return { ok: false, error: "The defended score included a field the board does not accept." }
   }
   if (input.label !== "after author defence") return { ok: false, error: "The second score must be labelled after author defence." }
-  if (!Array.isArray(input.scores)) return { ok: false, error: "The defended score is missing its criterion scores." }
-  const scores = input.scores.flatMap((item) => {
-    if (!isRecord(item) || Object.keys(item).some((key) => key !== "criterionId" && key !== "score")) return []
-    const criterionId = clip(item.criterionId, 80)
-    const score = Number(item.score)
-    return Number.isInteger(score) && criterionId ? [{ criterionId, score }] : []
-  })
-  const wanted = new Set(criteria.criteria.map((item) => item.id))
-  if (scores.length !== wanted.size || scores.some((item) => !wanted.has(item.criterionId))) {
+  const scores = readPostedScores(input.scores)
+  if (!scores) return { ok: false, error: "The defended score is missing its criterion scores." }
+  if (!scoresCoverProfile(scores, criteria)) {
     return { ok: false, error: "The defended score needs every criterion in this profile." }
   }
   const summary = stripChatShareLinks(clip(input.summary, 4000))
@@ -301,7 +322,13 @@ export function submissionToStored(payload: WebChatSubmission & { id?: string })
     defended: payload.defended,
     report: {
       summary: payload.summary,
-      scores: payload.scores.map((score) => ({ criterionId: score.criterionId, score: score.score, rationale: "Score from an uncalibrated web chat.", citations: [] })),
+      scores: payload.scores.map((score) => ({
+        criterionId: score.criterionId,
+        score: score.score,
+        rationale: "Score from an uncalibrated web chat.",
+        citations: [],
+        ...(score.uncited ? { uncited: true } : {}),
+      })),
       overallScore: payload.overallScore,
       ideaScore: payload.overallScore,
       recommendation: payload.recommendation,

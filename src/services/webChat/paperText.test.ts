@@ -6,7 +6,7 @@ import type { ZenodoRecord } from "../zenodo.ts"
 import { acceptWebChatResult, draftWebChatReview } from "./accept.ts"
 import { planDelivery } from "./deliver.ts"
 import { buildWebChatPacket } from "./packet.ts"
-import { parseModelJson, settleChatJson } from "../jsonText.ts"
+import { chooseReviewJson, parseModelJson, settleChatJson } from "../jsonText.ts"
 import curatedIds from "../../../paper-text-ids.json" with { type: "json" }
 import { collectPaperIds, documentsForOpenRecord, isOpenFileAccess, mergePaperIds, renderStaticPaperText } from "./paperTextFiles.ts"
 import {
@@ -193,6 +193,22 @@ describe("json repair and the text page check", () => {
     expect(templateAsked).toHaveLength(1)
     expect(templateAsked[0]).toContain("Fill in the review now")
     expect(templateAsked[0]).not.toContain("overallScore")
+    const summary = "The record states a narrow claim and shows the weighing steps that support it, with the season limit written in the text."
+    const review = `{"summary":"${summary}","scores":[{"criterionId":"impact","score":70},{"criterionId":"availability","score":60}],"overallScore":68}`
+    const fragment = `{"availability":{"score":40,"rationale":"A short fragment."}}`
+    const picked = chooseReviewJson(`${fragment}\n${review}`)
+    expect(picked?.text).toContain("narrow claim")
+    expect(picked?.text).not.toContain("short fragment")
+    const curly = review.replaceAll("\"", "\u201c")
+    expect(parseModelJson(curly).ok).toBe(true)
+    const broken = `{"summary":"The record states a narrow claim and shows the weighing steps that support it.","scores":[{"criterionId":"impact","score":70},],"overallScore":68,}`
+    expect(parseModelJson(broken).ok).toBe(true)
+    const newline = "{\"summary\":\"The record states a narrow claim and shows the weighing\nsteps that support it, with the season limit written in the text.\",\"scores\":[{\"criterionId\":\"impact\",\"score\":70}],\"overallScore\":68}"
+    expect(parseModelJson(newline).ok).toBe(true)
+    const truncated = review.slice(0, -1)
+    const recovered = parseModelJson(`${fragment} ${truncated}`)
+    expect(recovered.ok).toBe(true)
+    if (recovered.ok) expect(JSON.stringify(recovered.value)).toContain("narrow claim")
     expect(template.reasked).toBe(true)
     expect(template.text).toContain("81")
     const both = '{"overallScore":"<0-100>","questionsForAuthors":["<question>"],"recommendation":"<accept|encourage>"} {"overallScore":91,"questionsForAuthors":["What limits the table?"],"recommendation":"accept"}'
