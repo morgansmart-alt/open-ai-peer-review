@@ -133,8 +133,10 @@ describe("defend my paper", () => {
       expect(repaired.defended.scores[0]?.uncited).toBe(true)
     }
     expect(statedDefenceOverall("The overall remains 65.02 after the reply.")).toBe(65.02)
-    expect(runSummary({ completed: 2, requested: 2, blind: 84, after: 84 })).toBe("Rounds 2/2 · blind 84 · after defence 84")
-    expect(runSummary({ completed: 2, requested: 2, blind: 84, after: null })).toBe("Rounds 2/2 · blind 84 · after defence not read")
+    expect(runSummary({ completed: 2, requested: 2, blind: 84, after: 84 })).toBe("Rounds 2/2 · blind 84.00 · after defence 84.00")
+    expect(runSummary({ completed: 2, requested: 2, blind: 90.76, after: 90.76 })).toBe("Rounds 2/2 · blind 90.76 · after defence 90.76")
+    expect(runSummary({ completed: 2, requested: 2, blind: 65.7, after: 65.7 })).toBe("Rounds 2/2 · blind 65.70 · after defence 65.70")
+    expect(runSummary({ completed: 2, requested: 2, blind: 84, after: null })).toBe("Rounds 2/2 · blind 84.00 · after defence not read")
   })
 
   it("sends the blind score as the ranking value and the defended score beside it", () => {

@@ -7,7 +7,7 @@ import { weightedMean } from "../domain/criteria.ts"
 import { sha256Hex } from "./hash.ts"
 import { chunkText } from "./textTools.ts"
 import { extractJsonValue, validateReport } from "./validateReport.ts"
-import { mergeReviewFields, parseModelJson, reaskJsonPrompt } from "./jsonText.ts"
+import { describeCriterionGather, mergeReviewFields, parseModelJson, reaskJsonPrompt } from "./jsonText.ts"
 
 const good = {
   summary: "The record states a narrow claim and shows the weighing steps that support it, with the season limit written in the text.",
@@ -294,6 +294,85 @@ describe("validateReport", () => {
       expect(sheet.report.scores.find((score) => score.criterionId === "availability")?.score).toBe(98)
       expect(sheet.report.scores.find((score) => score.criterionId === "impact")?.score).toBe(90)
       expect(sheet.report.summary).toContain("2014 CODATA")
+    }
+  })
+
+  it("rebuilds Quantized Inertia when criteria use other keys and a long physics block breaks the wrapper", () => {
+    const summary = "The record states a boundary correction and shows the weighing steps that support it, with the limit written in the text."
+    const rationale = "The text states this in a sentence a reader can find."
+    const laws = Array.from({ length: 40 }, (_, index) => `conservation statement ${index} ${"boundary ".repeat(12)}`)
+    const physics = {
+      classification: "EXTENDS",
+      laws,
+      howAddressed: "The inertia term extends the thermodynamic argument by a boundary correction that is written out at length.",
+    }
+    const availability = {
+      criterionId: "availability",
+      score: 85,
+      rationale: "The Zenodo record holds the tables and the files are public.",
+      citations: [
+        { quote: "The files are in the Zenodo record.", location: "files" },
+        { quote: "The tables are complete enough to reuse.", location: "results" },
+      ],
+      ontologyClass: "physical-testable",
+      physics,
+    }
+    const named = ["clarity", "consistency", "evidence-labelling", "limitations"]
+    const keyed = officialCriteria.criteria.flatMap((criterion) => {
+      if (criterion.id === "availability" || named.includes(criterion.id)) return []
+      return [[criterion.id, { score: criterion.id === "impact" ? "90" : "80/100", rationale, citations: [{ quote: "A cited sentence.", location: "abstract" }] }]]
+    })
+    const byName = officialCriteria.criteria.filter((criterion) => named.includes(criterion.id)).map((criterion) => ({
+      criterion: criterion.name,
+      score: "70/100",
+      rationale,
+      citations: [{ quote: "A cited sentence.", location: "discussion" }],
+    }))
+    const rest = {
+      summary,
+      overallScore: 72,
+      recommendation: "encourage",
+      strengths: ["The files are public."],
+      questionsForAuthors: ["Which table changed?"],
+      suggestedNextSteps: ["Publish the table beside the text."],
+      ontologyClass: "physical-testable",
+      physics,
+      simulation: { reported: 0, passed: 0, methods: "Simulation does not apply to this record.", inputsAvailable: false },
+      valueEstimate: { assumptions: ["The season is one site."], marketDisruption: "Not estimated." },
+      goals: [{ goalId: "sdg-9", level: "indirect", note: "Shared measurement standards." }],
+      scores: Object.fromEntries(keyed),
+      criteria: byName,
+    }
+    const brokenPhysics = `${JSON.stringify(physics).slice(0, -1)}, "note": "line\nbreak"}`
+    const reply = [
+      "```json",
+      JSON.stringify(availability),
+      "```",
+      "The physics block below is not valid JSON.",
+      brokenPhysics,
+      "```json",
+      JSON.stringify(rest),
+      "```",
+    ].join("\n")
+    expect(reply.length).toBeGreaterThan(8000)
+    expect(reply.slice(0, 600)).toContain('"criterionId":"availability"')
+    expect(reply.slice(0, 600)).toContain("EXTENDS")
+    const note = describeCriterionGather(reply)
+    expect(note).toContain("Criterion-like objects:")
+    expect(note).toContain("availability")
+    expect(note).toContain("impact")
+    expect(note).toMatch(/Keys:.*score/)
+    const parsed = parseModelJson(reply)
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    const accepted = validateReport(parsed.value, officialCriteria)
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) expect(accepted.errors).toEqual([])
+    if (accepted.ok) {
+      expect(accepted.report.scores.find((score) => score.criterionId === "availability")?.score).toBe(85)
+      expect(accepted.report.scores.find((score) => score.criterionId === "impact")?.score).toBe(90)
+      expect(accepted.report.scores.find((score) => score.criterionId === "limitations")?.score).toBe(70)
+      expect(accepted.report.summary).toContain("boundary correction")
     }
   })
 

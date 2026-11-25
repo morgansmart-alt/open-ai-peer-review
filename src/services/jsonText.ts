@@ -158,16 +158,36 @@ function reviewRank(value: unknown): number {
   return 0
 }
 
-function isCriterionRow(value: Record<string, unknown>): boolean {
-  const id = value.criterionId ?? value.id
-  if (typeof id !== "string" || !id.trim()) return false
-  return parseScoreValue(value.score) != null
+function matchCriterionId(raw: string): string {
+  const compact = raw.toLowerCase().replace(/[_/]+/g, " ").replace(/[\s_]+/g, "-").replace(/[^a-z0-9-]/g, "").replace(/-+/g, "-")
+  const found = officialCriteria.criteria.find((item) => {
+    const id = item.id.toLowerCase()
+    const name = item.name.toLowerCase().replace(/[\s_]+/g, "-")
+    return id === compact || id.replace(/-/g, "") === compact.replace(/-/g, "") || name === compact
+  })
+  return found?.id ?? ""
 }
 
-function criterionOnly(value: Record<string, unknown>): Record<string, unknown> {
-  const score = parseScoreValue(value.score)
+function criterionIdFrom(row: Record<string, unknown>): string {
+  for (const key of ["criterionId", "criterion", "id", "name", "label"] as const) {
+    if (typeof row[key] !== "string" || !row[key].trim()) continue
+    const known = matchCriterionId(row[key])
+    if (known) return known
+  }
+  return typeof row.criterionId === "string" ? row.criterionId.trim() : ""
+}
+
+function scoreOf(row: Record<string, unknown>): number | null {
+  return parseScoreValue(row.score ?? row.value ?? row.points ?? row.rating)
+}
+
+function isCriterionRow(value: Record<string, unknown>): boolean {
+  return criterionIdFrom(value) !== "" && scoreOf(value) != null
+}
+
+function criterionOnly(value: Record<string, unknown>, id = criterionIdFrom(value), score = scoreOf(value)): Record<string, unknown> {
   const row: Record<string, unknown> = {
-    criterionId: String(value.criterionId ?? value.id).trim(),
+    criterionId: id,
     ...(score != null ? { score } : {}),
   }
   const rationale = typeof value.rationale === "string" ? value.rationale : typeof value.reason === "string" ? value.reason : ""
@@ -260,7 +280,7 @@ function flattenCitations(value: unknown): { value: unknown; changed: boolean } 
 /** The object that held the unclosed citation is itself a criterion. Keep it in the scores array. */
 function attachRootCriterion(value: unknown): { value: unknown; changed: boolean } {
   if (!isRecord(value) || !isCriterionRow(value)) return { value, changed: false }
-  const id = String(value.criterionId ?? value.id).trim()
+  const id = criterionIdFrom(value)
   const scores = Array.isArray(value.scores) ? [...value.scores] : []
   if (scores.some((item) => isRecord(item) && String(item.criterionId ?? item.id ?? "") === id)) return { value, changed: false }
   scores.push(criterionOnly(value))
@@ -293,8 +313,8 @@ function rememberField(fields: Record<string, unknown>, row: Record<string, unkn
   for (const key of ["questionsForAuthors", "questions", "strengths", "suggestedNextSteps", "nextSteps", "minorIssues"] as const) {
     if (Array.isArray(row[key]) && (row[key] as unknown[]).length > 0) fields[key] = row[key]
   }
-  if (isRecord(row.physics) && !isCriterionRow(row.physics)) fields.physics = row.physics
-  if (isRecord(row.simulation) && !isCriterionRow(row.simulation)) fields.simulation = row.simulation
+  if (isRecord(row.physics) && !isCriterionRow(row.physics) && (row.physics.classification || row.physics.laws)) fields.physics = row.physics
+  if (isRecord(row.simulation) && !isCriterionRow(row.simulation) && (row.simulation.methods || "reported" in row.simulation)) fields.simulation = row.simulation
   if (isRecord(row.valueEstimate) && !isCriterionRow(row.valueEstimate)) fields.valueEstimate = row.valueEstimate
   if (Array.isArray(row.goals)) fields.goals = row.goals
   if (Array.isArray(row.majorIssues)) fields.majorIssues = row.majorIssues
@@ -312,44 +332,96 @@ function walkRecords(value: unknown, visit: (row: Record<string, unknown>) => vo
   for (const child of Object.values(value)) walkRecords(child, visit)
 }
 
-/**
- * No balanced object had both a summary and a scores array.
- * Gather every criterionId+score at any depth, last one wins, plus summary and question strings found anywhere.
- */
-function assembleReview(raw: string, required: readonly string[]): { value: Record<string, unknown> } | null {
-  if (required.length === 0) return null
-  const prepared = prepareJsonSource(raw.length > 400_000 ? raw.slice(-200_000) : raw)
-  const scores = new Map<string, Record<string, unknown>>()
-  const fields: Record<string, unknown> = {}
-  const take = (value: unknown) => {
-    const preparedValue = prepareCandidate(value).value
-    walkRecords(preparedValue, (row) => {
-      rememberField(fields, row)
-      if (Array.isArray(row.scores)) {
-        for (const item of row.scores) {
-          if (!isRecord(item) || !isCriterionRow(item)) continue
-          const id = String(item.criterionId ?? item.id).trim()
-          scores.set(id, criterionOnly(item))
-        }
-      }
-      if (isCriterionRow(row)) scores.set(String(row.criterionId ?? row.id).trim(), criterionOnly(row))
-    })
+function absorbKeyedScores(row: Record<string, unknown>, scores: Map<string, Record<string, unknown>>, samples: { id: string; keys: string[] }[]): void {
+  for (const [key, field] of Object.entries(row)) {
+    const id = matchCriterionId(key)
+    if (!id) continue
+    if (isRecord(field)) {
+      const score = scoreOf(field)
+      if (score == null) continue
+      scores.set(id, criterionOnly({ ...field, criterionId: id }, id, score))
+      samples.push({ id, keys: Object.keys(field) })
+      continue
+    }
+    const score = parseScoreValue(field)
+    if (score == null) continue
+    scores.set(id, { criterionId: id, score })
+    samples.push({ id, keys: [key] })
   }
+}
+
+interface CriterionGather {
+  scores: Map<string, Record<string, unknown>>
+  fields: Record<string, unknown>
+  samples: { id: string; keys: string[] }[]
+}
+
+function fencedBlocks(raw: string): string[] {
+  return [...raw.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].map((match) => match[1] ?? "").filter((block) => block.includes("{"))
+}
+
+function scanJsonText(text: string, take: (value: unknown) => void): void {
+  const prepared = prepareJsonSource(text.length > 400_000 ? text.slice(-200_000) : text)
   for (let index = 0; index < prepared.length; index += 1) {
     if (prepared[index] !== "{") continue
     const end = matchingBrace(prepared, index)
     const balanced = end >= 0
     const slice = balanced ? prepared.slice(index, end + 1) : closeTruncated(prepared.slice(index))
     const parsed = parseSlice(slice)
-    if (!parsed) {
-      if (balanced) index = end
-      continue
-    }
+    if (!parsed) continue
     take(parsed.value)
-    if (balanced) index = end
+    if (balanced && isRecord(parsed.value) && coversCriteria(parsed.value, officialCriteria.criteria.map((item) => item.id).filter((id) => !isBonusCriterion(id)))) index = end
   }
-  if (!required.every((id) => scores.has(id))) return null
-  return { value: { ...fields, scores: [...scores.values()] } }
+}
+
+function gatherCriteria(raw: string): CriterionGather {
+  const scores = new Map<string, Record<string, unknown>>()
+  const fields: Record<string, unknown> = {}
+  const samples: { id: string; keys: string[] }[] = []
+  const take = (value: unknown) => {
+    const preparedValue = prepareCandidate(value).value
+    walkRecords(preparedValue, (row) => {
+      rememberField(fields, row)
+      const lists = [row.scores, row.criteria].filter(Array.isArray)
+      for (const list of lists) {
+        for (const item of list as unknown[]) {
+          if (!isRecord(item) || !isCriterionRow(item)) continue
+          const id = criterionIdFrom(item)
+          scores.set(id, criterionOnly(item, id, scoreOf(item)))
+          samples.push({ id, keys: Object.keys(item) })
+        }
+      }
+      if (isCriterionRow(row)) {
+        const id = criterionIdFrom(row)
+        scores.set(id, criterionOnly(row, id, scoreOf(row)))
+        samples.push({ id, keys: Object.keys(row) })
+      }
+      absorbKeyedScores(row, scores, samples)
+    })
+  }
+  const blocks = fencedBlocks(raw)
+  for (const text of [raw, ...blocks]) scanJsonText(text, take)
+  return { scores, fields, samples }
+}
+
+/** How many criterion-like objects the reconstruction saw, and which keys they used. */
+export function describeCriterionGather(raw: string): string {
+  const gathered = gatherCriteria(raw)
+  const ids = [...new Set(gathered.samples.map((sample) => sample.id))]
+  const keys = gathered.samples.slice(0, 8).map((sample) => `${sample.id} [${sample.keys.slice(0, 8).join(", ")}]`).join("; ")
+  return `Criterion-like objects: ${gathered.samples.length}. Ids: ${ids.join(", ") || "none"}. Keys: ${keys || "none"}.`
+}
+
+/**
+ * No parsed object had every required criterion.
+ * Gather criterion rows at any depth, including criterion/name keys, "85/100" strings, and keyed {impact:{score}}.
+ * Last one wins. Summary and question strings are taken from anywhere. Each fenced block is scanned on its own.
+ */
+function assembleReview(raw: string, required: readonly string[]): { value: Record<string, unknown> } | null {
+  if (required.length === 0) return null
+  const gathered = gatherCriteria(raw)
+  if (!required.every((id) => gathered.scores.has(id))) return null
+  return { value: { ...gathered.fields, scores: [...gathered.scores.values()] } }
 }
 
 /**
@@ -444,21 +516,25 @@ function parseScoreValue(value: unknown): number | null {
 function scoreEntry(key: string, field: unknown): Record<string, unknown> | null {
   if (SCORE_KEY_SKIP.has(key.toLowerCase().replace(/[_-]/g, ""))) return null
   const direct = parseScoreValue(field)
-  if (direct != null && (typeof field === "number" || typeof field === "string")) return { criterionId: key, score: direct }
+  const keyed = matchCriterionId(key)
+  if (direct != null && (typeof field === "number" || typeof field === "string")) {
+    return keyed ? { criterionId: keyed, score: direct } : { criterionId: key, score: direct }
+  }
   if (!isRecord(field)) return null
-  const score = parseScoreValue(field.score)
-  if (score == null && !("score" in field)) return null
-  const id = field.criterionId ?? field.id ?? field.name ?? field.label ?? key
-  return { ...field, criterionId: String(id), ...(score != null ? { score } : {}) }
+  const score = scoreOf(field)
+  if (score == null && !("score" in field) && !("value" in field)) return null
+  const id = criterionIdFrom(field) || keyed
+  if (!id) return null
+  return { ...field, criterionId: id, ...(score != null ? { score } : {}) }
 }
 
 function scoreRows(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value)) return []
   return value.flatMap((item) => {
-    if (!isRecord(item)) return []
-    const id = item.criterionId ?? item.id ?? item.name ?? item.label
-    const score = parseScoreValue(item.score)
-    return [{ ...item, ...(id ? { criterionId: String(id) } : {}), ...(score != null ? { score } : {}) }]
+    if (!isRecord(item) || !isCriterionRow(item)) return []
+    const id = criterionIdFrom(item)
+    const score = scoreOf(item)
+    return [{ ...item, criterionId: id, ...(score != null ? { score } : {}) }]
   })
 }
 
@@ -470,7 +546,7 @@ export function normaliseScoreShape(value: unknown): unknown {
     const inner = row[key]
     if (isRecord(inner) && (inner.scores || inner.summary || inner.overallScore || inner.criteria)) row = { ...row, ...inner }
   }
-  if (!Array.isArray(row.scores) && Array.isArray(row.criteria)) row.scores = row.criteria
+  if (!Array.isArray(row.scores) && !isRecord(row.scores) && Array.isArray(row.criteria)) row.scores = row.criteria
   if (row.scores && isRecord(row.scores)) {
     row.scores = Object.entries(row.scores).flatMap(([key, field]) => {
       const entry = scoreEntry(key, field)
@@ -478,6 +554,20 @@ export function normaliseScoreShape(value: unknown): unknown {
     })
   }
   if (Array.isArray(row.scores)) row.scores = scoreRows(row.scores)
+  if (Array.isArray(row.criteria)) {
+    const extra = scoreRows(row.criteria)
+    const current = Array.isArray(row.scores) ? row.scores as Record<string, unknown>[] : []
+    const map = new Map<string, Record<string, unknown>>()
+    for (const item of current) {
+      const id = String(item.criterionId ?? "")
+      if (id) map.set(id, item)
+    }
+    for (const item of extra) {
+      const id = String(item.criterionId ?? "")
+      if (id && !map.has(id)) map.set(id, item)
+    }
+    if (map.size > 0) row.scores = [...map.values()]
+  }
   if (!Array.isArray(row.scores)) {
     const lifted = Object.entries(row).flatMap(([key, field]) => {
       const entry = scoreEntry(key, field)
@@ -589,9 +679,10 @@ export function rubricTemplateProblem(value: unknown): string | null {
 }
 
 /** Repair when possible. A parse or schema failure asks the chat once, naming the problem. */
-function rejectionNote(problem: string, raw: string): string {
+function rejectionNote(problem: string, raw: string, diagnostic = ""): string {
   const chosen = raw.replace(/\s+/g, " ").trim().slice(0, 600)
-  return `Rejected the reply. ${problem} Chosen JSON: ${chosen}`
+  const found = diagnostic ? `${diagnostic} ` : ""
+  return `Rejected the reply. ${problem} ${found}Chosen JSON: ${chosen}`
 }
 
 export async function settleChatJson(
@@ -614,7 +705,7 @@ export async function settleChatJson(
       return { text: first.repaired ? first.text : raw, repaired: first.repaired, reasked: false }
     }
     const problem = checked.errors.join(" ")
-    log(rejectionNote(problem, first.text || raw))
+    log(rejectionNote(problem, first.text || raw, describeCriterionGather(raw)))
     const follow = await ask(template ? FILL_REVIEW_PROMPT : reaskJsonPrompt(problem, criterionIds))
     const second = parseModelJson(follow, criterionIds)
     const merged = mergeReviewFields(first.value, second.ok ? second.value : {})
@@ -630,10 +721,10 @@ export async function settleChatJson(
       log("The correction was less complete than the first reply. Kept the first reply.")
       return { text: firstText, repaired: true, reasked: true }
     }
-    log(rejectionNote("errors" in mergedCheck ? mergedCheck.errors.join(" ") : "The corrected JSON was not usable.", mergedText))
+    log(rejectionNote("errors" in mergedCheck ? mergedCheck.errors.join(" ") : "The corrected JSON was not usable.", mergedText, describeCriterionGather(follow)))
     return { text: mergedText, repaired: true, reasked: true }
   }
-  log(rejectionNote(first.error, raw))
+  log(rejectionNote(first.error, raw, describeCriterionGather(raw)))
   const follow = await ask(reaskJsonPrompt(first.error, criterionIds))
   const second = parseModelJson(follow, criterionIds)
   if (second.ok && second.repaired) log("Repaired the corrected JSON.")

@@ -2154,15 +2154,32 @@ ${output}
     if (keys > 0) return 1;
     return 0;
   }
-  function isCriterionRow(value) {
-    const id = value.criterionId ?? value.id;
-    if (typeof id !== "string" || !id.trim()) return false;
-    return parseScoreValue(value.score) != null;
+  function matchCriterionId(raw) {
+    const compact = raw.toLowerCase().replace(/[_/]+/g, " ").replace(/[\s_]+/g, "-").replace(/[^a-z0-9-]/g, "").replace(/-+/g, "-");
+    const found = officialCriteria.criteria.find((item) => {
+      const id = item.id.toLowerCase();
+      const name = item.name.toLowerCase().replace(/[\s_]+/g, "-");
+      return id === compact || id.replace(/-/g, "") === compact.replace(/-/g, "") || name === compact;
+    });
+    return found?.id ?? "";
   }
-  function criterionOnly(value) {
-    const score = parseScoreValue(value.score);
+  function criterionIdFrom(row) {
+    for (const key of ["criterionId", "criterion", "id", "name", "label"]) {
+      if (typeof row[key] !== "string" || !row[key].trim()) continue;
+      const known = matchCriterionId(row[key]);
+      if (known) return known;
+    }
+    return typeof row.criterionId === "string" ? row.criterionId.trim() : "";
+  }
+  function scoreOf(row) {
+    return parseScoreValue(row.score ?? row.value ?? row.points ?? row.rating);
+  }
+  function isCriterionRow(value) {
+    return criterionIdFrom(value) !== "" && scoreOf(value) != null;
+  }
+  function criterionOnly(value, id = criterionIdFrom(value), score = scoreOf(value)) {
     const row = {
-      criterionId: String(value.criterionId ?? value.id).trim(),
+      criterionId: id,
       ...score != null ? { score } : {}
     };
     const rationale = typeof value.rationale === "string" ? value.rationale : typeof value.reason === "string" ? value.reason : "";
@@ -2251,7 +2268,7 @@ ${output}
   }
   function attachRootCriterion(value) {
     if (!isRecord2(value) || !isCriterionRow(value)) return { value, changed: false };
-    const id = String(value.criterionId ?? value.id).trim();
+    const id = criterionIdFrom(value);
     const scores = Array.isArray(value.scores) ? [...value.scores] : [];
     if (scores.some((item) => isRecord2(item) && String(item.criterionId ?? item.id ?? "") === id)) return { value, changed: false };
     scores.push(criterionOnly(value));
@@ -2280,8 +2297,8 @@ ${output}
     for (const key of ["questionsForAuthors", "questions", "strengths", "suggestedNextSteps", "nextSteps", "minorIssues"]) {
       if (Array.isArray(row[key]) && row[key].length > 0) fields[key] = row[key];
     }
-    if (isRecord2(row.physics) && !isCriterionRow(row.physics)) fields.physics = row.physics;
-    if (isRecord2(row.simulation) && !isCriterionRow(row.simulation)) fields.simulation = row.simulation;
+    if (isRecord2(row.physics) && !isCriterionRow(row.physics) && (row.physics.classification || row.physics.laws)) fields.physics = row.physics;
+    if (isRecord2(row.simulation) && !isCriterionRow(row.simulation) && (row.simulation.methods || "reported" in row.simulation)) fields.simulation = row.simulation;
     if (isRecord2(row.valueEstimate) && !isCriterionRow(row.valueEstimate)) fields.valueEstimate = row.valueEstimate;
     if (Array.isArray(row.goals)) fields.goals = row.goals;
     if (Array.isArray(row.majorIssues)) fields.majorIssues = row.majorIssues;
@@ -2297,40 +2314,79 @@ ${output}
     visit(value);
     for (const child of Object.values(value)) walkRecords(child, visit);
   }
-  function assembleReview(raw, required) {
-    if (required.length === 0) return null;
-    const prepared = prepareJsonSource(raw.length > 4e5 ? raw.slice(-2e5) : raw);
-    const scores = /* @__PURE__ */ new Map();
-    const fields = {};
-    const take = (value) => {
-      const preparedValue = prepareCandidate(value).value;
-      walkRecords(preparedValue, (row) => {
-        rememberField(fields, row);
-        if (Array.isArray(row.scores)) {
-          for (const item of row.scores) {
-            if (!isRecord2(item) || !isCriterionRow(item)) continue;
-            const id = String(item.criterionId ?? item.id).trim();
-            scores.set(id, criterionOnly(item));
-          }
-        }
-        if (isCriterionRow(row)) scores.set(String(row.criterionId ?? row.id).trim(), criterionOnly(row));
-      });
-    };
+  function absorbKeyedScores(row, scores, samples) {
+    for (const [key, field] of Object.entries(row)) {
+      const id = matchCriterionId(key);
+      if (!id) continue;
+      if (isRecord2(field)) {
+        const score2 = scoreOf(field);
+        if (score2 == null) continue;
+        scores.set(id, criterionOnly({ ...field, criterionId: id }, id, score2));
+        samples.push({ id, keys: Object.keys(field) });
+        continue;
+      }
+      const score = parseScoreValue(field);
+      if (score == null) continue;
+      scores.set(id, { criterionId: id, score });
+      samples.push({ id, keys: [key] });
+    }
+  }
+  function fencedBlocks(raw) {
+    return [...raw.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].map((match) => match[1] ?? "").filter((block) => block.includes("{"));
+  }
+  function scanJsonText(text, take) {
+    const prepared = prepareJsonSource(text.length > 4e5 ? text.slice(-2e5) : text);
     for (let index = 0; index < prepared.length; index += 1) {
       if (prepared[index] !== "{") continue;
       const end = matchingBrace(prepared, index);
       const balanced = end >= 0;
       const slice = balanced ? prepared.slice(index, end + 1) : closeTruncated(prepared.slice(index));
       const parsed = parseSlice(slice);
-      if (!parsed) {
-        if (balanced) index = end;
-        continue;
-      }
+      if (!parsed) continue;
       take(parsed.value);
-      if (balanced) index = end;
+      if (balanced && isRecord2(parsed.value) && coversCriteria(parsed.value, officialCriteria.criteria.map((item) => item.id).filter((id) => !isBonusCriterion(id)))) index = end;
     }
-    if (!required.every((id) => scores.has(id))) return null;
-    return { value: { ...fields, scores: [...scores.values()] } };
+  }
+  function gatherCriteria(raw) {
+    const scores = /* @__PURE__ */ new Map();
+    const fields = {};
+    const samples = [];
+    const take = (value) => {
+      const preparedValue = prepareCandidate(value).value;
+      walkRecords(preparedValue, (row) => {
+        rememberField(fields, row);
+        const lists = [row.scores, row.criteria].filter(Array.isArray);
+        for (const list of lists) {
+          for (const item of list) {
+            if (!isRecord2(item) || !isCriterionRow(item)) continue;
+            const id = criterionIdFrom(item);
+            scores.set(id, criterionOnly(item, id, scoreOf(item)));
+            samples.push({ id, keys: Object.keys(item) });
+          }
+        }
+        if (isCriterionRow(row)) {
+          const id = criterionIdFrom(row);
+          scores.set(id, criterionOnly(row, id, scoreOf(row)));
+          samples.push({ id, keys: Object.keys(row) });
+        }
+        absorbKeyedScores(row, scores, samples);
+      });
+    };
+    const blocks = fencedBlocks(raw);
+    for (const text of [raw, ...blocks]) scanJsonText(text, take);
+    return { scores, fields, samples };
+  }
+  function describeCriterionGather(raw) {
+    const gathered = gatherCriteria(raw);
+    const ids = [...new Set(gathered.samples.map((sample) => sample.id))];
+    const keys = gathered.samples.slice(0, 8).map((sample) => `${sample.id} [${sample.keys.slice(0, 8).join(", ")}]`).join("; ");
+    return `Criterion-like objects: ${gathered.samples.length}. Ids: ${ids.join(", ") || "none"}. Keys: ${keys || "none"}.`;
+  }
+  function assembleReview(raw, required) {
+    if (required.length === 0) return null;
+    const gathered = gatherCriteria(raw);
+    if (!required.every((id) => gathered.scores.has(id))) return null;
+    return { value: { ...gathered.fields, scores: [...gathered.scores.values()] } };
   }
   function chooseReviewJson(raw) {
     const prepared = prepareJsonSource(raw.length > 4e5 ? raw.slice(-2e5) : raw);
@@ -2410,20 +2466,24 @@ ${output}
   function scoreEntry(key, field) {
     if (SCORE_KEY_SKIP.has(key.toLowerCase().replace(/[_-]/g, ""))) return null;
     const direct = parseScoreValue(field);
-    if (direct != null && (typeof field === "number" || typeof field === "string")) return { criterionId: key, score: direct };
+    const keyed = matchCriterionId(key);
+    if (direct != null && (typeof field === "number" || typeof field === "string")) {
+      return keyed ? { criterionId: keyed, score: direct } : { criterionId: key, score: direct };
+    }
     if (!isRecord2(field)) return null;
-    const score = parseScoreValue(field.score);
-    if (score == null && !("score" in field)) return null;
-    const id = field.criterionId ?? field.id ?? field.name ?? field.label ?? key;
-    return { ...field, criterionId: String(id), ...score != null ? { score } : {} };
+    const score = scoreOf(field);
+    if (score == null && !("score" in field) && !("value" in field)) return null;
+    const id = criterionIdFrom(field) || keyed;
+    if (!id) return null;
+    return { ...field, criterionId: id, ...score != null ? { score } : {} };
   }
   function scoreRows(value) {
     if (!Array.isArray(value)) return [];
     return value.flatMap((item) => {
-      if (!isRecord2(item)) return [];
-      const id = item.criterionId ?? item.id ?? item.name ?? item.label;
-      const score = parseScoreValue(item.score);
-      return [{ ...item, ...id ? { criterionId: String(id) } : {}, ...score != null ? { score } : {} }];
+      if (!isRecord2(item) || !isCriterionRow(item)) return [];
+      const id = criterionIdFrom(item);
+      const score = scoreOf(item);
+      return [{ ...item, criterionId: id, ...score != null ? { score } : {} }];
     });
   }
   function normaliseScoreShape(value) {
@@ -2433,7 +2493,7 @@ ${output}
       const inner = row[key];
       if (isRecord2(inner) && (inner.scores || inner.summary || inner.overallScore || inner.criteria)) row = { ...row, ...inner };
     }
-    if (!Array.isArray(row.scores) && Array.isArray(row.criteria)) row.scores = row.criteria;
+    if (!Array.isArray(row.scores) && !isRecord2(row.scores) && Array.isArray(row.criteria)) row.scores = row.criteria;
     if (row.scores && isRecord2(row.scores)) {
       row.scores = Object.entries(row.scores).flatMap(([key, field]) => {
         const entry = scoreEntry(key, field);
@@ -2441,6 +2501,20 @@ ${output}
       });
     }
     if (Array.isArray(row.scores)) row.scores = scoreRows(row.scores);
+    if (Array.isArray(row.criteria)) {
+      const extra = scoreRows(row.criteria);
+      const current = Array.isArray(row.scores) ? row.scores : [];
+      const map = /* @__PURE__ */ new Map();
+      for (const item of current) {
+        const id = String(item.criterionId ?? "");
+        if (id) map.set(id, item);
+      }
+      for (const item of extra) {
+        const id = String(item.criterionId ?? "");
+        if (id && !map.has(id)) map.set(id, item);
+      }
+      if (map.size > 0) row.scores = [...map.values()];
+    }
     if (!Array.isArray(row.scores)) {
       const lifted = Object.entries(row).flatMap(([key, field]) => {
         const entry = scoreEntry(key, field);
@@ -2536,9 +2610,10 @@ ${output}
     }
     return null;
   }
-  function rejectionNote(problem, raw) {
+  function rejectionNote(problem, raw, diagnostic = "") {
     const chosen = raw.replace(/\s+/g, " ").trim().slice(0, 600);
-    return `Rejected the reply. ${problem} Chosen JSON: ${chosen}`;
+    const found = diagnostic ? `${diagnostic} ` : "";
+    return `Rejected the reply. ${problem} ${found}Chosen JSON: ${chosen}`;
   }
   async function settleChatJson(raw, ask, log, validate, criterionIds = []) {
     const ready = (parsed) => {
@@ -2554,7 +2629,7 @@ ${output}
         return { text: first.repaired ? first.text : raw, repaired: first.repaired, reasked: false };
       }
       const problem = checked.errors.join(" ");
-      log(rejectionNote(problem, first.text || raw));
+      log(rejectionNote(problem, first.text || raw, describeCriterionGather(raw)));
       const follow2 = await ask(template ? FILL_REVIEW_PROMPT : reaskJsonPrompt(problem, criterionIds));
       const second2 = parseModelJson(follow2, criterionIds);
       const merged = mergeReviewFields(first.value, second2.ok ? second2.value : {});
@@ -2570,10 +2645,10 @@ ${output}
         log("The correction was less complete than the first reply. Kept the first reply.");
         return { text: firstText, repaired: true, reasked: true };
       }
-      log(rejectionNote("errors" in mergedCheck ? mergedCheck.errors.join(" ") : "The corrected JSON was not usable.", mergedText));
+      log(rejectionNote("errors" in mergedCheck ? mergedCheck.errors.join(" ") : "The corrected JSON was not usable.", mergedText, describeCriterionGather(follow2)));
       return { text: mergedText, repaired: true, reasked: true };
     }
-    log(rejectionNote(first.error, raw));
+    log(rejectionNote(first.error, raw, describeCriterionGather(raw)));
     const follow = await ask(reaskJsonPrompt(first.error, criterionIds));
     const second = parseModelJson(follow, criterionIds);
     if (second.ok && second.repaired) log("Repaired the corrected JSON.");
