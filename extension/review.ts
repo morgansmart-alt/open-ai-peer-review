@@ -350,7 +350,7 @@ async function finish(raw: string, defendedRaw: string | null, transcript: { rou
   const summaryLine = runSummary({
     completed: rounds.completed,
     requested: rounds.requested,
-    blind: Math.round(resultCard(stored).overall),
+    blind: resultCard(stored).overall,
     after: defended?.ok ? defended.defended.overallScore : null,
   })
   stepLog = rememberStep("Summary", "score", summaryLine)
