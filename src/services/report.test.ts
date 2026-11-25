@@ -158,7 +158,8 @@ describe("validateReport", () => {
     expect(prompt).toContain("at least 40 characters")
     expect(prompt).toContain("impact, clarity")
     expect(prompt).toContain('"criterionId":"impact"')
-    expect(prompt).toContain("FULL corrected JSON")
+    expect(prompt).toContain("ONE flat JSON object")
+    expect(prompt).toContain("Never nest a citation")
   })
 
   it("keeps an uncited score, maps loose enums, and merges a thinner correction", () => {
@@ -222,6 +223,77 @@ describe("validateReport", () => {
       expect(mergedReport.report.summary).toContain("narrow claim")
       expect(mergedReport.report.scores.some((score) => score.criterionId === "impact")).toBe(true)
       expect(mergedReport.report.strengths).toContain("Kept.")
+    }
+  })
+
+  it("rebuilds a review when a citation swallows the rest of the CODATA sheet", () => {
+    const summary = "This is the official 2014 CODATA recommendation and it states the uncertainties for the constants."
+    const rationale = "The text states this in a sentence a reader can find."
+    const cite = [{ quote: "all data available up to 31 December 2014.", location: "abstract" }]
+    const swallowedScores = officialCriteria.criteria.flatMap((criterion) => {
+      if (criterion.id === "availability") return []
+      return [{ criterionId: criterion.id, score: criterion.id === "impact" ? 90 : 80, rationale, citations: cite, confidence: "medium" }]
+    })
+    const nested = {
+      criterionId: "availability",
+      score: 98,
+      rationale: "The Zenodo record holds the tables and the files are public.",
+      citations: [{
+        quote: "Zenodo record: 10.5281/zenodo.22826",
+        citations: [{ quote: "all data available up to 31 December 2014.", location: "abstract" }],
+        confidence: "high",
+        summary,
+        overallScore: 84,
+        recommendation: "encourage",
+        strengths: ["The tables are public."],
+        questionsForAuthors: ["Which constant moved?"],
+        suggestedNextSteps: ["Cite the version DOI beside the table."],
+        scores: swallowedScores,
+        ontologyClass: "physical-testable",
+        physics: { classification: "CONSISTENT", laws: ["conservation of energy"], howAddressed: "The constants are measured." },
+        simulation: { reported: 0, passed: 0, methods: "Simulation does not apply to this record.", inputsAvailable: false },
+        valueEstimate: { assumptions: ["The tables are the public reference."], marketDisruption: "Not estimated." },
+        goals: [{ goalId: "sdg-9", level: "indirect", note: "Shared measurement standards." }],
+      }],
+      ontologyClass: "physical-testable",
+      physics: { classification: "CONSISTENT", laws: ["conservation of energy"], howAddressed: "The constants are measured." },
+    }
+    const parsed = parseModelJson(JSON.stringify(nested))
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    const value = parsed.value as { summary?: string; scores?: { criterionId?: string; score?: number; citations?: { quote?: string; citations?: unknown }[] }[] }
+    expect(value.summary).toContain("2014 CODATA")
+    expect(value.scores?.find((score) => score.criterionId === "impact")?.score).toBe(90)
+    expect(value.scores?.find((score) => score.criterionId === "availability")?.score).toBe(98)
+    expect(value.scores?.find((score) => score.criterionId === "limitations")?.score).toBe(80)
+    const availability = value.scores?.find((score) => score.criterionId === "availability")
+    expect(availability?.citations?.[0]?.quote).toContain("31 December 2014")
+    expect(availability?.citations?.[0]?.citations).toBeUndefined()
+    expect(JSON.stringify(availability?.citations)).not.toContain("Zenodo record")
+    const accepted = validateReport(parsed.value, officialCriteria)
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) expect(accepted.errors).toEqual([])
+    const loose = [
+      JSON.stringify({ summary, overallScore: 84, recommendation: "encourage", strengths: ["The tables are public."], questionsForAuthors: ["Which constant moved?"], suggestedNextSteps: ["Cite the version DOI beside the table."], ontologyClass: "physical-testable", physics: nested.physics, simulation: nested.citations[0].simulation, valueEstimate: nested.citations[0].valueEstimate, goals: nested.citations[0].goals }),
+      ...officialCriteria.criteria.map((criterion) => JSON.stringify({
+        criterionId: criterion.id,
+        score: criterion.id === "availability" ? 98 : criterion.id === "impact" ? 90 : 80,
+        rationale,
+        citations: criterion.id === "availability"
+          ? [{ quote: "Zenodo record: 10.5281/zenodo.22826", citations: cite, confidence: "high" }]
+          : cite,
+        confidence: "medium",
+      })),
+    ].join("\n")
+    const gathered = parseModelJson(loose)
+    expect(gathered.ok).toBe(true)
+    if (!gathered.ok) return
+    const sheet = validateReport(gathered.value, officialCriteria)
+    expect(sheet.ok).toBe(true)
+    if (sheet.ok) {
+      expect(sheet.report.scores.find((score) => score.criterionId === "availability")?.score).toBe(98)
+      expect(sheet.report.scores.find((score) => score.criterionId === "impact")?.score).toBe(90)
+      expect(sheet.report.summary).toContain("2014 CODATA")
     }
   })
 

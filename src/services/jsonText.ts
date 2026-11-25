@@ -1,4 +1,6 @@
 import { jsonrepair } from "jsonrepair"
+import { isBonusCriterion } from "../domain/criteria.ts"
+import { officialCriteria } from "../domain/officialCriteria.ts"
 
 export interface ParsedModelJson {
   ok: true
@@ -156,6 +158,200 @@ function reviewRank(value: unknown): number {
   return 0
 }
 
+function isCriterionRow(value: Record<string, unknown>): boolean {
+  const id = value.criterionId ?? value.id
+  if (typeof id !== "string" || !id.trim()) return false
+  return parseScoreValue(value.score) != null
+}
+
+function criterionOnly(value: Record<string, unknown>): Record<string, unknown> {
+  const score = parseScoreValue(value.score)
+  const row: Record<string, unknown> = {
+    criterionId: String(value.criterionId ?? value.id).trim(),
+    ...(score != null ? { score } : {}),
+  }
+  const rationale = typeof value.rationale === "string" ? value.rationale : typeof value.reason === "string" ? value.reason : ""
+  if (rationale) row.rationale = rationale
+  if (Array.isArray(value.citations)) row.citations = value.citations
+  if (typeof value.confidence === "string" && value.confidence.trim()) row.confidence = value.confidence.trim()
+  if (value.uncited === true) row.uncited = true
+  return row
+}
+
+/** A citation that itself contains citations is closed. Inner citations stay. Swallowed fields move up. */
+function flattenCitations(value: unknown): { value: unknown; changed: boolean } {
+  if (Array.isArray(value)) {
+    let changed = false
+    const next = value.map((item) => {
+      const flat = flattenCitations(item)
+      changed = changed || flat.changed
+      return flat.value
+    })
+    return { value: next, changed }
+  }
+  if (!isRecord(value)) return { value, changed: false }
+  let changed = false
+  const next: Record<string, unknown> = {}
+  for (const [key, child] of Object.entries(value)) {
+    const flat = flattenCitations(child)
+    changed = changed || flat.changed
+    next[key] = flat.value
+  }
+  if (!Array.isArray(next.citations)) return { value: next, changed }
+  const citations: unknown[] = []
+  const spilledScores: Record<string, unknown>[] = []
+  const spilled: Record<string, unknown> = {}
+  let nested = false
+  const parentId = String(next.criterionId ?? next.id ?? "")
+  for (const entry of next.citations as unknown[]) {
+    if (!isRecord(entry)) {
+      citations.push(entry)
+      continue
+    }
+    if (Array.isArray(entry.citations)) {
+      nested = true
+      for (const inner of entry.citations) citations.push(inner)
+      const extra: Record<string, unknown> = {}
+      for (const [key, child] of Object.entries(entry)) {
+        if (key === "citations" || key === "quote" || key === "location") continue
+        extra[key] = child
+      }
+      const extraId = String(extra.criterionId ?? extra.id ?? "")
+      if (isCriterionRow(extra) && extraId && extraId !== parentId) {
+        spilledScores.push(criterionOnly(extra))
+        if (Array.isArray(extra.scores)) {
+          const list = Array.isArray(spilled.scores) ? spilled.scores as unknown[] : []
+          spilled.scores = [...list, ...extra.scores]
+        }
+        for (const [key, child] of Object.entries(extra)) {
+          if (["criterionId", "id", "score", "rationale", "reason", "citations", "confidence", "uncited", "scores"].includes(key)) continue
+          if (spilled[key] == null) spilled[key] = child
+        }
+        continue
+      }
+      for (const [key, child] of Object.entries(extra)) {
+        if (key === "scores" && Array.isArray(child)) {
+          const list = Array.isArray(spilled.scores) ? spilled.scores as unknown[] : []
+          spilled.scores = [...list, ...child]
+          continue
+        }
+        if (spilled[key] == null) spilled[key] = child
+      }
+      continue
+    }
+    if (isCriterionRow(entry)) {
+      nested = true
+      spilledScores.push(criterionOnly(entry))
+      continue
+    }
+    citations.push(entry)
+  }
+  if (!nested) return { value: next, changed }
+  next.citations = citations
+  const carried = [...(Array.isArray(next.scores) ? next.scores : []), ...(Array.isArray(spilled.scores) ? spilled.scores as unknown[] : []), ...spilledScores]
+  if (carried.length > 0) next.scores = carried
+  delete spilled.scores
+  for (const [key, child] of Object.entries(spilled)) {
+    if (next[key] == null) next[key] = child
+  }
+  return { value: next, changed: true }
+}
+
+/** The object that held the unclosed citation is itself a criterion. Keep it in the scores array. */
+function attachRootCriterion(value: unknown): { value: unknown; changed: boolean } {
+  if (!isRecord(value) || !isCriterionRow(value)) return { value, changed: false }
+  const id = String(value.criterionId ?? value.id).trim()
+  const scores = Array.isArray(value.scores) ? [...value.scores] : []
+  if (scores.some((item) => isRecord(item) && String(item.criterionId ?? item.id ?? "") === id)) return { value, changed: false }
+  scores.push(criterionOnly(value))
+  return { value: { ...value, scores }, changed: true }
+}
+
+function prepareCandidate(value: unknown): { value: unknown; changed: boolean } {
+  const flat = flattenCitations(value)
+  const rooted = attachRootCriterion(flat.value)
+  return { value: rooted.value, changed: flat.changed || rooted.changed }
+}
+
+function requiredCriterionIds(ids?: readonly string[]): string[] {
+  const source = ids && ids.length > 0 ? ids : officialCriteria.criteria.map((item) => item.id)
+  return source.filter((id) => !isBonusCriterion(id))
+}
+
+function coversCriteria(value: unknown, required: readonly string[]): boolean {
+  if (!isRecord(value) || !Array.isArray(value.scores)) return false
+  const ids = new Set(value.scores.flatMap((item) => (isRecord(item) && typeof (item.criterionId ?? item.id) === "string" ? [String(item.criterionId ?? item.id)] : [])))
+  return required.every((id) => ids.has(id))
+}
+
+function rememberField(fields: Record<string, unknown>, row: Record<string, unknown>): void {
+  if (typeof row.summary === "string" && row.summary.trim().length > String(fields.summary ?? "").trim().length) fields.summary = row.summary.trim()
+  const overall = numericScore(row.overallScore)
+  if (overall != null) fields.overallScore = overall
+  if (typeof row.recommendation === "string" && row.recommendation.trim()) fields.recommendation = row.recommendation.trim()
+  if (typeof row.ontologyClass === "string" && row.ontologyClass.trim()) fields.ontologyClass = row.ontologyClass.trim()
+  for (const key of ["questionsForAuthors", "questions", "strengths", "suggestedNextSteps", "nextSteps", "minorIssues"] as const) {
+    if (Array.isArray(row[key]) && (row[key] as unknown[]).length > 0) fields[key] = row[key]
+  }
+  if (isRecord(row.physics) && !isCriterionRow(row.physics)) fields.physics = row.physics
+  if (isRecord(row.simulation) && !isCriterionRow(row.simulation)) fields.simulation = row.simulation
+  if (isRecord(row.valueEstimate) && !isCriterionRow(row.valueEstimate)) fields.valueEstimate = row.valueEstimate
+  if (Array.isArray(row.goals)) fields.goals = row.goals
+  if (Array.isArray(row.majorIssues)) fields.majorIssues = row.majorIssues
+  if (isRecord(row.airFeedback)) fields.airFeedback = row.airFeedback
+  if (isRecord(row.air_feedback)) fields.air_feedback = row.air_feedback
+}
+
+function walkRecords(value: unknown, visit: (row: Record<string, unknown>) => void): void {
+  if (Array.isArray(value)) {
+    for (const item of value) walkRecords(item, visit)
+    return
+  }
+  if (!isRecord(value)) return
+  visit(value)
+  for (const child of Object.values(value)) walkRecords(child, visit)
+}
+
+/**
+ * No balanced object had both a summary and a scores array.
+ * Gather every criterionId+score at any depth, last one wins, plus summary and question strings found anywhere.
+ */
+function assembleReview(raw: string, required: readonly string[]): { value: Record<string, unknown> } | null {
+  if (required.length === 0) return null
+  const prepared = prepareJsonSource(raw.length > 400_000 ? raw.slice(-200_000) : raw)
+  const scores = new Map<string, Record<string, unknown>>()
+  const fields: Record<string, unknown> = {}
+  const take = (value: unknown) => {
+    const preparedValue = prepareCandidate(value).value
+    walkRecords(preparedValue, (row) => {
+      rememberField(fields, row)
+      if (Array.isArray(row.scores)) {
+        for (const item of row.scores) {
+          if (!isRecord(item) || !isCriterionRow(item)) continue
+          const id = String(item.criterionId ?? item.id).trim()
+          scores.set(id, criterionOnly(item))
+        }
+      }
+      if (isCriterionRow(row)) scores.set(String(row.criterionId ?? row.id).trim(), criterionOnly(row))
+    })
+  }
+  for (let index = 0; index < prepared.length; index += 1) {
+    if (prepared[index] !== "{") continue
+    const end = matchingBrace(prepared, index)
+    const balanced = end >= 0
+    const slice = balanced ? prepared.slice(index, end + 1) : closeTruncated(prepared.slice(index))
+    const parsed = parseSlice(slice)
+    if (!parsed) {
+      if (balanced) index = end
+      continue
+    }
+    take(parsed.value)
+    if (balanced) index = end
+  }
+  if (!required.every((id) => scores.has(id))) return null
+  return { value: { ...fields, scores: [...scores.values()] } }
+}
+
 /**
  * The largest balanced object that looks like a review.
  * A small criterion fragment loses to an object that has summary and scores.
@@ -174,11 +370,13 @@ export function chooseReviewJson(raw: string): { value: unknown; text: string; r
       if (balanced) index = end
       continue
     }
-    const rank = reviewRank(parsed.value)
-    const keys = isRecord(parsed.value) ? criterionKeyCount(parsed.value) : 0
-    const repaired = parsed.repaired || !balanced
-    if (rank > 0 && (!best || rank > best.rank || (rank === best.rank && (keys > best.keys || (keys === best.keys && slice.length > best.text.length))))) {
-      best = { value: parsed.value, text: parsed.text, repaired, rank, keys }
+    const preparedValue = prepareCandidate(parsed.value)
+    const rank = reviewRank(preparedValue.value)
+    const keys = isRecord(preparedValue.value) ? criterionKeyCount(preparedValue.value) : 0
+    const text = preparedValue.changed ? JSON.stringify(preparedValue.value) : parsed.text
+    const repaired = parsed.repaired || !balanced || preparedValue.changed
+    if (rank > 0 && (!best || rank > best.rank || (rank === best.rank && (keys > best.keys || (keys === best.keys && text.length > best.text.length))))) {
+      best = { value: preparedValue.value, text, repaired, rank, keys }
     }
     if (balanced) index = end
   }
@@ -331,9 +529,19 @@ export function mergeReviewFields(base: unknown, patch: unknown): unknown {
 }
 
 /** Strict JSON first. A repair pass covers trailing commas, missing commas, and similar damage. */
-export function parseModelJson(raw: string): ParsedModelJson | { ok: false; error: string } {
+export function parseModelJson(raw: string, criterionIds?: readonly string[]): ParsedModelJson | { ok: false; error: string } {
+  const required = requiredCriterionIds(criterionIds)
   const review = chooseReviewJson(raw)
-  if (review) return { ok: true, value: normaliseScoreShape(review.value), text: review.text, repaired: review.repaired }
+  const shaped = review ? normaliseScoreShape(review.value) : null
+  if (review && coversCriteria(shaped, required)) {
+    return { ok: true, value: shaped, text: review.text, repaired: review.repaired }
+  }
+  const assembled = assembleReview(raw, required)
+  if (assembled) {
+    const value = normaliseScoreShape(assembled.value)
+    return { ok: true, value, text: JSON.stringify(value), repaired: true }
+  }
+  if (review && shaped) return { ok: true, value: shaped, text: review.text, repaired: review.repaired }
   const scored = lastScoreJson(raw)
   if (scored) return { ok: true, value: normaliseScoreShape(scored.value), text: scored.text, repaired: scored.repaired }
   const slice = fenced(raw)
@@ -348,10 +556,11 @@ export function reaskJsonPrompt(problem: string, criterionIds: readonly string[]
   const exampleId = criterionIds[0] ?? "impact"
   return [
     `Your JSON did not validate (${detail}).`,
-    "Return the FULL corrected JSON object, not a patch. Repeat every field that was already valid.",
+    "Return ONE flat JSON object and nothing else. Not a patch, and not one criterion. Repeat every field that was already valid.",
     "summary must be a string of at least 40 characters.",
     "scores must be an array with one object for each criterion id.",
-    "Each scores object needs criterionId, score (integer 0-100), rationale (at least 20 characters), citations (an array of {quote, location}), and confidence (low, medium, or high).",
+    "Each scores object needs criterionId, score (integer 0-100), rationale (at least 20 characters), citations, and confidence (low, medium, or high).",
+    "citations must be an array of {quote, location} only. Never nest a citation inside another citation, and never put other fields inside a citation.",
     `Criterion ids: ${ids}.`,
     "Also include overallScore (number 0-100), recommendation (accept, encourage, revise, major-revision, or not-ready), strengths (array of strings), questionsForAuthors (array of strings), and suggestedNextSteps (array of strings).",
     `Example: {"summary":"The paper states its claim and the limit of that claim in the text.","scores":[{"criterionId":"${exampleId}","score":70,"rationale":"The text states this in a sentence a reader can find.","citations":[{"quote":"a sentence from the paper","location":"abstract"}],"confidence":"medium"}],"overallScore":70,"recommendation":"revise","strengths":["The files are public."],"questionsForAuthors":["Which table changed?"],"suggestedNextSteps":["Publish the table beside the text."]}.`,
@@ -396,7 +605,7 @@ export async function settleChatJson(
     if (!validate) return { ok: true as const }
     return validate(parsed.text)
   }
-  const first = parseModelJson(raw)
+  const first = parseModelJson(raw, criterionIds)
   if (first.ok) {
     const template = rubricTemplateProblem(first.value)
     const checked = template ? { ok: false as const, errors: [template] } : ready(first)
@@ -407,7 +616,7 @@ export async function settleChatJson(
     const problem = checked.errors.join(" ")
     log(rejectionNote(problem, first.text || raw))
     const follow = await ask(template ? FILL_REVIEW_PROMPT : reaskJsonPrompt(problem, criterionIds))
-    const second = parseModelJson(follow)
+    const second = parseModelJson(follow, criterionIds)
     const merged = mergeReviewFields(first.value, second.ok ? second.value : {})
     const mergedText = JSON.stringify(merged)
     const mergedCheck = validate ? validate(mergedText) : { ok: true as const }
@@ -426,7 +635,7 @@ export async function settleChatJson(
   }
   log(rejectionNote(first.error, raw))
   const follow = await ask(reaskJsonPrompt(first.error, criterionIds))
-  const second = parseModelJson(follow)
+  const second = parseModelJson(follow, criterionIds)
   if (second.ok && second.repaired) log("Repaired the corrected JSON.")
   return { text: second.ok ? (second.repaired ? second.text : follow) : follow, repaired: Boolean(second.ok && second.repaired), reasked: true }
 }
