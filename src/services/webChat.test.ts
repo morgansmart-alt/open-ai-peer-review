@@ -19,7 +19,7 @@ import { buildWebChatPacket, WEB_CHAT_FILE_CHARS } from "./webChat/packet.ts"
 import { originAllowed, validatePacket, WEB_CHAT_LABEL } from "./webChat/protocol.ts"
 import { formatStepLog, recordStep, renderReviewApp, type ReviewActions, type ReviewModel } from "./webChat/reviewView.ts"
 import { runTurn } from "./webChat/runTurn.ts"
-import { exportBundle, packetForLocalPaper, parseExport, resultCard, sourceRecordFromText, storedLocalReview, textFromPdfDocument } from "./webChat/standalone.ts"
+import { exportBundle, packetForLocalPaper, parseExport, publishedResultKey, rememberedSendState, resultCard, sourceRecordFromText, storedLocalReview, textFromPdfDocument } from "./webChat/standalone.ts"
 
 const record = {
   id: "1",
@@ -601,5 +601,27 @@ describe("extension panel", () => {
     )
     expect(pdf.text).toContain("Page line")
     expect(pdf.note).toContain("first 1 of 2")
+    const modelId = "Grok on grok.com · Auto (web chat, uncalibrated)"
+    const posted = { doi: "10.5281/zenodo.18706746", paperUrl: "https://zenodo.org/records/18706746", modelId }
+    const key = publishedResultKey(posted)
+    expect(key).toBe(`${posted.doi.toLowerCase()}|${modelId.toLowerCase()}|${modelId.toLowerCase()}`)
+    expect(publishedResultKey({ ...posted, site: "Grok", model: modelId })).toBe(`${posted.doi.toLowerCase()}|grok|${modelId.toLowerCase()}`)
+    const keys = { [key]: "published" }
+    expect(rememberedSendState(posted, keys)).toBe("published")
+    expect(rememberedSendState({ doi: "10.5281/zenodo.1", modelId }, keys)).toBe("")
+    renderReviewApp(
+      app,
+      model({
+        history: [
+          { id: "qi", title: "Quantized Inertia", overall: 65.02, doi: posted.doi, site: modelId, model: modelId, sendState: rememberedSendState(posted, keys) },
+          { id: "codata", title: "CODATA", overall: 84, sendState: rememberedSendState({ doi: "10.5281/zenodo.1", modelId: "other" }, { "10.5281/zenodo.1|other|other": "duplicate" }) },
+        ],
+      }),
+      actions(),
+    )
+    expect((document.getElementById("send-qi") as HTMLButtonElement).textContent).toBe("Published")
+    expect((document.getElementById("send-qi") as HTMLButtonElement).disabled).toBe(true)
+    expect((document.getElementById("send-codata") as HTMLButtonElement).textContent).toBe("Already on board")
+    expect((document.getElementById("send-codata") as HTMLButtonElement).disabled).toBe(true)
   })
 })

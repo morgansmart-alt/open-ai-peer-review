@@ -2737,15 +2737,20 @@ ${output}
     transcript.push({ round: rounds, kind: "rescore-reply", text: defendedText });
     return { transcript, defendedText, stopped: false };
   }
+  function roundedOverall(value) {
+    const score = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
+    if (!Number.isFinite(score)) return null;
+    const rounded = Math.round(score * 100) / 100;
+    if (rounded < 0 || rounded > 100) return null;
+    return rounded;
+  }
   function statedDefenceOverall(raw) {
     const scored = lastScoreJson(raw);
-    const fromJson = scored && typeof scored.value === "object" && scored.value ? Number(scored.value.overallScore) : NaN;
-    if (Number.isInteger(fromJson) && fromJson >= 0 && fromJson <= 100) return fromJson;
-    const match = raw.match(/overall(?:\s+score)?\s+(?:remains|stays|stayed|is|was|of|:)\s*(?:at\s+)?(\d{1,3})\b/i);
+    const fromJson = scored && typeof scored.value === "object" && scored.value ? roundedOverall(scored.value.overallScore) : null;
+    if (fromJson !== null) return fromJson;
+    const match = raw.match(/overall(?:\s+score)?\s+(?:remains|stays|stayed|is|was|of|:)\s*(?:at\s+)?(\d{1,3}(?:\.\d+)?)\b/i);
     if (!match) return null;
-    const score = Number(match[1]);
-    if (!Number.isInteger(score) || score < 0 || score > 100) return null;
-    return score;
+    return roundedOverall(Number(match[1]));
   }
   function chooseDefendedText(original, settled, criteria) {
     if (acceptWebChatResult(settled, criteria).ok) return settled;

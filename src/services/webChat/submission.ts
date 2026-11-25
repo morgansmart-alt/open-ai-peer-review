@@ -140,6 +140,7 @@ export function submissionFromReview(review: StoredReview, site: string): { ok: 
   }
   const paperKey = review.doi && review.doi !== "local-file" ? review.doi : review.paperUrl || review.doi
   if (!paperKey) return { ok: false, error: "Add a DOI or a link before sending this score." }
+  const defended = postedDefended(review.defended)
   const summary = stripChatShareLinks(review.report.summary)
   const submission: WebChatSubmission = {
     source: WEB_CHAT_SOURCE,
@@ -154,17 +155,24 @@ export function submissionFromReview(review: StoredReview, site: string): { ok: 
     overallScore: review.report.overallScore,
     recommendation: review.report.recommendation,
     createdAt: review.createdAt,
-    ...(review.defended ? { defended: review.defended } : {}),
+    ...(defended ? { defended } : {}),
     ...(review.report.airFeedback ? { airFeedback: review.report.airFeedback } : {}),
   }
   const checked = validateWebChatSubmission(submission, criteria)
   if (checked.ok) return { ok: true, submission: checked.submission }
-  if (submission.defended) {
-    const { defended: dropped, ...blind } = submission
-    void dropped
-    const retry = validateWebChatSubmission(blind, criteria)
-    if (retry.ok) return { ok: true, submission: retry.submission }
+  if (!defended) return checked
+  const kept: WebChatSubmission = {
+    ...submission,
+    defended: {
+      label: "after author defence",
+      overallScore: Math.round(Number(defended.overallScore) * 100) / 100,
+      recommendation: "",
+      summary: "The chat stated an overall score after author defence. The reply did not include a full score sheet.",
+      scores: [],
+    },
   }
+  const retry = validateWebChatSubmission(kept, criteria)
+  if (retry.ok) return { ok: true, submission: retry.submission }
   return checked
 }
 
@@ -246,23 +254,39 @@ function readDefended(
   for (const key of Object.keys(input)) {
     if (!DEFENDED_KEYS.has(key)) return { ok: false, error: "The defended score included a field the board does not accept." }
   }
-  if (input.label !== "after author defence") return { ok: false, error: "The second score must be labelled after author defence." }
-  const scores = readPostedScores(input.scores)
-  if (!scores) return { ok: false, error: "The defended score is missing its criterion scores." }
-  if (!scoresCoverProfile(scores, criteria)) {
-    return { ok: false, error: "The defended score needs every criterion in this profile." }
-  }
-  const summary = stripChatShareLinks(clip(input.summary, 4000))
-  if (summary.length < 40) return { ok: false, error: "The defended summary is too short." }
+  const overallScore = boardOverall(input.overallScore)
+  if (overallScore === null) return { ok: false, error: "The defended score must be a number from 0 to 100." }
+  const known = new Set(criteria.criteria.map((item) => item.id))
+  const seen = new Set<string>()
+  const scores = (readPostedScores(input.scores) ?? []).filter((score) => {
+    if (!known.has(score.criterionId) || seen.has(score.criterionId)) return false
+    seen.add(score.criterionId)
+    return true
+  })
+  const summaryRaw = stripChatShareLinks(clip(input.summary, 4000))
+  const summary = summaryRaw.length >= 40
+    ? summaryRaw
+    : "The chat stated an overall score after author defence. The reply did not include a full score sheet."
   if (/https?:\/\/(?:share\.google|chatgpt\.com\/share|claude\.ai\/share|grok\.com\/share)/i.test(summary)) {
     return { ok: false, error: "A private chat link was still in the defended summary." }
   }
-  const overallScore = boardOverall(input.overallScore)
-  if (overallScore === null) return { ok: false, error: "The defended score must be a number from 0 to 100." }
   const recommendation = clip(input.recommendation, 80)
-  const described = describeScoring({ scores, statedOverall: overallScore, recommendation, criteria })
-  if (described.scoringCheck.mismatch) return { ok: false, error: "The defended score clashes with its own weighted total, so it was not sent." }
   return { ok: true, score: { label: "after author defence", overallScore, recommendation, summary, scores } }
+}
+
+function postedDefended(defended: StoredReview["defended"]): DefendedScore | undefined {
+  if (!defended || !Number.isFinite(Number(defended.overallScore))) return undefined
+  return {
+    label: "after author defence",
+    overallScore: Number(defended.overallScore),
+    recommendation: defended.recommendation,
+    summary: defended.summary,
+    scores: defended.scores.map((score) => ({
+      criterionId: score.criterionId,
+      score: score.score,
+      ...(score.uncited ? { uncited: true } : {}),
+    })),
+  }
 }
 
 export function toSubmissionRow(submission: WebChatSubmission): SubmissionRow {

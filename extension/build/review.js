@@ -3466,15 +3466,20 @@ ${output}
 
   // src/services/webChat/defence.ts
   var DEFENDED_LABEL = "after author defence";
+  function roundedOverall(value) {
+    const score = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
+    if (!Number.isFinite(score)) return null;
+    const rounded = Math.round(score * 100) / 100;
+    if (rounded < 0 || rounded > 100) return null;
+    return rounded;
+  }
   function statedDefenceOverall(raw) {
     const scored = lastScoreJson(raw);
-    const fromJson = scored && typeof scored.value === "object" && scored.value ? Number(scored.value.overallScore) : NaN;
-    if (Number.isInteger(fromJson) && fromJson >= 0 && fromJson <= 100) return fromJson;
-    const match = raw.match(/overall(?:\s+score)?\s+(?:remains|stays|stayed|is|was|of|:)\s*(?:at\s+)?(\d{1,3})\b/i);
+    const fromJson = scored && typeof scored.value === "object" && scored.value ? roundedOverall(scored.value.overallScore) : null;
+    if (fromJson !== null) return fromJson;
+    const match = raw.match(/overall(?:\s+score)?\s+(?:remains|stays|stayed|is|was|of|:)\s*(?:at\s+)?(\d{1,3}(?:\.\d+)?)\b/i);
     if (!match) return null;
-    const score = Number(match[1]);
-    if (!Number.isInteger(score) || score < 0 || score > 100) return null;
-    return score;
+    return roundedOverall(Number(match[1]));
   }
   function partialDefended(raw, overall) {
     const scored = lastScoreJson(raw);
@@ -3487,7 +3492,7 @@ ${output}
       const record = item;
       const criterionId = typeof record.criterionId === "string" ? record.criterionId.trim() : "";
       const score = Number(record.score);
-      return criterionId && Number.isInteger(score) ? [{ criterionId, score }] : [];
+      return criterionId && Number.isInteger(score) ? [{ criterionId, score, ...record.uncited === true ? { uncited: true } : {} }] : [];
     }) : [];
     return { label: DEFENDED_LABEL, overallScore: overall, recommendation, summary, scores };
   }
@@ -3502,7 +3507,11 @@ ${output}
           overallScore: accepted.report.overallScore,
           recommendation: accepted.report.recommendation,
           summary: accepted.report.summary,
-          scores: accepted.report.scores.map((score) => ({ criterionId: score.criterionId, score: score.score }))
+          scores: accepted.report.scores.map((score) => ({
+            criterionId: score.criterionId,
+            score: score.score,
+            ...score.uncited ? { uncited: true } : {}
+          }))
         }
       };
     }
@@ -3639,6 +3648,7 @@ ${output}
 
   // src/services/webChat/standalone.ts
   var RESULT_STORAGE_KEY = "air-web-chat-results";
+  var PUBLISHED_STORAGE_KEY = "air-web-chat-published";
   var ONBOARD_STORAGE_KEY = "air-web-chat-seen";
   var EXPORT_SOURCE = "air-web-chat-extension";
   var RESULT_CAP = 30;
@@ -3770,6 +3780,16 @@ ${JSON.stringify(report)}`),
     };
     return JSON.stringify(body, null, 2);
   }
+  function publishedResultKey(review) {
+    const paper = (review.doi && review.doi !== "local-file" ? review.doi : review.paperUrl || "").trim().toLowerCase();
+    const model = (review.model || review.modelId || "").trim().toLowerCase();
+    const site = (review.site || model).trim().toLowerCase();
+    return `${paper}|${site}|${model}`;
+  }
+  function rememberedSendState(review, keys) {
+    const state = keys[publishedResultKey(review)];
+    return state === "published" || state === "duplicate" ? state : "";
+  }
   function resultCard(review) {
     const check = scoringMismatch(review);
     const criteria = criteriaForReview(review);
@@ -3874,6 +3894,7 @@ ${JSON.stringify(report)}`),
     }
     const paperKey = review.doi && review.doi !== "local-file" ? review.doi : review.paperUrl || review.doi;
     if (!paperKey) return { ok: false, error: "Add a DOI or a link before sending this score." };
+    const defended = postedDefended(review.defended);
     const summary = stripChatShareLinks(review.report.summary);
     const submission = {
       source: WEB_CHAT_SOURCE,
@@ -3888,17 +3909,24 @@ ${JSON.stringify(report)}`),
       overallScore: review.report.overallScore,
       recommendation: review.report.recommendation,
       createdAt: review.createdAt,
-      ...review.defended ? { defended: review.defended } : {},
+      ...defended ? { defended } : {},
       ...review.report.airFeedback ? { airFeedback: review.report.airFeedback } : {}
     };
     const checked = validateWebChatSubmission(submission, criteria);
     if (checked.ok) return { ok: true, submission: checked.submission };
-    if (submission.defended) {
-      const { defended: dropped, ...blind } = submission;
-      void dropped;
-      const retry = validateWebChatSubmission(blind, criteria);
-      if (retry.ok) return { ok: true, submission: retry.submission };
-    }
+    if (!defended) return checked;
+    const kept = {
+      ...submission,
+      defended: {
+        label: "after author defence",
+        overallScore: Math.round(Number(defended.overallScore) * 100) / 100,
+        recommendation: "",
+        summary: "The chat stated an overall score after author defence. The reply did not include a full score sheet.",
+        scores: []
+      }
+    };
+    const retry = validateWebChatSubmission(kept, criteria);
+    if (retry.ok) return { ok: true, submission: retry.submission };
     return checked;
   }
   function validateWebChatSubmission(input, criteria = officialCriteria) {
@@ -3972,23 +4000,36 @@ ${JSON.stringify(report)}`),
     for (const key of Object.keys(input)) {
       if (!DEFENDED_KEYS.has(key)) return { ok: false, error: "The defended score included a field the board does not accept." };
     }
-    if (input.label !== "after author defence") return { ok: false, error: "The second score must be labelled after author defence." };
-    const scores = readPostedScores(input.scores);
-    if (!scores) return { ok: false, error: "The defended score is missing its criterion scores." };
-    if (!scoresCoverProfile(scores, criteria)) {
-      return { ok: false, error: "The defended score needs every criterion in this profile." };
-    }
-    const summary = stripChatShareLinks(clip3(input.summary, 4e3));
-    if (summary.length < 40) return { ok: false, error: "The defended summary is too short." };
+    const overallScore = boardOverall(input.overallScore);
+    if (overallScore === null) return { ok: false, error: "The defended score must be a number from 0 to 100." };
+    const known = new Set(criteria.criteria.map((item) => item.id));
+    const seen = /* @__PURE__ */ new Set();
+    const scores = (readPostedScores(input.scores) ?? []).filter((score) => {
+      if (!known.has(score.criterionId) || seen.has(score.criterionId)) return false;
+      seen.add(score.criterionId);
+      return true;
+    });
+    const summaryRaw = stripChatShareLinks(clip3(input.summary, 4e3));
+    const summary = summaryRaw.length >= 40 ? summaryRaw : "The chat stated an overall score after author defence. The reply did not include a full score sheet.";
     if (/https?:\/\/(?:share\.google|chatgpt\.com\/share|claude\.ai\/share|grok\.com\/share)/i.test(summary)) {
       return { ok: false, error: "A private chat link was still in the defended summary." };
     }
-    const overallScore = boardOverall(input.overallScore);
-    if (overallScore === null) return { ok: false, error: "The defended score must be a number from 0 to 100." };
     const recommendation = clip3(input.recommendation, 80);
-    const described = describeScoring({ scores, statedOverall: overallScore, recommendation, criteria });
-    if (described.scoringCheck.mismatch) return { ok: false, error: "The defended score clashes with its own weighted total, so it was not sent." };
     return { ok: true, score: { label: "after author defence", overallScore, recommendation, summary, scores } };
+  }
+  function postedDefended(defended) {
+    if (!defended || !Number.isFinite(Number(defended.overallScore))) return void 0;
+    return {
+      label: "after author defence",
+      overallScore: Number(defended.overallScore),
+      recommendation: defended.recommendation,
+      summary: defended.summary,
+      scores: defended.scores.map((score) => ({
+        criterionId: score.criterionId,
+        score: score.score,
+        ...score.uncited ? { uncited: true } : {}
+      }))
+    };
   }
 
   // src/services/webChat/submit.ts
@@ -4028,6 +4069,7 @@ ${JSON.stringify(report)}`),
   var stepLog = [];
   var reviews = [];
   var sendState = {};
+  var publishedKeys = {};
   var requestId = "";
   var pendingPaper = null;
   function rememberStep(step, stepStatus, detail = "") {
@@ -4057,7 +4099,7 @@ ${JSON.stringify(report)}`),
       createdAt: review.createdAt,
       mismatch: Boolean(card.mismatch),
       selected: selected.has(review.id),
-      sendState: sendState[review.id] ?? ""
+      sendState: sendState[review.id] || rememberedSendState(review, publishedKeys)
     };
   }
   function paint() {
@@ -4351,9 +4393,11 @@ ${JSON.stringify(report)}`),
           failures.push(response.error || `The board returned ${response.status}.`);
         } else if (response.duplicate) {
           sendState[review.id] = "duplicate";
+          publishedKeys[publishedResultKey(review)] = "duplicate";
           notes.push("Already on board");
         } else {
           sendState[review.id] = "published";
+          publishedKeys[publishedResultKey(review)] = "published";
           notes.push("Published");
         }
       } catch {
@@ -4365,11 +4409,15 @@ ${JSON.stringify(report)}`),
     busy = false;
     status = notes.join(" ");
     error = failures.join(" ");
+    if (notes.length > 0) await storageSet(PUBLISHED_STORAGE_KEY, publishedKeys);
     paint();
   }
   function restoreSaved() {
     return storageGet(ONBOARD_STORAGE_KEY).then((seen) => {
       showOnboarding = seen !== true;
+      return storageGet(PUBLISHED_STORAGE_KEY);
+    }).then((savedKeys) => {
+      publishedKeys = savedKeys && typeof savedKeys === "object" && !Array.isArray(savedKeys) ? savedKeys : {};
       return storageGet(RESULT_STORAGE_KEY);
     }).then((saved) => {
       reviews = Array.isArray(saved) ? saved : [];
