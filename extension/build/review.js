@@ -2094,6 +2094,61 @@ ${output}
     }
     return -1;
   }
+  function prepareJsonSource(raw) {
+    const quotes = raw.replace(/[\u201c\u201d\u2033]/g, '"').replace(/[\u2018\u2019\u2032]/g, "'");
+    let out = "";
+    let inString = false;
+    let escaped = false;
+    for (const char of quotes) {
+      if (inString) {
+        if (escaped) {
+          out += char;
+          escaped = false;
+          continue;
+        }
+        if (char === "\\") {
+          out += char;
+          escaped = true;
+          continue;
+        }
+        if (char === '"') {
+          inString = false;
+          out += char;
+          continue;
+        }
+        if (char === "\n") {
+          out += "\\n";
+          continue;
+        }
+        if (char === "\r") continue;
+        out += char;
+        continue;
+      }
+      if (char === '"') inString = true;
+      out += char;
+    }
+    return out;
+  }
+  function closeTruncated(slice) {
+    const stack = [];
+    let inString = false;
+    let escaped = false;
+    for (const char of slice) {
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') inString = true;
+      else if (char === "{" || char === "[") stack.push(char);
+      else if ((char === "}" || char === "]") && stack.length > 0) stack.pop();
+    }
+    let closed = slice;
+    if (inString) closed += '"';
+    for (let index = stack.length - 1; index >= 0; index -= 1) closed += stack[index] === "{" ? "}" : "]";
+    return closed;
+  }
   function parseSlice(slice) {
     try {
       return { value: JSON.parse(slice), text: slice, repaired: false };
@@ -2133,6 +2188,48 @@ ${output}
     const questions = row.questionsForAuthors;
     if (Array.isArray(questions) && questions.length === 1 && (questions[0] === "string" || questions[0] === "<question>")) return false;
     return true;
+  }
+  function criterionKeyCount(value) {
+    if (Array.isArray(value.scores)) return value.scores.length;
+    if (isRecord2(value.scores)) return Object.keys(value.scores).length;
+    return Object.keys(value).filter((key) => {
+      const norm = key.toLowerCase().replace(/[_-]/g, "");
+      if (SCORE_KEY_SKIP.has(norm) || norm === "criterionid" || norm === "score") return false;
+      const field = value[key];
+      return typeof field === "number" || isRecord2(field) && "score" in field;
+    }).length;
+  }
+  function reviewRank(value) {
+    if (!isRecord2(value)) return 0;
+    if (rubricTemplateProblem(value)) return 0;
+    const summary = typeof value.summary === "string" && value.summary.trim().length > 0;
+    const keys = criterionKeyCount(value);
+    if (summary && keys > 0) return 2;
+    if (keys > 0) return 1;
+    return 0;
+  }
+  function chooseReviewJson(raw) {
+    const prepared = prepareJsonSource(raw.length > 4e5 ? raw.slice(-2e5) : raw);
+    let best = null;
+    for (let index = 0; index < prepared.length; index += 1) {
+      if (prepared[index] !== "{") continue;
+      const end = matchingBrace(prepared, index);
+      const balanced = end >= 0;
+      const slice = balanced ? prepared.slice(index, end + 1) : closeTruncated(prepared.slice(index));
+      const parsed2 = parseSlice(slice);
+      if (!parsed2) {
+        if (balanced) index = end;
+        continue;
+      }
+      const rank = reviewRank(parsed2.value);
+      const keys = isRecord2(parsed2.value) ? criterionKeyCount(parsed2.value) : 0;
+      const repaired = parsed2.repaired || !balanced;
+      if (rank > 0 && (!best || rank > best.rank || rank === best.rank && (keys > best.keys || keys === best.keys && slice.length > best.text.length))) {
+        best = { value: parsed2.value, text: parsed2.text, repaired, rank, keys };
+      }
+      if (balanced) index = end;
+    }
+    return best ? { value: best.value, text: best.text, repaired: best.repaired } : null;
   }
   function lastScoreJson(raw) {
     const windowText = raw.length > 4e5 ? raw.slice(-2e5) : raw;
@@ -2228,12 +2325,27 @@ ${output}
     return row;
   }
   function parseModelJson(raw) {
+    const review = chooseReviewJson(raw);
+    if (review) return { ok: true, value: normaliseScoreShape(review.value), text: review.text, repaired: review.repaired };
     const scored = lastScoreJson(raw);
     if (scored) return { ok: true, value: normaliseScoreShape(scored.value), text: scored.text, repaired: scored.repaired };
     const slice = fenced(raw);
     const parsed2 = slice.includes("{") ? parseSlice(slice) : null;
     if (parsed2) return { ok: true, value: normaliseScoreShape(parsed2.value), text: parsed2.text, repaired: parsed2.repaired };
     return { ok: false, error: "No JSON object found in the model output." };
+  }
+  function rubricTemplateProblem(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const row = value;
+    const scoreText = typeof row.overallScore === "string" ? row.overallScore.trim() : "";
+    const scoreIsPlaceholder = scoreText.length > 0 && !/^-?\d+(\.\d+)?$/.test(scoreText);
+    const recommendationIsSchema = typeof row.recommendation === "string" && (row.recommendation.includes("|") || row.recommendation.includes("<"));
+    const strengthsPlaceholder = Array.isArray(row.strengths) && row.strengths.length > 0 && row.strengths.every((item) => item === "string" || item === "<strength>");
+    const scoreFieldsAreStrings = Array.isArray(row.scores) && row.scores.some((item) => item && typeof item === "object" && typeof item.score === "string" && !/^-?\d+(\.\d+)?$/.test(String(item.score).trim()));
+    if (scoreIsPlaceholder || recommendationIsSchema || strengthsPlaceholder || scoreFieldsAreStrings) {
+      return "The reply repeated the rubric template instead of a completed review.";
+    }
+    return null;
   }
 
   // src/services/validateReport.ts
@@ -3333,10 +3445,12 @@ ${output}
         const detail = [item.doi || item.url, item.site, item.model, item.createdAt ? item.createdAt.slice(0, 16).replace("T", " ") : "", `${Math.round(item.overall)} / 100`].filter(Boolean).join(" \xB7 ");
         el(row, "p", detail, "note");
         if (item.mismatch) el(row, "p", "Scoring mismatch, needs re-check. Not sent.", "mismatch");
-        const send2 = el(row, "button", "Send to Global Good Idea leaderboard", "quiet");
+        const sendLabel = item.sendState === "sending" ? "Sending\u2026" : item.sendState === "published" ? "Published" : item.sendState === "duplicate" ? "Already on board" : "Send to Global Good Idea leaderboard";
+        const send2 = el(row, "button", sendLabel, "quiet");
         send2.type = "button";
-        send2.disabled = Boolean(item.mismatch) || model.busy;
-        send2.addEventListener("click", () => actions.onSend(item.id));
+        send2.id = `send-${item.id}`;
+        send2.disabled = Boolean(item.mismatch) || Boolean(item.sendState) || model.busy;
+        if (!send2.disabled) send2.addEventListener("click", () => actions.onSend(item.id));
       }
       const sendSelected = el(form, "button", "Send selected", "quiet");
       sendSelected.type = "button";
@@ -3913,6 +4027,7 @@ ${JSON.stringify(report)}`),
   var busy = false;
   var stepLog = [];
   var reviews = [];
+  var sendState = {};
   var requestId = "";
   var pendingPaper = null;
   function rememberStep(step, stepStatus, detail = "") {
@@ -3941,7 +4056,8 @@ ${JSON.stringify(report)}`),
       model: review.modelId,
       createdAt: review.createdAt,
       mismatch: Boolean(card.mismatch),
-      selected: selected.has(review.id)
+      selected: selected.has(review.id),
+      sendState: sendState[review.id] ?? ""
     };
   }
   function paint() {
@@ -4207,35 +4323,48 @@ ${JSON.stringify(report)}`),
     paint();
   }
   async function sendScores(ids) {
-    const chosen = reviews.filter((review) => ids.includes(review.id));
+    const chosen = reviews.filter((review) => ids.includes(review.id) && !sendState[review.id]);
     if (chosen.length === 0) return;
+    for (const review of chosen) sendState[review.id] = "sending";
     busy = true;
     error = "";
-    status = "Sending the selected scores\u2026";
+    status = "Sending\u2026";
     paint();
     const notes = [];
+    const failures = [];
     for (const review of chosen) {
       const built = submissionFromReview(review, review.modelId);
       if (!built.ok) {
-        notes.push(`${review.title}: ${built.error}`);
+        delete sendState[review.id];
+        failures.push(built.error);
         continue;
       }
       try {
         const response = await postWebChatSubmission(built.submission);
         if (response.status === 404 || response.status === 405) {
-          notes.push("The leaderboard is not accepting web-chat scores yet. The submission service still has to be deployed. Your score stays on this browser.");
+          delete sendState[review.id];
+          failures.push("The leaderboard is not accepting web-chat scores yet. The submission service still has to be deployed. Your score stays on this browser.");
           break;
         }
-        if (!response.ok) notes.push(response.error || `The board returned ${response.status}.`);
-        else notes.push(response.duplicate ? `${review.title} was already on the board.` : `${review.title} was sent. It is labelled uncalibrated web-chat.`);
+        if (!response.ok) {
+          delete sendState[review.id];
+          failures.push(response.error || `The board returned ${response.status}.`);
+        } else if (response.duplicate) {
+          sendState[review.id] = "duplicate";
+          notes.push("Already on board");
+        } else {
+          sendState[review.id] = "published";
+          notes.push("Published");
+        }
       } catch {
-        notes.push("The browser could not reach the leaderboard. Your score stays on this browser.");
+        delete sendState[review.id];
+        failures.push("The browser could not reach the leaderboard. Your score stays on this browser.");
         break;
       }
     }
     busy = false;
     status = notes.join(" ");
-    error = "";
+    error = failures.join(" ");
     paint();
   }
   function restoreSaved() {

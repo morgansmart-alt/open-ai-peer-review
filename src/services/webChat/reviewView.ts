@@ -30,6 +30,8 @@ export interface HistoryItem {
   createdAt?: string
   mismatch?: boolean
   selected?: boolean
+  /** sending, published, or duplicate. Empty means the score can still be sent. */
+  sendState?: "" | "sending" | "published" | "duplicate"
 }
 
 export interface PublicationDraft {
@@ -375,10 +377,12 @@ export function renderReviewApp(root: HTMLElement, model: ReviewModel, actions: 
         .join(" · ")
       el(row, "p", detail, "note")
       if (item.mismatch) el(row, "p", "Scoring mismatch, needs re-check. Not sent.", "mismatch")
-      const send = el(row, "button", "Send to Global Good Idea leaderboard", "quiet")
+      const sendLabel = item.sendState === "sending" ? "Sending…" : item.sendState === "published" ? "Published" : item.sendState === "duplicate" ? "Already on board" : "Send to Global Good Idea leaderboard"
+      const send = el(row, "button", sendLabel, "quiet")
       send.type = "button"
-      send.disabled = Boolean(item.mismatch) || model.busy
-      send.addEventListener("click", () => actions.onSend(item.id))
+      send.id = `send-${item.id}`
+      send.disabled = Boolean(item.mismatch) || Boolean(item.sendState) || model.busy
+      if (!send.disabled) send.addEventListener("click", () => actions.onSend(item.id))
     }
     const sendSelected = el(form, "button", "Send selected", "quiet")
     sendSelected.type = "button"

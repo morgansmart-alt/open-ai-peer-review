@@ -501,6 +501,22 @@ describe("extension panel", () => {
     expect(app.textContent).toContain("Blind score 84.00 out of 100")
     expect(app.querySelector("#status")?.textContent).toContain("after defence 84")
     expect(app.querySelector("#defence-sheet")?.textContent).toContain("full score sheet")
+    renderReviewApp(
+      app,
+      model({
+        history: [
+          { id: "posted", title: "Posted note", overall: 67, sendState: "published" },
+          { id: "again", title: "Duplicate note", overall: 68, sendState: "duplicate" },
+          { id: "open", title: "Open note", overall: 58, sendState: "sending" },
+        ],
+      }),
+      actions(),
+    )
+    expect((document.getElementById("send-posted") as HTMLButtonElement).textContent).toBe("Published")
+    expect((document.getElementById("send-posted") as HTMLButtonElement).disabled).toBe(true)
+    expect((document.getElementById("send-again") as HTMLButtonElement).textContent).toBe("Already on board")
+    expect((document.getElementById("send-again") as HTMLButtonElement).disabled).toBe(true)
+    expect((document.getElementById("send-open") as HTMLButtonElement).disabled).toBe(true)
 
     const packet = packetForLocalPaper({
       requestId: "web-local",
