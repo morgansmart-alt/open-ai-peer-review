@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 import { webChatProvider } from "../../../extension/adapters/index.ts"
 import { CRITERION_PROFILES, readingCriteria } from "../../domain/profiles.ts"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
-import { ackReply, assistantText, attachmentReady, chooseReplyBlock, clickElement, composerTextMatches, confirmComposerText, describeCandidates, diagnose, fillComposer, findComposer, findSubmit, heldPrefix, isPromptEcho, liveTurnText, messageBlocks, placeComposerText, reasoningActive, reviewJsonBlock, reviewJsonOnPage, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
+import { ackReply, assistantText, attachmentReady, chooseReplyBlock, clickElement, composerTextMatches, confirmComposerText, describeCandidates, diagnose, fillComposer, findComposer, findSubmit, heldPrefix, isPartAck, isPromptEcho, liveTurnText, messageBlocks, placeComposerText, reasoningActive, reviewJsonBlock, reviewJsonOnPage, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
 import { buildWebChatPacket } from "./packet.ts"
 import { REPLY_STABLE_MS, REPLY_TIMEOUT_MS, replySettled, runTurn, sendFollowUp } from "./runTurn.ts"
 import { acceptWebChatResult } from "./accept.ts"
@@ -1045,6 +1045,12 @@ describe("live chat composers", () => {
     expect(live.text).not.toContain("physics.nist.gov")
     expect(live.text.length).toBeGreaterThan(40)
     expect(reviewJsonBlock(live.text)).toContain("84")
+  })
+
+  it("accepts a new OK and ignores a previous one", () => {
+    expect(isPartAck("OK")).toBe(true)
+    expect(isPartAck("7/18 OK")).toBe(true)
+    expect(isPartAck("OK\n\nThe paper states the yield and the limit a reader can check.")).toBe(false)
   })
 
   it("joins an X analysis bubble with a later JSON bubble", () => {

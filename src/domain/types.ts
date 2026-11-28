@@ -245,6 +245,8 @@ export interface StoredReview {
   defenceTranscript?: { round: number; kind: string; text: string }[]
   /** Local only. The after-defence reply named an overall without a full score sheet. */
   defenceNote?: string
+  /** Local only. The PDF extract was too small to trust. Send asks for a second press. */
+  thinExtract?: boolean
   report: ReviewReport
   outputHash: string
   createdAt: string

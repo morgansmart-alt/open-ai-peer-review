@@ -932,6 +932,13 @@ function userTurnHas(doc: ParentNode, composer: Element, probe: string): boolean
 
 const ACK_PATTERN = /\bRECEIVED(?:\s+(?:FILES|INSTRUCTIONS))?\s+\d+\b/i
 
+/** A short new assistant turn that accepts one paper part. "7/18 OK" counts. A previous turn's OK does not. */
+export function isPartAck(text: string): boolean {
+  const compact = text.replace(/\s+/g, " ").trim()
+  if (!compact || compact.length > 48) return false
+  return /^(?:ok|okay)[.!]?$/i.test(compact) || /^\d+\s*\/\s*\d+\s+(?:ok|okay)[.!]?$/i.test(compact)
+}
+
 function ackLabel(text: string): string {
   const compact = text.replace(/\s+/g, " ").trim()
   const match = compact.match(ACK_PATTERN)

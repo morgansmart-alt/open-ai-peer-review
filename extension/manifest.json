@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AIR web-chat review",
-  "version": "0.2.31",
+  "version": "0.2.32",
   "description": "Review a PDF in a chat you are already signed into. Click the icon, pick a file, and click Review my paper.",
   "action": {
     "default_title": "Review a paper",
@@ -32,6 +32,10 @@
     "https://doi.org/*",
     "https://arxiv.org/*",
     "https://export.arxiv.org/*",
+    "https://api.crossref.org/*",
+    "https://api.datacite.org/*",
+    "https://ore.eu/*",
+    "https://open-research-europe.ec.europa.eu/*",
     "https://lotswxboafsenmszijpf.supabase.co/*",
     "https://grok.com/*",
     "https://x.com/i/grok*",

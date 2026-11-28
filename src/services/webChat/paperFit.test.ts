@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { fitPaperText, GROK_X_MESSAGE_CHARS, omissionNote, packTextPage, paperDeliveryPlan, paperPartMessage, paperParts } from "./paperFit.ts"
 import { linkReadingPrompt } from "./paperText.ts"
+import { thinExtract } from "./standalone.ts"
 
 describe("long paper text", () => {
   it("keeps the results and drops the references when the paper is longer than the send cap", () => {
@@ -55,7 +56,7 @@ describe("long paper text", () => {
       instructions: "Score the paper.",
       paper: long,
       sourceChars: long.length,
-      oneMessage: GROK_X_MESSAGE_CHARS,
+      oneMessage: 20_000,
       prompt: linkReadingPrompt,
     })
     expect(split.texts.length).toBeGreaterThan(1)
@@ -63,5 +64,9 @@ describe("long paper text", () => {
     expect(split.texts.some((text) => text.includes("The measured yield is 1.8 litres."))).toBe(true)
     expect(split.texts.at(-1)).toContain("sent in the messages above")
     expect(split.notice).not.toContain("capped")
+    expect(GROK_X_MESSAGE_CHARS).toBe(80_000)
+    expect(GROK_X_MESSAGE_CHARS).toBeLessThan(100_000)
+    expect(thinExtract("axis kWh label ".repeat(20), 8)).toBe(true)
+    expect(thinExtract("A full page of prose. ".repeat(400), 8)).toBe(false)
   })
 })
