@@ -3238,6 +3238,7 @@ ${output}
   }
 
   // src/services/webChat/paperText.ts
+  var FULL_TEXT_UNAVAILABLE = "Full text unavailable";
   var PAPER_TEXT_ORIGIN = "https://morgansmart-alt.github.io/open-ai-peer-review";
   var PAPER_TEXT_FUNCTION = "https://lotswxboafsenmszijpf.supabase.co/functions/v1/paper-text";
   function paperTextUrl(recordId, origin = PAPER_TEXT_ORIGIN) {
@@ -3262,15 +3263,26 @@ ${output}
       return null;
     }
   }
-  async function choosePaperTextUrl(recordId, load2) {
+  async function choosePaperTextPage(recordId, load2) {
     for (const url of paperTextCandidates(recordId)) {
       try {
         const loaded = await load2(url);
-        if (textPageHasPaper(loaded.status, loaded.body)) return url;
+        if (textPageHasPaper(loaded.status, loaded.body)) {
+          return { url, unavailable: pageSaysFullTextUnavailable(loaded.body) };
+        }
       } catch {
       }
     }
     return null;
+  }
+  var FULL_TEXT_PANEL_NOTE = "Full text unavailable. The public page is record metadata, so this review must not treat it as the paper.";
+  function pageSaysFullTextUnavailable(body) {
+    return new RegExp(`(?:^|\\n)${FULL_TEXT_UNAVAILABLE}\\.`, "m").test(body);
+  }
+  function withFullTextUnavailable(prompt) {
+    return `${FULL_TEXT_PANEL_NOTE}
+
+${prompt}`;
   }
   function linkReadingPrompt(url, instructions) {
     return [
@@ -4647,12 +4659,13 @@ ${code}
     const step = { kind: "paste", text, files: [], index: 1, total: 1, final: true };
     return sendStep(doc, provider, step, hooks, label, expect);
   }
-  async function pageIsLive(url, hooks) {
+  async function loadedPage(url, load2) {
     try {
-      const loaded = hooks.loadTextPage ? await hooks.loadTextPage(url) : await fetch(url).then(async (response) => ({ status: response.status, body: await response.text() }));
-      return textPageHasPaper(loaded.status, loaded.body);
+      const loaded = await load2(url);
+      if (!textPageHasPaper(loaded.status, loaded.body)) return null;
+      return { url, unavailable: pageSaysFullTextUnavailable(loaded.body) };
     } catch {
-      return false;
+      return null;
     }
   }
   async function runTurn(doc, provider, packet, hooks) {
@@ -4665,23 +4678,32 @@ ${code}
       let providerForPlan = provider;
       let activePacket = packet;
       let notice;
+      let fullTextMissing = false;
       if (activePacket.textUrl) {
         const id = recordIdFromPaperTextUrl(activePacket.textUrl);
         const load2 = hooks.loadTextPage ?? ((url) => fetch(url).then(async (response) => ({ status: response.status, body: await response.text() })));
-        const chosen = id ? await choosePaperTextUrl(id, load2) : await pageIsLive(activePacket.textUrl, hooks) ? activePacket.textUrl : null;
-        if (!chosen) {
+        const page = id ? await choosePaperTextPage(id, load2) : await loadedPage(activePacket.textUrl, load2);
+        if (!page) {
           hooks.onProgress?.("The public text page is not available. Sending the paper in the chat instead.");
           const { textUrl: dropped, ...rest } = activePacket;
           void dropped;
           activePacket = rest;
-        } else if (chosen !== activePacket.textUrl) {
-          hooks.onProgress?.("The static text file is not on the site yet. Using the text service instead.");
-          activePacket = { ...activePacket, textUrl: chosen };
+        } else {
+          if (page.url !== activePacket.textUrl) {
+            hooks.onProgress?.("The static text file is not on the site yet. Using the text service instead.");
+          }
+          activePacket = { ...activePacket, textUrl: page.url };
+          fullTextMissing = page.unavailable;
         }
       }
       let planned = planDelivery(activePacket, providerForPlan);
       if (planned.warning) hooks.onProgress?.(planned.warning);
       let steps = planned.steps;
+      if (fullTextMissing) {
+        notice = FULL_TEXT_PANEL_NOTE;
+        hooks.onProgress?.(FULL_TEXT_PANEL_NOTE);
+        steps = steps.map((step) => step.link ? { ...step, text: withFullTextUnavailable(step.text) } : step);
+      }
       let fellBack = false;
       let linkFellBack = false;
       let route = activePacket.textUrl ? "link" : "paste";

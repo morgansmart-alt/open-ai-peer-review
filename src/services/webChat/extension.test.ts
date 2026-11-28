@@ -523,6 +523,49 @@ describe("live chat composers", () => {
     if (result.ok) expect(result.route).toBe("link")
   })
 
+  it("tells the reviewer when the public page is metadata only", async () => {
+    document.body.innerHTML = `<main><textarea id="box" aria-label="Message Grok"></textarea><button id="send" type="submit" aria-label="Send">Send</button><div id="reply" class="assistant-message"></div></main>`
+    const provider = webChatProvider("grok")
+    if (!provider) throw new Error("missing grok")
+    const sent: string[] = []
+    document.getElementById("send")?.addEventListener("click", () => {
+      const text = (document.getElementById("box") as HTMLTextAreaElement).value
+      sent.push(text)
+      ;(document.getElementById("box") as HTMLTextAreaElement).value = ""
+      document.getElementById("reply")!.textContent = '{"overallScore":86}'
+    })
+    const packet = buildWebChatPacket({
+      requestId: "metadata-only",
+      providerId: "grok",
+      criteria: officialCriteria,
+      record,
+      documents: [{ filename: "paper.md", text: "UNIQUEYIELD in one season." }],
+      useTextPage: true,
+    })
+    const metadata = "Open note\nAuthors: Ada\n\nZenodo record: https://zenodo.org/records/1\nVersion DOI: https://doi.org/10.5281/zenodo.1\n\nA public description.\n\nFull text unavailable. The PDF could not be read."
+    const result = await runTurn(document, { ...provider, fileUpload: false, pasteLimit: 200_000 }, packet, {
+      aborted: () => false,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      pollMs: 5,
+      stableMs: 0,
+      stepTimeoutMs: 2000,
+      replyStartTimeoutMs: 400,
+      submitStableMs: 0,
+      submitReadyMs: 20,
+      sendVerifyMs: 20,
+      loadTextPage: async () => ({ status: 200, body: metadata }),
+    })
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toContain("Full text unavailable")
+    expect(sent[0]).toContain("must not treat it as the paper")
+    expect(sent.join("\n")).not.toContain("UNIQUEYIELD")
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.route).toBe("link")
+      expect(result.notice).toContain("Full text unavailable")
+    }
+  })
+
   it("pastes the paper when the public text page is not available", async () => {
     document.body.innerHTML = `<main><textarea id="box" aria-label="Message Grok"></textarea><button id="send" type="submit" aria-label="Send">Send</button><div id="reply" class="assistant-message"></div></main>`
     const provider = webChatProvider("grok")

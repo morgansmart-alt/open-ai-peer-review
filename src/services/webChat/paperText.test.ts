@@ -66,6 +66,7 @@ describe("public paper text", () => {
     expect(page).toContain("The table is in the file.")
     expect(page).not.toContain("SECRET")
     expect(page).toContain("[private link]")
+    expect(page).not.toContain("Full text unavailable")
   })
 
   it("does not include restricted files", () => {
@@ -75,7 +76,11 @@ describe("public paper text", () => {
     )
     expect(closed).not.toContain("do not publish")
     expect(closed).toContain("are not public")
+    expect(closed).toContain("Full text unavailable")
     expect(closed).toContain("secret.pdf")
+    const metadata = formatPaperText(record, [], "The PDF could not be read.")
+    expect(metadata).toContain("Full text unavailable. The PDF could not be read.")
+    expect(metadata).toContain("A public description.")
   })
 
   it("sends one short link, and keeps the inline paper when the link is refused", () => {
@@ -246,6 +251,7 @@ describe("json repair and the text page check", () => {
     expect(documentsForOpenRecord("closed", [{ key: "paper.pdf", text: "not public" }], 100)).toEqual([])
     const fallback = renderStaticPaperText({ id: "18316375", title: "Open note", description: "The abstract remains when no file text is extracted." })
     expect(fallback).toContain("The abstract remains")
+    expect(fallback).toContain("Full text unavailable")
     expect(fallback).toContain("https://zenodo.org/records/18316375")
     const file = renderStaticPaperText({
       id: "22826",

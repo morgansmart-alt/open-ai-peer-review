@@ -2,11 +2,12 @@ import { readFileSync } from "node:fs"
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
+import { isOpenLicence } from "../src/services/webChat/pdfPaper.ts"
 import { collectPaperIds, documentsForOpenRecord, isOpenFileAccess, mergePaperIds, renderStaticPaperText } from "../src/services/webChat/paperTextFiles.ts"
 
 const TEXT_EXTENSIONS = new Set(["txt", "md", "markdown", "csv", "tsv", "html", "htm", "json", "xml", "tex", "rst"])
 const FILE_CAP = 1_500_000
-const PDF_BYTE_CAP = 20_000_000
+const PDF_BYTE_CAP = 25 * 1024 * 1024
 const PDF_PAGE_CAP = 80
 const USER_AGENT = "open-ai-peer-review (https://github.com/morgansmart-alt/open-ai-peer-review)"
 
@@ -60,6 +61,8 @@ function recordFromApi(data: Record<string, unknown>) {
     if (typeof row.key === "string") files.push({ key: row.key, url: textOf(links?.content) || textOf(links?.self) })
   }
   const access = (data.access ?? {}) as Record<string, unknown>
+  const license = metadata.license
+  const licenseId = typeof license === "string" ? license : textOf((license as Record<string, unknown> | undefined)?.id)
   return {
     id,
     title: textOf(metadata.title) || textOf(data.title),
@@ -68,6 +71,7 @@ function recordFromApi(data: Record<string, unknown>) {
     conceptDoi: textOf(data.conceptdoi) || `10.5281/zenodo.${textOf(data.conceptrecid) || textOf(parent.id) || id}`,
     description: textOf(metadata.description).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
     accessFiles: textOf(access.files) || textOf(metadata.access_right) || "open",
+    license: licenseId,
     files,
   }
 }
@@ -115,6 +119,7 @@ async function fileText(file: { key: string; url: string }, room: number): Promi
 
 async function openText(record: NonNullable<ReturnType<typeof recordFromApi>>) {
   if (!isOpenFileAccess(record.accessFiles)) return []
+  if (record.license && !isOpenLicence(record.license)) return []
   const gathered: { key: string; text: string }[] = []
   let used = 0
   for (const file of record.files) {
