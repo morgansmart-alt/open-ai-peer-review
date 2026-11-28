@@ -75,14 +75,18 @@ chrome.runtime.onMessage.addListener((message: { type?: string; requestId?: stri
       }),
     loadTextPage: (url) =>
       new Promise((resolve) => {
-        chrome.runtime.sendMessage({ type: "air-web-chat-text-page", url }, (response: { status?: number; body?: string } | undefined) => {
+        chrome.runtime.sendMessage({ type: "air-web-chat-text-page", url }, (response: { status?: number; body?: string; total?: number } | undefined) => {
           if (chrome.runtime.lastError || !response || typeof response.status !== "number") {
             void fetch(url)
-              .then(async (page) => resolve({ status: page.status, body: await page.text() }))
-              .catch(() => resolve({ status: 0, body: "" }))
+              .then(async (page) => {
+                const body = await page.text()
+                resolve({ status: page.status, body, total: body.length })
+              })
+              .catch(() => resolve({ status: 0, body: "", total: 0 }))
             return
           }
-          resolve({ status: response.status, body: typeof response.body === "string" ? response.body : "" })
+          const body = typeof response.body === "string" ? response.body : ""
+          resolve({ status: response.status, body, total: typeof response.total === "number" ? response.total : body.length })
         })
       }),
   }

@@ -540,16 +540,28 @@ function grokComTurn(doc: ParentNode, composer: Element | null): { text: string;
   return { text: textWithoutChips(markdown), candidate: '[data-testid="assistant-message"]' }
 }
 
+function isUserTurn(el: Element): boolean {
+  const name = classNameOf(el)
+  return name.includes("group/user") || name.includes("items-end")
+}
+
 function grokXTurn(doc: ParentNode, composer: Element | null): { text: string; candidate: string } {
   const turns = queryAllDeep(doc, "div.group").filter((el) => {
-    if (classNameOf(el).includes("group/user")) return false
     if (composer && (el === composer || el.contains(composer) || composer.contains(el))) return false
     return true
   })
-  const last = turns[turns.length - 1]
-  if (!last) return { text: "", candidate: "" }
-  const markdown = last.querySelector(".wrap-break-word") ?? last.querySelector(".whitespace-normal") ?? last
-  return { text: textWithoutChips(markdown), candidate: "div.group" }
+  let lastUser = -1
+  turns.forEach((el, index) => {
+    if (isUserTurn(el)) lastUser = index
+  })
+  const reply = turns.filter((el, index) => index > lastUser && !isUserTurn(el))
+  if (!reply.length) return { text: "", candidate: "" }
+  const text = reply
+    .map((el) => textWithoutChips(el))
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join("\n\n")
+  return { text, candidate: "div.group" }
 }
 
 /** The latest model turn on grok.com or X, using the live page structure. */

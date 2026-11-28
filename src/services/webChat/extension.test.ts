@@ -1047,6 +1047,26 @@ describe("live chat composers", () => {
     expect(reviewJsonBlock(live.text)).toContain("84")
   })
 
+  it("joins an X analysis bubble with a later JSON bubble", () => {
+    const prose = "Analysis. The yield is measured and the limit is named in the results a reader can find."
+    const sheet = JSON.stringify({
+      summary: "The record states a narrow claim and shows the weighing steps that support it, with the season limit written in the text.",
+      overallScore: 59.77,
+      recommendation: "revise",
+      scores: [{ criterionId: "impact", score: 60, rationale: "The yield is stated.", citations: [{ quote: "1.8 litres", location: "results" }] }],
+    })
+    document.body.innerHTML = `<div class="group/user flex flex-col items-end"><div class="text-primary">Open this public text page and score the paper.</div></div>
+      <div class="group flex flex-col items-start"><div class="wrap-break-word"><h2>Analysis</h2><p>${prose}</p></div></div>
+      <div class="group flex flex-col items-start"><div class="whitespace-normal"><pre><code>${sheet}</code></pre></div></div>`
+    const live = liveTurnText(document, "grok-x", document.createElement("textarea"))
+    expect(live.text).toContain("The yield is measured")
+    expect(live.text).toContain('"overallScore":59.77')
+    const analysis = reviewAnalysis(live.text)
+    expect(analysis).toContain("Analysis")
+    expect(analysis).toContain("The yield is measured")
+    expect(analysis).not.toContain("overallScore")
+  })
+
   it("keeps the prose when X renders the score sheet as a code block", () => {
     const prose = "Impact is limited because the record states the yield and names the limit a reader can check. Feasibility follows from the method section."
     const summary = "The record states a narrow claim and shows the weighing steps that support it, with the season limit written in the text."

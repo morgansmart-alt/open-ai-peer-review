@@ -6,6 +6,7 @@ If you do not use a terminal, follow [INSTALL.md](../INSTALL.md). The file to do
 
 ## Changelog
 
+- 0.2.31: The blind prose is kept when X splits it from the score sheet. A long paper is sent in parts instead of stopping at 20,000 characters, and a cut section is named so it is not held against the authors.
 - 0.2.30: The full-text line counts what the reviewer received, and says when that text was capped. Send selected posts the global goals bonus with the score. That bonus is not part of the overall. The row then says Published.
 - 0.2.29: The link route sends the paper-text service, including the PDF, and the panel says whether that full text was included. A doubled https:// in the publication link is collapsed.
 - 0.2.28: An open-licence Zenodo PDF is copied onto the public text page. When that text is missing, the page and the review say full text unavailable.

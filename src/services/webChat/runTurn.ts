@@ -1,5 +1,6 @@
 import type { ProviderAdapter } from "../../../extension/adapters/index.ts"
 import { planDelivery, type DeliveryStep } from "./deliver.ts"
+import { GROK_X_MESSAGE_CHARS, paperDeliveryPlan } from "./paperFit.ts"
 import {
   choosePaperTextPage,
   couldNotReadPaper,
@@ -71,7 +72,7 @@ export interface TurnHooks {
   /** How long an empty reply may last before a clear error and a re-poll. */
   replySilentMs?: number
   /** Probe the public text page. Absent means a normal fetch. */
-  loadTextPage?(url: string): Promise<{ status: number; body: string }>
+  loadTextPage?(url: string): Promise<{ status: number; body: string; total?: number }>
   /** Bring the chat tab forward so a background tab does not freeze the reply wait. */
   keepAwake?(): Promise<void> | void
 }
@@ -431,20 +432,14 @@ export async function sendFollowUp(
   return sendStep(doc, provider, step, hooks, label, expect)
 }
 
-function clipPaper(paper: string, pasteLimit: number): string {
-  const room = Math.max(2000, pasteLimit - 8000)
-  if (paper.length <= room) return paper
-  return `${paper.slice(0, room).trimEnd()}\n\n[AIR truncated this file.]`
-}
-
 async function loadedPage(
   url: string,
-  load: (url: string) => Promise<{ status: number; body: string }>,
-): Promise<{ url: string; body: string; unavailable: boolean } | null> {
+  load: (url: string) => Promise<{ status: number; body: string; total?: number }>,
+): Promise<{ url: string; body: string; total: number; unavailable: boolean } | null> {
   try {
     const loaded = await load(url)
     if (!textPageHasPaper(loaded.status, loaded.body)) return null
-    return { url, body: loaded.body, unavailable: fullTextPanelLine(loaded.body) === "Full text unavailable" }
+    return { url, body: loaded.body, total: loaded.total ?? loaded.body.length, unavailable: fullTextPanelLine(loaded.body) === "Full text unavailable" }
   } catch {
     return null
   }
@@ -462,6 +457,7 @@ export async function runTurn(doc: Document, provider: ProviderAdapter, packet: 
     let notice: string | undefined
     let fullTextMissing = false
     let fetchedPaper = ""
+    let sourceChars = 0
     if (activePacket.textUrl) {
       const id = recordIdFromPaperTextUrl(activePacket.textUrl)
       const load = hooks.loadTextPage ?? ((url: string) => fetch(url).then(async (response) => ({ status: response.status, body: await response.text() })))
@@ -482,30 +478,50 @@ export async function runTurn(doc: Document, provider: ProviderAdapter, packet: 
         activePacket = { ...activePacket, textUrl: page.url }
         fullTextMissing = page.unavailable
         fetchedPaper = page.body
+        sourceChars = page.total
       }
     }
+    let noticeSent = 0
     const reportSent = (info: { label: string; actual: string; pending: string; chunk: string }) => {
-      if (info.label !== "public text link" || !fetchedPaper || fullTextMissing) return
-      const sourceFold = foldComposerText(paperForReviewer(fetchedPaper))
-      const sentFold = foldComposerText(info.chunk)
-      const capped = sourceFold.length > 0 && !sentFold.includes(sourceFold)
-      notice = fullTextIncludedLine(fetchedPaper.length, foldComposerText(info.actual).length, capped)
+      if (!fetchedPaper || fullTextMissing || info.chunk.length >= info.pending.length) return
+      const sent = Math.max(0, noticeSent - (info.pending.length - info.chunk.length))
+      noticeSent = sent
+      notice = fullTextIncludedLine(sourceChars, sent, sent < sourceChars)
       hooks.onProgress?.(notice)
     }
     const sendingHooks = { ...hooks, onVerified: reportSent }
     let planned = planDelivery(activePacket, providerForPlan)
     if (planned.warning) hooks.onProgress?.(planned.warning)
     let steps = planned.steps
-    if (fetchedPaper) {
-      const line = fullTextPanelLine(fetchedPaper)
-      notice = line
-      hooks.onProgress?.(line)
-      const copied = fullTextMissing ? "" : clipPaper(paperForReviewer(fetchedPaper), provider.pasteLimit)
-      steps = steps.map((step) => {
-        if (!step.link || !activePacket.textUrl) return step
-        const prompt = linkReadingPrompt(activePacket.textUrl, activePacket.instructions, copied)
-        return { ...step, text: fullTextMissing ? withFullTextUnavailable(prompt) : prompt }
-      })
+    if (fetchedPaper && activePacket.textUrl) {
+      if (fullTextMissing) {
+        notice = "Full text unavailable"
+        hooks.onProgress?.(notice)
+        steps = steps.map((step) => (step.link ? { ...step, text: withFullTextUnavailable(linkReadingPrompt(activePacket.textUrl ?? "", activePacket.instructions)) } : step))
+      } else {
+        const oneMessage = provider.id === "grok-x" ? GROK_X_MESSAGE_CHARS : provider.pasteLimit
+        const plannedPaper = paperDeliveryPlan({
+          url: activePacket.textUrl,
+          instructions: activePacket.instructions,
+          paper: paperForReviewer(fetchedPaper),
+          sourceChars,
+          oneMessage,
+          prompt: linkReadingPrompt,
+        })
+        noticeSent = plannedPaper.sent
+        notice = plannedPaper.notice
+        hooks.onProgress?.(notice)
+        const texts = plannedPaper.texts
+        steps = texts.map((text, index) => ({
+          kind: "paste" as const,
+          text,
+          files: [],
+          index: index + 1,
+          total: texts.length,
+          final: index === texts.length - 1,
+          link: index === texts.length - 1,
+        }))
+      }
     }
     let fellBack = false
     let linkFellBack = false
