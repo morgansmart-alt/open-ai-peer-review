@@ -3307,11 +3307,16 @@ ${output}
   function fullTextPanelLine(body) {
     const pdf = pdfBodyChars(body);
     const closed = pageSaysFilesClosed(body) || pageSaysFullTextUnavailable(body);
-    if (pdf > 0 && !pageSaysFilesClosed(body)) return `Full text included (${pdf} chars from PDF)`;
+    if (pdf > 0 && !pageSaysFilesClosed(body)) return `Full text included (${pdf.toLocaleString("en-US")} chars from PDF)`;
     if (closed) return "Full text unavailable";
     const chars = body.trim().length;
-    if (chars >= 80) return `Full text included (${chars} chars)`;
+    if (chars >= 80) return `Full text included (${chars.toLocaleString("en-US")} chars)`;
     return "Full text unavailable";
+  }
+  function fullTextIncludedLine(sourceChars, sentNormalised, capped) {
+    const sent = sentNormalised.toLocaleString("en-US");
+    if (!capped) return `Full text included (${sourceChars.toLocaleString("en-US")} chars from PDF)`;
+    return `Full text included (${sent} of ${sourceChars.toLocaleString("en-US")} chars from PDF, capped)`;
   }
   function withFullTextUnavailable(prompt) {
     return `${FULL_TEXT_PANEL_NOTE}. The public page is record metadata, so this review must not treat it as the paper.
@@ -4678,6 +4683,7 @@ ${code}
       const placed = await confirmComposerText(composer, pending, { sleep: (ms) => hooks.sleep(ms), pollMs: Math.min(hooks.pollMs ?? 50, 50), timeoutMs: 2e3 });
       const verified = `Insert method ${placed.method}. Box holds ${placed.actual.length} raw, ${foldComposerText(placed.actual).length} normalised. Message has ${pending.length} raw, ${foldComposerText(pending).length} normalised.`;
       note(hooks, label, placed.ok ? "verified" : "error", verified, verified);
+      if (placed.ok) hooks.onVerified?.({ label, actual: placed.actual, pending, chunk: placed.chunk });
       if (!placed.ok) {
         throw new TurnError(
           "insert-miss",
@@ -4764,6 +4770,15 @@ ${code}
           fetchedPaper = page.body;
         }
       }
+      const reportSent = (info) => {
+        if (info.label !== "public text link" || !fetchedPaper || fullTextMissing) return;
+        const sourceFold = foldComposerText(paperForReviewer(fetchedPaper));
+        const sentFold = foldComposerText(info.chunk);
+        const capped = sourceFold.length > 0 && !sentFold.includes(sourceFold);
+        notice = fullTextIncludedLine(fetchedPaper.length, foldComposerText(info.actual).length, capped);
+        hooks.onProgress?.(notice);
+      };
+      const sendingHooks = { ...hooks, onVerified: reportSent };
       let planned = planDelivery(activePacket, providerForPlan);
       if (planned.warning) hooks.onProgress?.(planned.warning);
       let steps = planned.steps;
@@ -4788,7 +4803,7 @@ ${code}
         const label = step.link ? "public text link" : `part ${step.index} of ${step.total}`;
         hooks.onProgress?.(`Sending part ${step.index} of ${step.total} on ${provider.label}. Stay on this tab.`);
         try {
-          const reply = await sendStep(doc, provider, step, hooks, label);
+          const reply = await sendStep(doc, provider, step, sendingHooks, label);
           if (step.link && !linkFellBack && (couldNotReadPaper(reply) || textPageUntrusted(reply))) {
             linkFellBack = true;
             route = "paste";

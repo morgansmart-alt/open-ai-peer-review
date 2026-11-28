@@ -13,6 +13,7 @@ import { collectPaperIds, documentsForOpenRecord, mergePaperIds, renderStaticPap
 import {
   choosePaperTextPage,
   choosePaperTextUrl,
+  fullTextIncludedLine,
   fullTextPanelLine,
   pdfBodyChars,
   couldNotReadPaper,
@@ -285,6 +286,8 @@ describe("json repair and the text page check", () => {
     expect(pdfBodyChars(servicePage)).toBe("economy irradiation on facades".length)
     expect(fullTextPanelLine(servicePage)).toBe(`Full text included (${"economy irradiation on facades".length} chars from PDF)`)
     expect(fullTextPanelLine(stale)).toBe("Full text unavailable")
+    expect(fullTextIncludedLine(46732, 27865, true)).toBe("Full text included (27,865 of 46,732 chars from PDF, capped)")
+    expect(fullTextIncludedLine(1272, 4000, false)).toBe("Full text included (1,272 chars from PDF)")
   })
 })
 

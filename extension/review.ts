@@ -5,7 +5,7 @@ import { acceptWebChatResult } from "../src/services/webChat/accept.ts"
 import { webChatModelId } from "../src/services/webChat/chatModel.ts"
 import { WEB_CHAT_PDF_PAGES } from "../src/services/webChat/packet.ts"
 import { EXTENSION_SOURCE, PAGE_SOURCE, PROTOCOL_VERSION } from "../src/services/webChat/protocol.ts"
-import { recordStep, renderReviewApp, type ReviewModel, type StepLogEntry } from "../src/services/webChat/reviewView.ts"
+import { globalGoalsSendNote, recordStep, renderReviewApp, type ReviewModel, type StepLogEntry } from "../src/services/webChat/reviewView.ts"
 import { defendedFromReply } from "../src/services/webChat/defence.ts"
 import { defenceRoundCounts, runSummary } from "../src/services/webChat/runSummary.ts"
 import { normalizePublicationLink, resolvePublication, type PublicationPreview } from "../src/services/webChat/publication.ts"
@@ -428,13 +428,13 @@ async function sendScores(ids: string[]): Promise<void> {
         } else if (response.duplicate) {
           sendState[review.id] = "duplicate"
           publishedKeys[publishedResultKey(review)] = "duplicate"
-          const message = publishedStatus(review.title, built.submission, true)
+          const message = [publishedStatus(review.title, built.submission, true), globalGoalsSendNote(built.submission.scores)].filter(Boolean).join(" · ")
           sendNotes[review.id] = message
           notes.push(message)
         } else {
           sendState[review.id] = "published"
           publishedKeys[publishedResultKey(review)] = "published"
-          const message = publishedStatus(review.title, built.submission, false)
+          const message = [publishedStatus(review.title, built.submission, false), globalGoalsSendNote(built.submission.scores)].filter(Boolean).join(" · ")
           sendNotes[review.id] = message
           notes.push(message)
         }

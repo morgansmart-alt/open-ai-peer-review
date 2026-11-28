@@ -43,6 +43,11 @@ export interface PublicationDraft {
   url: string
 }
 
+/** Send selected already posts this score. It is a bonus and it is not part of the overall. */
+export function globalGoalsSendNote(scores: { criterionId: string }[]): string {
+  return scores.some((item) => item.criterionId === "global-goals") ? "Global goals bonus included" : ""
+}
+
 export interface StepLogEntry {
   at: string
   step: string
@@ -329,7 +334,9 @@ export function renderReviewApp(root: HTMLElement, model: ReviewModel, actions: 
     }
     if (model.result.notice) {
       const defenceFailed = model.result.notice.includes("Defence step failed:")
-      const note = el(card, "p", defenceFailed ? model.result.notice.slice(model.result.notice.indexOf("Defence step failed:")) : model.result.notice, defenceFailed ? "warn" : "mismatch")
+      const included = model.result.notice.startsWith("Full text included")
+      const tone = defenceFailed ? "warn" : included ? "note" : model.result.notice.startsWith("Full text unavailable") ? "note" : "mismatch"
+      const note = el(card, "p", defenceFailed ? model.result.notice.slice(model.result.notice.indexOf("Defence step failed:")) : model.result.notice, tone)
       note.id = defenceFailed ? "defence-notice" : "text-page-note"
     }
     if (model.result.verdictNote) {

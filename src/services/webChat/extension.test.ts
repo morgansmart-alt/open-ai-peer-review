@@ -610,11 +610,11 @@ describe("live chat composers", () => {
     expect(sent[0]).not.toContain("are not public")
     expect(sent[0]).not.toContain("Read that page")
     expect(sent.join("\n")).not.toContain("UNIQUEYIELD")
-    expect(progress.some((message) => message === "Full text included (30 chars from PDF)")).toBe(true)
+    expect(progress.some((message) => message === `Full text included (${service.length.toLocaleString("en-US")} chars from PDF)`)).toBe(true)
     expect(result.ok).toBe(true)
     if (result.ok) {
       expect(result.route).toBe("link")
-      expect(result.notice).toBe("Full text included (30 chars from PDF)")
+      expect(result.notice).toBe(`Full text included (${service.length.toLocaleString("en-US")} chars from PDF)`)
     }
   })
 

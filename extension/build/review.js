@@ -3472,6 +3472,9 @@ ${output}
   }
 
   // src/services/webChat/reviewView.ts
+  function globalGoalsSendNote(scores) {
+    return scores.some((item) => item.criterionId === "global-goals") ? "Global goals bonus included" : "";
+  }
   var LOG_CAP = 300;
   function isProgress(entry) {
     return entry.status === "reading" || entry.status === "waiting";
@@ -3698,7 +3701,9 @@ ${output}
       }
       if (model.result.notice) {
         const defenceFailed = model.result.notice.includes("Defence step failed:");
-        const note = el(card, "p", defenceFailed ? model.result.notice.slice(model.result.notice.indexOf("Defence step failed:")) : model.result.notice, defenceFailed ? "warn" : "mismatch");
+        const included = model.result.notice.startsWith("Full text included");
+        const tone = defenceFailed ? "warn" : included ? "note" : model.result.notice.startsWith("Full text unavailable") ? "note" : "mismatch";
+        const note = el(card, "p", defenceFailed ? model.result.notice.slice(model.result.notice.indexOf("Defence step failed:")) : model.result.notice, tone);
         note.id = defenceFailed ? "defence-notice" : "text-page-note";
       }
       if (model.result.verdictNote) {
@@ -4755,13 +4760,13 @@ ${JSON.stringify(report)}`),
           } else if (response.duplicate) {
             sendState[review.id] = "duplicate";
             publishedKeys[publishedResultKey(review)] = "duplicate";
-            const message = publishedStatus(review.title, built.submission, true);
+            const message = [publishedStatus(review.title, built.submission, true), globalGoalsSendNote(built.submission.scores)].filter(Boolean).join(" \xB7 ");
             sendNotes[review.id] = message;
             notes.push(message);
           } else {
             sendState[review.id] = "published";
             publishedKeys[publishedResultKey(review)] = "published";
-            const message = publishedStatus(review.title, built.submission, false);
+            const message = [publishedStatus(review.title, built.submission, false), globalGoalsSendNote(built.submission.scores)].filter(Boolean).join(" \xB7 ");
             sendNotes[review.id] = message;
             notes.push(message);
           }
