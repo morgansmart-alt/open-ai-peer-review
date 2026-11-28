@@ -3721,6 +3721,10 @@ ${output}
         const detail = [item.doi || item.url, item.site, item.model, item.createdAt ? item.createdAt.slice(0, 16).replace("T", " ") : "", `${Math.round(item.overall)} / 100`].filter(Boolean).join(" \xB7 ");
         el(row, "p", detail, "note");
         if (item.mismatch) el(row, "p", "Scoring mismatch, needs re-check. Not sent.", "mismatch");
+        if (item.sendNote) {
+          const note = el(row, "p", item.sendNote, item.sendNote.startsWith("Published") || item.sendNote.startsWith("Already on board") ? "status" : "error");
+          note.setAttribute("role", "alert");
+        }
         const sendLabel = item.sendState === "sending" ? "Sending\u2026" : item.sendState === "published" ? "Published" : item.sendState === "duplicate" ? "Already on board" : "Send to Global Good Idea leaderboard";
         const send2 = el(row, "button", sendLabel, "quiet");
         send2.type = "button";
@@ -4001,6 +4005,7 @@ ${output}
     return walk(value);
   }
   async function storedLocalReview(options) {
+    const discovered = options.text ? sourceRecordFromText(options.filename, options.text) : null;
     const record = localPaperRecord(options.filename);
     const report = stripChatShareLinks(scrubPrivateUrls(options.report, options.privateUrls ?? []));
     const modelHint = `${options.providerId} (web chat, uncalibrated)`;
@@ -4039,10 +4044,10 @@ ${JSON.stringify(report)}`),
       tier: "uncalibrated web-chat",
       source: "web-chat extension",
       criterionProfile: options.criterionProfile || review.criterionProfile,
-      doi: options.publication?.doi || review.doi,
+      doi: options.publication?.doi || (discovered && discovered.doi !== "local-file" ? discovered.doi : review.doi),
       title: options.publication?.title || review.title,
       creators: options.publication?.authors ?? review.creators,
-      paperUrl: options.publication?.url || review.paperUrl
+      paperUrl: options.publication?.url || discovered?.htmlUrl || review.paperUrl
     };
   }
   function appendResult(existing, next, cap = RESULT_CAP) {
@@ -4172,8 +4177,10 @@ ${JSON.stringify(report)}`),
     if (described.scoringCheck.mismatch) {
       return { ok: false, error: "Scoring mismatch, needs re-check. This score stays on this browser until the chat is run again." };
     }
-    const paperKey = review.doi && review.doi !== "local-file" ? review.doi : review.paperUrl || review.doi;
-    if (!paperKey) return { ok: false, error: "Add a DOI or a link before sending this score." };
+    const paperKey = review.doi && review.doi !== "local-file" ? review.doi : review.paperUrl || "";
+    if (!paperKey) {
+      return { ok: false, error: `${review.title || "This score"} has no DOI or paper link, so it was not sent. Paste a Zenodo, DOI, or arXiv link and review again.` };
+    }
     const defended = postedDefended(review.defended);
     const summary = stripChatShareLinks(review.report.summary);
     const submission = {
@@ -4314,24 +4321,37 @@ ${JSON.stringify(report)}`),
       }))
     };
   }
+  function publishedStatus(title, submission, duplicate) {
+    const paper = submission.paper.doi || submission.paper.url;
+    const score = submission.overallScore.toFixed(2);
+    const lead = duplicate ? "Already on board" : "Published";
+    return `${lead}: ${title} \xB7 ${paper} \xB7 ${score}`;
+  }
 
   // src/services/webChat/submit.ts
-  function webChatSubmitHeaders() {
-    const anon = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvdHN3eGJvYWZzZW5tc3ppanBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUxMTM0MDEsImV4cCI6MjExMDY4OTQwMX0.K0zYMdv3vkBMXiL4PePWemwodcDactb8rcZJc2cmi5w";
-    const key = typeof anon === "string" ? anon.trim() : "";
+  function leaderboardRequest(anonKey) {
+    const key = typeof anonKey === "string" ? anonKey.trim() : "";
+    if (!key) return { ok: false, error: "This extension build has no leaderboard key, so the score was not sent." };
     return {
-      "content-type": "application/json",
-      ...key ? { apikey: key, authorization: `Bearer ${key}` } : {}
+      ok: true,
+      headers: {
+        "content-type": "application/json",
+        apikey: key,
+        authorization: `Bearer ${key}`
+      }
     };
   }
   async function postWebChatSubmission(body) {
+    const ready = leaderboardRequest("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvdHN3eGJvYWZzZW5tc3ppanBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUxMTM0MDEsImV4cCI6MjExMDY4OTQwMX0.K0zYMdv3vkBMXiL4PePWemwodcDactb8rcZJc2cmi5w");
+    if (!ready.ok) return { ok: false, status: 0, error: ready.error };
     const response = await fetch(WEB_CHAT_SUBMIT_URL, {
       method: "POST",
-      headers: webChatSubmitHeaders(),
+      headers: ready.headers,
       body: JSON.stringify(body)
     });
     const payload = await response.json().catch(() => null);
-    return { ok: response.ok, status: response.status, error: payload?.error, duplicate: payload?.duplicate };
+    const error2 = payload?.error || payload?.message;
+    return { ok: response.ok, status: response.status, error: error2, duplicate: payload?.duplicate };
   }
 
   // extension/review.ts
@@ -4352,6 +4372,7 @@ ${JSON.stringify(report)}`),
   var stepLog = [];
   var reviews = [];
   var sendState = {};
+  var sendNotes = {};
   var publishedKeys = {};
   var requestId = "";
   var pendingPaper = null;
@@ -4382,7 +4403,8 @@ ${JSON.stringify(report)}`),
       createdAt: review.createdAt,
       mismatch: Boolean(card.mismatch),
       selected: selected.has(review.id),
-      sendState: sendState[review.id] || rememberedSendState(review, publishedKeys)
+      sendState: sendState[review.id] || rememberedSendState(review, publishedKeys),
+      sendNote: sendNotes[review.id] || ""
     };
   }
   function paint() {
@@ -4621,7 +4643,8 @@ ${JSON.stringify(report)}`),
       filename: pendingPaper?.filename || file?.name || publication?.filename || "paper",
       report: accepted.report,
       criterionProfile: profileId,
-      publication: publication ? { title: publication.title, doi: publication.doi, url: publication.url, authors: publication.authors } : void 0
+      publication: publication ? { title: publication.title, doi: publication.doi, url: publication.url, authors: publication.authors } : void 0,
+      text: pendingPaper?.text
     });
     stored.defenceTranscript = transcript;
     const analysis = reviewAnalysis(raw);
@@ -4650,52 +4673,81 @@ ${JSON.stringify(report)}`),
     paint();
   }
   async function sendScores(ids) {
-    const chosen = reviews.filter((review) => ids.includes(review.id) && !sendState[review.id]);
-    if (chosen.length === 0) return;
-    for (const review of chosen) sendState[review.id] = "sending";
-    busy = true;
-    error = "";
-    status = "Sending\u2026";
-    paint();
-    const notes = [];
-    const failures = [];
-    for (const review of chosen) {
-      const built = submissionFromReview(review, review.modelId);
-      if (!built.ok) {
-        delete sendState[review.id];
-        failures.push(built.error);
-        continue;
+    try {
+      const chosen = reviews.filter((review) => ids.includes(review.id) && !sendState[review.id]);
+      if (chosen.length === 0) {
+        error = ids.length === 0 ? "Nothing was sent. Choose a saved score first." : "Nothing was sent. That score is not in the list, or it was already sent.";
+        status = "";
+        paint();
+        return;
       }
-      try {
-        const response = await postWebChatSubmission(built.submission);
-        if (response.status === 404 || response.status === 405) {
+      for (const review of chosen) {
+        sendState[review.id] = "sending";
+        delete sendNotes[review.id];
+      }
+      busy = true;
+      error = "";
+      status = "Sending\u2026";
+      paint();
+      const notes = [];
+      const failures = [];
+      for (const review of chosen) {
+        const built = submissionFromReview(review, review.modelId);
+        if (!built.ok) {
           delete sendState[review.id];
-          failures.push("The leaderboard is not accepting web-chat scores yet. The submission service still has to be deployed. Your score stays on this browser.");
+          sendNotes[review.id] = built.error;
+          failures.push(built.error);
+          continue;
+        }
+        try {
+          const response = await postWebChatSubmission(built.submission);
+          if (response.status === 0 || response.status === 404 || response.status === 405) {
+            delete sendState[review.id];
+            const message = response.error || "The leaderboard is not accepting web-chat scores yet. The submission service still has to be deployed. Your score stays on this browser.";
+            sendNotes[review.id] = message;
+            failures.push(message);
+            break;
+          }
+          if (!response.ok) {
+            delete sendState[review.id];
+            const message = response.error || `The board returned ${response.status}. Nothing was saved.`;
+            sendNotes[review.id] = message;
+            failures.push(message);
+          } else if (response.duplicate) {
+            sendState[review.id] = "duplicate";
+            publishedKeys[publishedResultKey(review)] = "duplicate";
+            const message = publishedStatus(review.title, built.submission, true);
+            sendNotes[review.id] = message;
+            notes.push(message);
+          } else {
+            sendState[review.id] = "published";
+            publishedKeys[publishedResultKey(review)] = "published";
+            const message = publishedStatus(review.title, built.submission, false);
+            sendNotes[review.id] = message;
+            notes.push(message);
+          }
+        } catch (caught) {
+          delete sendState[review.id];
+          const message = caught instanceof Error ? caught.message : "The browser could not reach the leaderboard. Your score stays on this browser.";
+          sendNotes[review.id] = message;
+          failures.push(message);
           break;
         }
-        if (!response.ok) {
-          delete sendState[review.id];
-          failures.push(response.error || `The board returned ${response.status}.`);
-        } else if (response.duplicate) {
-          sendState[review.id] = "duplicate";
-          publishedKeys[publishedResultKey(review)] = "duplicate";
-          notes.push("Already on board");
-        } else {
-          sendState[review.id] = "published";
-          publishedKeys[publishedResultKey(review)] = "published";
-          notes.push("Published");
-        }
-      } catch {
-        delete sendState[review.id];
-        failures.push("The browser could not reach the leaderboard. Your score stays on this browser.");
-        break;
       }
+      busy = false;
+      status = notes.join(" ");
+      error = failures.join(" ");
+      if (notes.length > 0) await storageSet(PUBLISHED_STORAGE_KEY, publishedKeys);
+      paint();
+    } catch (caught) {
+      busy = false;
+      for (const id of ids) {
+        if (sendState[id] === "sending") delete sendState[id];
+      }
+      error = caught instanceof Error ? caught.message : "The score was not sent.";
+      status = "";
+      paint();
     }
-    busy = false;
-    status = notes.join(" ");
-    error = failures.join(" ");
-    if (notes.length > 0) await storageSet(PUBLISHED_STORAGE_KEY, publishedKeys);
-    paint();
   }
   function restoreSaved() {
     return storageGet(ONBOARD_STORAGE_KEY).then((seen) => {

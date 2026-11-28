@@ -6,7 +6,7 @@ If you do not use a terminal, follow [INSTALL.md](../INSTALL.md). The file to do
 
 ## Changelog
 
-- 0.2.25: The reviewer writes the analysis in prose first and ends with a fenced JSON score sheet. A reply step waits 10 minutes, stays quiet for 20 seconds, and treats a visible Thinking indicator as still streaming.
+- 0.2.25: The reviewer writes the analysis in prose first and ends with a fenced JSON score sheet. A reply step waits 10 minutes, stays quiet for 20 seconds, and treats a visible Thinking indicator as still streaming. Send names a DOI found in the file, and every refusal is shown on the saved row.
 
 The score is labelled **free web-chat, uncalibrated**. It stays in the browser until you opt in. **Save a copy** writes JSON the AIR site can import. **Send to Global Good Idea leaderboard** posts one score only when you click it. The extension does not read passwords or cookies.
 

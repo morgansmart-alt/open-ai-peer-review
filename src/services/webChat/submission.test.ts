@@ -4,7 +4,8 @@ import { officialCriteria } from "../../domain/officialCriteria.ts"
 import { weightedMean } from "../../domain/criteria.ts"
 import { buildRanking } from "../../domain/ranking.ts"
 import { ladderTier } from "../../domain/fidelity.ts"
-import { decideWebChatSubmission, submissionFromReview, submissionToStored, toSubmissionRow, validateWebChatSubmission, WEB_CHAT_SUBMIT_URL } from "./submission.ts"
+import { decideWebChatSubmission, publishedStatus, submissionFromReview, submissionToStored, toSubmissionRow, validateWebChatSubmission, WEB_CHAT_SUBMIT_URL } from "./submission.ts"
+import { leaderboardRequest } from "./submit.ts"
 import { WEB_CHAT_SOURCE, UNCALIBRATED_WEB_CHAT_TIER } from "./protocol.ts"
 import type { StoredReview } from "../../domain/types.ts"
 
@@ -151,6 +152,26 @@ describe("web-chat submission", () => {
       "Grok",
     )
     expect(blocked.ok).toBe(false)
+    const local = submissionFromReview({ ...review, doi: "local-file", paperUrl: "" }, review.modelId)
+    expect(local.ok).toBe(false)
+    if (!local.ok) expect(local.error).toContain("no DOI or paper link")
+    const linked = submissionFromReview({ ...review, doi: "local-file", paperUrl: "https://arxiv.org/pdf/2401.00001" }, review.modelId)
+    expect(linked.ok).toBe(true)
+    if (linked.ok) expect(linked.submission.paper.url).toContain("arxiv.org")
+    const xModel = "Grok on x.com · Auto (web chat, uncalibrated)"
+    const onX = submissionFromReview(
+      { ...review, doi: "10.5281/zenodo.999001", paperUrl: "https://zenodo.org/records/999001", modelId: xModel, title: "Quantized Inertia" },
+      xModel,
+    )
+    expect(onX.ok).toBe(true)
+    if (onX.ok) {
+      expect(onX.submission.site).toBe(xModel)
+      expect(onX.submission.model).toBe(xModel)
+      expect(onX.submission.paper.doi).toBe("10.5281/zenodo.999001")
+      expect(publishedStatus("Quantized Inertia", onX.submission, false)).toBe("Published: Quantized Inertia · 10.5281/zenodo.999001 · 70.00")
+    }
+    expect(leaderboardRequest("")).toEqual({ ok: false, error: "This extension build has no leaderboard key, so the score was not sent." })
+    expect(leaderboardRequest(" public-anon ")?.ok).toBe(true)
   })
 
   it("posts uncited scores and an optional global-goals bonus that the server accepts", () => {

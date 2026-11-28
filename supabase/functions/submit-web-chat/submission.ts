@@ -1224,8 +1224,10 @@ function submissionFromReview(review, site) {
   if (described.scoringCheck.mismatch) {
     return { ok: false, error: "Scoring mismatch, needs re-check. This score stays on this browser until the chat is run again." };
   }
-  const paperKey = review.doi && review.doi !== "local-file" ? review.doi : review.paperUrl || review.doi;
-  if (!paperKey) return { ok: false, error: "Add a DOI or a link before sending this score." };
+  const paperKey = review.doi && review.doi !== "local-file" ? review.doi : review.paperUrl || "";
+  if (!paperKey) {
+    return { ok: false, error: `${review.title || "This score"} has no DOI or paper link, so it was not sent. Paste a Zenodo, DOI, or arXiv link and review again.` };
+  }
   const defended = postedDefended(review.defended);
   const summary = stripChatShareLinks(review.report.summary);
   const submission = {
@@ -1366,6 +1368,12 @@ function postedDefended(defended) {
     }))
   };
 }
+function publishedStatus(title, submission, duplicate) {
+  const paper = submission.paper.doi || submission.paper.url;
+  const score = submission.overallScore.toFixed(2);
+  const lead = duplicate ? "Already on board" : "Published";
+  return `${lead}: ${title} \xB7 ${paper} \xB7 ${score}`;
+}
 function toSubmissionRow(submission) {
   const paperKey = submission.paper.doi || submission.paper.url;
   const id = submissionId(paperKey, submission.site, submission.model);
@@ -1450,6 +1458,7 @@ export {
   WEB_CHAT_SUBMIT_URL,
   decideWebChatSubmission,
   dedupeKey,
+  publishedStatus,
   submissionFromReview,
   submissionId,
   submissionToStored,
