@@ -77,7 +77,7 @@ export function renderStaticPaperText(record: {
   const doi = (record.doi ?? "").replace(/^https?:\/\/doi\.org\//i, "")
   const concept = (record.conceptDoi ?? "").replace(/^https?:\/\/doi\.org\//i, "")
   const authors = record.authors?.filter(Boolean) ?? []
-  const files = record.files ?? []
+  const files = (record.files ?? []).filter((file) => file.text.trim())
   const lines = [
     scrub(record.title ?? "").trim() || "Untitled record",
     `Authors: ${authors.join("; ") || "not listed"}`,
@@ -89,5 +89,6 @@ export function renderStaticPaperText(record: {
     scrub(record.description ?? ""),
     ...files.map((file) => `\n## ${file.filename}\n${scrub(file.text)}`),
   ]
+  if (!files.length) lines.push("", "Full text unavailable. No file text was copied onto this page.")
   return `${lines.filter((line) => line !== "").join("\n")}\n`
 }

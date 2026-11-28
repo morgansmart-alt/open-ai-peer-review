@@ -1,6 +1,16 @@
 import type { ProviderAdapter } from "../../../extension/adapters/index.ts"
 import { planDelivery, type DeliveryStep } from "./deliver.ts"
-import { choosePaperTextUrl, couldNotReadPaper, recordIdFromPaperTextUrl, TEXT_PAGE_NOTE, textPageHasPaper, textPageUntrusted } from "./paperText.ts"
+import {
+  choosePaperTextPage,
+  couldNotReadPaper,
+  FULL_TEXT_PANEL_NOTE,
+  pageSaysFullTextUnavailable,
+  recordIdFromPaperTextUrl,
+  TEXT_PAGE_NOTE,
+  textPageHasPaper,
+  textPageUntrusted,
+  withFullTextUnavailable,
+} from "./paperText.ts"
 import {
   assistantMessages,
   assistantSnapshot,
@@ -416,12 +426,16 @@ export async function sendFollowUp(
   return sendStep(doc, provider, step, hooks, label, expect)
 }
 
-async function pageIsLive(url: string, hooks: TurnHooks): Promise<boolean> {
+async function loadedPage(
+  url: string,
+  load: (url: string) => Promise<{ status: number; body: string }>,
+): Promise<{ url: string; unavailable: boolean } | null> {
   try {
-    const loaded = hooks.loadTextPage ? await hooks.loadTextPage(url) : await fetch(url).then(async (response) => ({ status: response.status, body: await response.text() }))
-    return textPageHasPaper(loaded.status, loaded.body)
+    const loaded = await load(url)
+    if (!textPageHasPaper(loaded.status, loaded.body)) return null
+    return { url, unavailable: pageSaysFullTextUnavailable(loaded.body) }
   } catch {
-    return false
+    return null
   }
 }
 
@@ -435,23 +449,32 @@ export async function runTurn(doc: Document, provider: ProviderAdapter, packet: 
     let providerForPlan = provider
     let activePacket = packet
     let notice: string | undefined
+    let fullTextMissing = false
     if (activePacket.textUrl) {
       const id = recordIdFromPaperTextUrl(activePacket.textUrl)
       const load = hooks.loadTextPage ?? ((url: string) => fetch(url).then(async (response) => ({ status: response.status, body: await response.text() })))
-      const chosen = id ? await choosePaperTextUrl(id, load) : (await pageIsLive(activePacket.textUrl, hooks) ? activePacket.textUrl : null)
-      if (!chosen) {
+      const page = id ? await choosePaperTextPage(id, load) : await loadedPage(activePacket.textUrl, load)
+      if (!page) {
         hooks.onProgress?.("The public text page is not available. Sending the paper in the chat instead.")
         const { textUrl: dropped, ...rest } = activePacket
         void dropped
         activePacket = rest
-      } else if (chosen !== activePacket.textUrl) {
-        hooks.onProgress?.("The static text file is not on the site yet. Using the text service instead.")
-        activePacket = { ...activePacket, textUrl: chosen }
+      } else {
+        if (page.url !== activePacket.textUrl) {
+          hooks.onProgress?.("The static text file is not on the site yet. Using the text service instead.")
+        }
+        activePacket = { ...activePacket, textUrl: page.url }
+        fullTextMissing = page.unavailable
       }
     }
     let planned = planDelivery(activePacket, providerForPlan)
     if (planned.warning) hooks.onProgress?.(planned.warning)
     let steps = planned.steps
+    if (fullTextMissing) {
+      notice = FULL_TEXT_PANEL_NOTE
+      hooks.onProgress?.(FULL_TEXT_PANEL_NOTE)
+      steps = steps.map((step) => (step.link ? { ...step, text: withFullTextUnavailable(step.text) } : step))
+    }
     let fellBack = false
     let linkFellBack = false
     let route: "link" | "paste" = activePacket.textUrl ? "link" : "paste"

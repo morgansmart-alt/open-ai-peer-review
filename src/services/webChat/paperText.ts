@@ -2,6 +2,9 @@ import { CAREFUL_REVIEW_ENDING } from "../prompts.ts"
 import type { ZenodoRecord } from "../zenodo.ts"
 import { stripHtml } from "../zenodo.ts"
 
+/** The phrase a metadata-only page and the reviewer prompt share. */
+export const FULL_TEXT_UNAVAILABLE = "Full text unavailable"
+
 export const PAPER_TEXT_ORIGIN = "https://morgansmart-alt.github.io/open-ai-peer-review"
 /** Plain text a chat can fetch. GitHub Pages serves the app shell with HTTP 404. */
 export const PAPER_TEXT_FUNCTION = "https://lotswxboafsenmszijpf.supabase.co/functions/v1/paper-text"
@@ -50,19 +53,28 @@ export function recordIdFromPaperTextUrl(url: string): string | null {
   }
 }
 
-export async function choosePaperTextUrl(
+export async function choosePaperTextPage(
   recordId: string,
   load: (url: string) => Promise<{ status: number; body: string }>,
-): Promise<string | null> {
+): Promise<{ url: string; unavailable: boolean } | null> {
   for (const url of paperTextCandidates(recordId)) {
     try {
       const loaded = await load(url)
-      if (textPageHasPaper(loaded.status, loaded.body)) return url
+      if (textPageHasPaper(loaded.status, loaded.body)) {
+        return { url, unavailable: pageSaysFullTextUnavailable(loaded.body) }
+      }
     } catch {
       // The next address is tried.
     }
   }
   return null
+}
+
+export async function choosePaperTextUrl(
+  recordId: string,
+  load: (url: string) => Promise<{ status: number; body: string }>,
+): Promise<string | null> {
+  return (await choosePaperTextPage(recordId, load))?.url ?? null
 }
 
 export function paperTextRecordIdFromPath(pathname: string): string | null {
@@ -107,22 +119,27 @@ function scrub(text: string): string {
 export function formatPaperText(
   record: ZenodoRecord,
   documents: { filename: string; text: string }[],
+  unavailable = "",
 ): string {
   const authors = record.creators.map((creator) => creator.name.trim()).filter(Boolean)
   const versionId = paperTextRecordId(record)
   const versionUrl = versionId ? `https://zenodo.org/records/${versionId}` : ""
   const filesOpen = record.access.files === "open" || record.access.files === ""
-  const extracted = documents
-    .filter((document) => document.text.trim())
-    .map((document) => `## ${document.filename}\n${scrub(document.text.trim())}`)
+  const extracted = filesOpen
+    ? documents
+        .filter((document) => document.text.trim())
+        .map((document) => `## ${document.filename}\n${scrub(document.text.trim())}`)
+    : []
   let body = extracted.join("\n\n")
-  if (!body) body = scrub(stripHtml(record.description))
-  if (!filesOpen) {
+  if (!body) {
     const names = record.files.map((file) => file.key).filter(Boolean)
+    const reason = !filesOpen
+      ? "The files on this record are not public. This page does not include them."
+      : unavailable.trim() || "No file text was copied onto this page."
     body = [
       scrub(stripHtml(record.description)),
       names.length ? `Public file names only: ${names.join(", ")}.` : "",
-      "The files on this record are not public. This page does not include them.",
+      `${FULL_TEXT_UNAVAILABLE}. ${reason}`,
     ]
       .filter(Boolean)
       .join("\n\n")
@@ -135,6 +152,17 @@ export function formatPaperText(
   if (conceptDoi) header.push(`Concept DOI: ${conceptDoi}`)
   header.push("", body)
   return header.join("\n")
+}
+
+/** Shown on the saved row when the page the model opens is not the paper. */
+export const FULL_TEXT_PANEL_NOTE = "Full text unavailable. The public page is record metadata, so this review must not treat it as the paper."
+
+export function pageSaysFullTextUnavailable(body: string): boolean {
+  return new RegExp(`(?:^|\\n)${FULL_TEXT_UNAVAILABLE}\\.`, "m").test(body)
+}
+
+export function withFullTextUnavailable(prompt: string): string {
+  return `${FULL_TEXT_PANEL_NOTE}\n\n${prompt}`
 }
 
 /**
