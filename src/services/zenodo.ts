@@ -83,10 +83,10 @@ export interface ParsedRef {
 export function parseRecordRef(input: string): ParsedRef | null {
   const raw = input.trim().replace(/[)>.,]+$/, "")
   if (!raw) return null
-  const fromUrl = raw.match(/zenodo\.org\/(?:records|record|doi)\/(\d+)/i)
-  if (fromUrl?.[1]) return { recordId: fromUrl[1], doi: `10.5281/zenodo.${fromUrl[1]}` }
   const fromDoi = raw.match(/10\.5281\/zenodo\.(\d+)/i)
   if (fromDoi?.[1]) return { recordId: fromDoi[1], doi: `10.5281/zenodo.${fromDoi[1]}` }
+  const fromUrl = raw.match(/zenodo\.org\/(?:records|record|doi)\/(\d+)/i)
+  if (fromUrl?.[1]) return { recordId: fromUrl[1], doi: `10.5281/zenodo.${fromUrl[1]}` }
   const short = raw.match(/^zenodo\.(\d+)$/i)
   if (short?.[1]) return { recordId: short[1] }
   if (/^\d{5,}$/.test(raw)) return { recordId: raw }
