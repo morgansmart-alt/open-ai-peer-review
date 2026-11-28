@@ -3,6 +3,7 @@ import { planDelivery, type DeliveryStep } from "./deliver.ts"
 import {
   choosePaperTextPage,
   couldNotReadPaper,
+  fullTextIncludedLine,
   fullTextPanelLine,
   linkReadingPrompt,
   paperForReviewer,
@@ -48,6 +49,8 @@ export interface TurnHooks {
   sleep(ms: number): Promise<void>
   aborted(): boolean
   onProgress?(message: string, meta?: { step: string; status: string; detail?: string }): void
+  /** The message box has been read back. `actual` is what it holds. */
+  onVerified?(info: { label: string; actual: string; pending: string; chunk: string }): void
   pollMs?: number
   stableMs?: number
   stepTimeoutMs?: number
@@ -378,6 +381,7 @@ async function sendComposerText(
     const placed = await confirmComposerText(composer, pending, { sleep: (ms) => hooks.sleep(ms), pollMs: Math.min(hooks.pollMs ?? 50, 50), timeoutMs: 2_000 })
     const verified = `Insert method ${placed.method}. Box holds ${placed.actual.length} raw, ${foldComposerText(placed.actual).length} normalised. Message has ${pending.length} raw, ${foldComposerText(pending).length} normalised.`
     note(hooks, label, placed.ok ? "verified" : "error", verified, verified)
+    if (placed.ok) hooks.onVerified?.({ label, actual: placed.actual, pending, chunk: placed.chunk })
     if (!placed.ok) {
       throw new TurnError(
         "insert-miss",
@@ -480,6 +484,15 @@ export async function runTurn(doc: Document, provider: ProviderAdapter, packet: 
         fetchedPaper = page.body
       }
     }
+    const reportSent = (info: { label: string; actual: string; pending: string; chunk: string }) => {
+      if (info.label !== "public text link" || !fetchedPaper || fullTextMissing) return
+      const sourceFold = foldComposerText(paperForReviewer(fetchedPaper))
+      const sentFold = foldComposerText(info.chunk)
+      const capped = sourceFold.length > 0 && !sentFold.includes(sourceFold)
+      notice = fullTextIncludedLine(fetchedPaper.length, foldComposerText(info.actual).length, capped)
+      hooks.onProgress?.(notice)
+    }
+    const sendingHooks = { ...hooks, onVerified: reportSent }
     let planned = planDelivery(activePacket, providerForPlan)
     if (planned.warning) hooks.onProgress?.(planned.warning)
     let steps = planned.steps
@@ -504,7 +517,7 @@ export async function runTurn(doc: Document, provider: ProviderAdapter, packet: 
       const label = step.link ? "public text link" : `part ${step.index} of ${step.total}`
       hooks.onProgress?.(`Sending part ${step.index} of ${step.total} on ${provider.label}. Stay on this tab.`)
       try {
-        const reply = await sendStep(doc, provider, step, hooks, label)
+        const reply = await sendStep(doc, provider, step, sendingHooks, label)
         if (step.link && !linkFellBack && (couldNotReadPaper(reply) || textPageUntrusted(reply))) {
           linkFellBack = true
           route = "paste"

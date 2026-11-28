@@ -42,7 +42,7 @@ export function WebChatPanel({
       </p>
       <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs text-ink-soft">
         <li>Download release/air-web-chat.zip, unzip it, and in chrome://extensions turn on Developer mode and choose Load unpacked. The plain steps are in INSTALL.md. No terminal.</li>
-        <li>Click the AIR icon. Sign in to a chat, pick a PDF, and click Review my paper. The score is labelled free web-chat, uncalibrated. Send to Global Good Idea leaderboard posts it only when you click that button.</li>
+        <li>Click the AIR icon. Sign in to a chat, pick a PDF, and click Review my paper. The score is labelled free web-chat, uncalibrated. Send selected and Send to Global Good Idea leaderboard post the same score. A global goals score goes with that post as a bonus and is not part of the overall. The row then says Published.</li>
         <li>From this page you can still hand the extension a Zenodo record, or import a JSON copy with the button below.</li>
       </ol>
       <label className="mt-3 block text-xs text-ink-soft">

@@ -17,7 +17,7 @@ import { planDelivery, splitText } from "./webChat/deliver.ts"
 import { diagnose, queryDeep } from "./webChat/dom.ts"
 import { buildWebChatPacket, WEB_CHAT_FILE_CHARS } from "./webChat/packet.ts"
 import { originAllowed, validatePacket, WEB_CHAT_LABEL } from "./webChat/protocol.ts"
-import { formatStepLog, recordStep, renderReviewApp, type ReviewActions, type ReviewModel } from "./webChat/reviewView.ts"
+import { formatStepLog, globalGoalsSendNote, recordStep, renderReviewApp, type ReviewActions, type ReviewModel } from "./webChat/reviewView.ts"
 import { runTurn } from "./webChat/runTurn.ts"
 import { exportBundle, packetForLocalPaper, parseExport, publishedResultKey, rememberedSendState, resultCard, sourceRecordFromText, storedLocalReview, textFromPdfDocument } from "./webChat/standalone.ts"
 
@@ -519,6 +519,37 @@ describe("extension panel", () => {
     expect((document.getElementById("send-again") as HTMLButtonElement).disabled).toBe(true)
     expect((document.getElementById("send-open") as HTMLButtonElement).disabled).toBe(true)
     expect(app.textContent).toContain("Local file has no DOI or paper link, so it was not sent.")
+    expect(globalGoalsSendNote([{ criterionId: "impact" }, { criterionId: "global-goals" }])).toBe("Global goals bonus included")
+    expect(globalGoalsSendNote([{ criterionId: "impact" }])).toBe("")
+    renderReviewApp(
+      app,
+      model({
+        result: {
+          title: "Open note",
+          overall: 70,
+          recommendation: "encourage",
+          summary: "A public note.",
+          mismatch: null,
+          label: "free web-chat, uncalibrated",
+          notice: "Full text included (27,865 of 46,732 chars from PDF, capped)",
+        },
+        history: [
+          {
+            id: "sent",
+            title: "Open note",
+            overall: 70,
+            sendState: "published",
+            sendNote: "Published: Open note · 10.5281/zenodo.1 · 70.00 · Global goals bonus included",
+          },
+        ],
+      }),
+      actions(),
+    )
+    const included = document.getElementById("text-page-note")
+    expect(included?.textContent).toBe("Full text included (27,865 of 46,732 chars from PDF, capped)")
+    expect(included?.className).toBe("note")
+    expect((document.getElementById("send-sent") as HTMLButtonElement).textContent).toBe("Published")
+    expect(app.textContent).toContain("Global goals bonus included")
 
     const packet = packetForLocalPaper({
       requestId: "web-local",

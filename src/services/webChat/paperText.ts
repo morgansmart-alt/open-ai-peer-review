@@ -190,15 +190,26 @@ export function pdfBodyChars(page: string): number {
   return count
 }
 
-/** The panel line for a fetched paper-text page. */
+/** The panel line before the message box is read back. The sent line replaces it. */
 export function fullTextPanelLine(body: string): string {
   const pdf = pdfBodyChars(body)
   const closed = pageSaysFilesClosed(body) || pageSaysFullTextUnavailable(body)
-  if (pdf > 0 && !pageSaysFilesClosed(body)) return `Full text included (${pdf} chars from PDF)`
+  if (pdf > 0 && !pageSaysFilesClosed(body)) return `Full text included (${pdf.toLocaleString("en-US")} chars from PDF)`
   if (closed) return "Full text unavailable"
   const chars = body.trim().length
-  if (chars >= 80) return `Full text included (${chars} chars)`
+  if (chars >= 80) return `Full text included (${chars.toLocaleString("en-US")} chars)`
   return "Full text unavailable"
+}
+
+/**
+ * What the reviewer actually received.
+ * `sentNormalised` is the message in the box with whitespace removed, the same figure as the send log.
+ * `sourceChars` is the paper-text page. When the box held less than that page, the line says capped.
+ */
+export function fullTextIncludedLine(sourceChars: number, sentNormalised: number, capped: boolean): string {
+  const sent = sentNormalised.toLocaleString("en-US")
+  if (!capped) return `Full text included (${sourceChars.toLocaleString("en-US")} chars from PDF)`
+  return `Full text included (${sent} of ${sourceChars.toLocaleString("en-US")} chars from PDF, capped)`
 }
 
 export function withFullTextUnavailable(prompt: string): string {

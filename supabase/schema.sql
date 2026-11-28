@@ -694,3 +694,41 @@ $$;
 
 revoke all on function air_retag_human_profile(text, text, text) from public;
 grant execute on function air_retag_human_profile(text, text, text) to anon, authenticated;
+
+-- Documentation of the live web-chat table. This file is not a migration runner.
+-- The statements match supabase/migrations/20261122100000_web_chat_submissions.sql,
+-- 20261124220000_web_chat_decimal_scores.sql, and 20261124133000_air_feedback.sql.
+-- Do not execute this block to alter an existing database. Anon may select.
+-- Anon may not insert. submit-web-chat inserts with the service role.
+-- Scores live in payload. global-goals may be one of those scores. It is a bonus
+-- and is not the blind_score. blind_score and defended_score are numeric(5,2).
+-- air_feedback is optional. The function stores feedback inside payload.
+
+create table if not exists air_web_chat (
+  id text primary key,
+  doi text not null,
+  site text not null,
+  model text not null,
+  title text not null,
+  paper_url text not null default '',
+  blind_score numeric(5,2) not null,
+  defended_score numeric(5,2),
+  payload jsonb not null,
+  air_feedback jsonb,
+  created_at timestamptz not null default now(),
+  constraint air_web_chat_payload_size check (pg_column_size(payload) < 65536),
+  constraint air_web_chat_one_score unique (doi, site, model)
+);
+
+create index if not exists air_web_chat_created_idx on air_web_chat (created_at desc);
+
+alter table air_web_chat enable row level security;
+
+revoke all on air_web_chat from public, anon, authenticated;
+grant select on air_web_chat to anon, authenticated;
+
+drop policy if exists air_web_chat_read on air_web_chat;
+create policy air_web_chat_read on air_web_chat
+  for select
+  to anon, authenticated
+  using (true);
