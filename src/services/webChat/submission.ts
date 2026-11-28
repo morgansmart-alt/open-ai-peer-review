@@ -12,7 +12,7 @@ export const AIR_SITE_URL = "https://morgansmart-alt.github.io/open-ai-peer-revi
 /** Scores are posted straight to the Supabase function. GitHub Pages does not receive them. */
 export const WEB_CHAT_SUBMIT_URL = "https://lotswxboafsenmszijpf.supabase.co/functions/v1/submit-web-chat"
 
-const TOP_KEYS = new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback", "analysis"])
+const TOP_KEYS = new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback", "analysis", "defenceAnalysis"])
 /** The prose before the score sheet. The payload is one jsonb column, so this needs no new SQL. */
 export const ANALYSIS_LIMIT = 12_000
 const DEFENDED_KEYS = new Set(["label", "overallScore", "recommendation", "summary", "scores"])
@@ -53,6 +53,8 @@ export interface WebChatSubmission {
   airFeedback?: AirFeedback
   /** Plain-prose analysis written before the fenced score sheet. Not used in the score. */
   analysis?: string
+  /** Prose argument before the after-defence score sheet. Not used in the score. */
+  defenceAnalysis?: string
 }
 
 export interface SubmissionRow {
@@ -164,6 +166,7 @@ export function submissionFromReview(review: StoredReview, site: string): { ok: 
     ...(defended ? { defended } : {}),
     ...(review.report.airFeedback ? { airFeedback: review.report.airFeedback } : {}),
     ...(review.analysis ? { analysis: stripChatShareLinks(review.analysis).slice(0, ANALYSIS_LIMIT) } : {}),
+    ...(review.defenceAnalysis ? { defenceAnalysis: stripChatShareLinks(review.defenceAnalysis).slice(0, ANALYSIS_LIMIT) } : {}),
   }
   const checked = validateWebChatSubmission(submission, criteria)
   if (checked.ok) return { ok: true, submission: checked.submission }
@@ -232,6 +235,7 @@ export function validateWebChatSubmission(
   if (!defended.ok) return defended
   const airFeedback = parseAirFeedback(input.airFeedback)
   const analysis = stripChatShareLinks(clip(input.analysis, ANALYSIS_LIMIT))
+  const defenceAnalysis = stripChatShareLinks(clip(input.defenceAnalysis, ANALYSIS_LIMIT))
   return {
     ok: true,
     submission: {
@@ -250,6 +254,7 @@ export function validateWebChatSubmission(
       ...(defended.score ? { defended: defended.score } : {}),
       ...(airFeedback ? { airFeedback } : {}),
       ...(analysis ? { analysis } : {}),
+      ...(defenceAnalysis ? { defenceAnalysis } : {}),
     },
   }
 }
@@ -360,6 +365,7 @@ export function submissionToStored(payload: WebChatSubmission & { id?: string })
     source: WEB_CHAT_SOURCE,
     paperUrl: payload.paper.url,
     ...(payload.analysis ? { analysis: payload.analysis } : {}),
+    ...(payload.defenceAnalysis ? { defenceAnalysis: payload.defenceAnalysis } : {}),
     defended: payload.defended,
     report: {
       summary: payload.summary,

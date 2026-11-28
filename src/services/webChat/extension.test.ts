@@ -9,7 +9,7 @@ import { ackReply, assistantText, attachmentReady, chooseReplyBlock, clickElemen
 import { buildWebChatPacket } from "./packet.ts"
 import { REPLY_STABLE_MS, REPLY_TIMEOUT_MS, replySettled, runTurn, sendFollowUp } from "./runTurn.ts"
 import { acceptWebChatResult } from "./accept.ts"
-import { parseModelJson, settleChatJson } from "../jsonText.ts"
+import { parseModelJson, reviewAnalysis, settleChatJson } from "../jsonText.ts"
 import { extensionEnvelope, relayFromProvider, relayTargets, type RelayJob } from "./relay.ts"
 import type { ZenodoRecord } from "../zenodo.ts"
 
@@ -950,6 +950,38 @@ describe("live chat composers", () => {
     expect(live.text).not.toContain("physics.nist.gov")
     expect(live.text.length).toBeGreaterThan(40)
     expect(reviewJsonBlock(live.text)).toContain("84")
+  })
+
+  it("keeps the prose when X renders the score sheet as a code block", () => {
+    const prose = "Impact is limited because the record states the yield and names the limit a reader can check. Feasibility follows from the method section."
+    const summary = "The record states a narrow claim and shows the weighing steps that support it, with the season limit written in the text."
+    const sheet = JSON.stringify({
+      summary,
+      overallScore: 56.9,
+      recommendation: "revise",
+      scores: [{ criterionId: "impact", score: 56, rationale: "The yield is stated.", citations: [{ quote: "1.8 litres", location: "results" }] }],
+    })
+    document.body.innerHTML = `<div class="group flex flex-col items-start">
+      <button><span>Thought for 40s</span></button>
+      <div class="wrap-break-word">
+        <p>${prose.slice(0, 90)}</p>
+        <p>${prose.slice(91)}</p>
+        <div class="whitespace-normal"><pre><code>${sheet}</code></pre></div>
+      </div>
+    </div>`
+    const live = liveTurnText(document, "grok-x", document.createElement("textarea"))
+    expect(live.text).toContain("Impact is limited")
+    expect(live.text).toContain("```json")
+    expect(live.text).toContain('"overallScore":56.9')
+    expect(live.text).not.toContain("Thought for 40s")
+    const analysis = reviewAnalysis(live.text)
+    expect(analysis).toContain("Impact is limited")
+    expect(analysis).toContain("method section")
+    expect(analysis).not.toContain("overallScore")
+    expect(analysis.length).toBeGreaterThan(40)
+    const parsed = parseModelJson(live.text)
+    expect(parsed.ok).toBe(true)
+    if (parsed.ok) expect(parsed.value).toMatchObject({ overallScore: 56.9 })
   })
 
   it("reads the X grok turn, not the user turn, and accepts a string overallScore", () => {

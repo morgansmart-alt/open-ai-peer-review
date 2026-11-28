@@ -340,8 +340,10 @@ async function finish(raw: string, defendedRaw: string | null, transcript: { rou
     text: pendingPaper?.text,
   })
   stored.defenceTranscript = transcript
-  const analysis = reviewAnalysis(raw)
-  if (analysis) stored.analysis = analysis.slice(0, 12_000)
+  const analysis = reviewAnalysis(raw).slice(0, 12_000)
+  if (analysis) stored.analysis = analysis
+  const defenceAnalysis = defendedRaw ? reviewAnalysis(defendedRaw).slice(0, 12_000) : ""
+  if (defenceAnalysis) stored.defenceAnalysis = defenceAnalysis
   if (defended?.ok) {
     stored.defended = defended.defended
     if (defended.partial) stored.defenceNote = "The after-defence reply named an overall score without a full score sheet. That number is shown."

@@ -501,13 +501,26 @@ function skipChip(el: Element): boolean {
   return false
 }
 
-/** Visible reply text with citation anchors and chrome buttons left out. */
+function isRenderedCodeBlock(el: Element): boolean {
+  if (el.tagName === "PRE") return true
+  const cls = el.getAttribute("class") ?? ""
+  return el.tagName === "CODE" && /language-|hljs|code-block/.test(cls)
+}
+
+/** Visible reply text with citation anchors and chrome buttons left out. A rendered code block is written back as a fenced json block. */
 export function textWithoutChips(root: Element): string {
   const chunks: string[] = []
   const walk = (node: Node): void => {
     if (node instanceof Element) {
       if (skipChip(node)) return
+      if (node.tagName === "CODE" && node.parentElement?.tagName === "PRE") return
+      if (isRenderedCodeBlock(node)) {
+        const code = (node.textContent ?? "").trim()
+        if (code) chunks.push(`\n\`\`\`json\n${code}\n\`\`\`\n`)
+        return
+      }
       for (const child of node.childNodes) walk(child)
+      if (/^(P|DIV|LI|H[1-6]|BR|TR|BLOCKQUOTE)$/.test(node.tagName)) chunks.push("\n")
       return
     }
     if (node.nodeType === Node.TEXT_NODE) {
@@ -535,7 +548,7 @@ function grokXTurn(doc: ParentNode, composer: Element | null): { text: string; c
   })
   const last = turns[turns.length - 1]
   if (!last) return { text: "", candidate: "" }
-  const markdown = last.querySelector(".whitespace-normal") ?? last.querySelector(".wrap-break-word") ?? last
+  const markdown = last.querySelector(".wrap-break-word") ?? last.querySelector(".whitespace-normal") ?? last
   return { text: textWithoutChips(markdown), candidate: "div.group" }
 }
 

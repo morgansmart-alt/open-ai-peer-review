@@ -618,13 +618,39 @@ export function mergeReviewFields(base: unknown, patch: unknown): unknown {
   return normaliseScoreShape(left)
 }
 
-/** Strict JSON first. A repair pass covers trailing commas, missing commas, and similar damage. */
-/** Prose written before the last fenced score sheet. Empty when the reply has no fence. */
+function looksLikeSheet(value: Record<string, unknown>): boolean {
+  const summary = typeof value.summary === "string" && value.summary.trim().length >= 40
+  const scores = Array.isArray(value.scores) && value.scores.length > 0
+  const overall = numericScore(value.overallScore) != null
+  return (summary && scores) || (overall && scores) || (summary && overall)
+}
+
+/** Start of the last score sheet, including one whose markdown fences were rendered away. */
+function lastSheetStart(raw: string): number {
+  let best = -1
+  for (let index = 0; index < raw.length; index += 1) {
+    if (raw[index] !== "{") continue
+    const end = matchingBrace(raw, index)
+    if (end < 0) continue
+    const parsed = parseSlice(raw.slice(index, end + 1))
+    if (parsed && isRecord(parsed.value) && looksLikeSheet(parsed.value)) best = index
+    index = end
+  }
+  return best
+}
+
+/**
+ * Prose written before the score sheet.
+ * A rendered chat has no ``` markers: the sheet is the last JSON object, and the words before it are the analysis.
+ */
 export function reviewAnalysis(raw: string): string {
   const marks = [...raw.matchAll(/```(?:json)?\s*[\s\S]*?```/gi)]
   const last = marks[marks.length - 1]
-  if (!last || last.index == null) return ""
-  return raw.slice(0, last.index).replace(/\s+$/g, "").trim()
+  const fenceAt = last?.index ?? -1
+  const sheetAt = lastSheetStart(raw)
+  const cut = fenceAt >= 0 && (sheetAt < 0 || fenceAt <= sheetAt) ? fenceAt : sheetAt
+  if (cut <= 0) return ""
+  return raw.slice(0, cut).replace(/\s+$/g, "").trim()
 }
 
 export function parseModelJson(raw: string, criterionIds?: readonly string[]): ParsedModelJson | { ok: false; error: string } {
@@ -723,7 +749,7 @@ export async function settleChatJson(
       const analysis = reviewAnalysis(raw)
       if (analysis.length >= 40) log(`Peer analysis (${analysis.length} characters): ${analysis.slice(0, 2000)}`)
       if (first.repaired) log("Repaired the chat's JSON before scoring.")
-      const whole = !first.repaired && parseModelJson(raw, criterionIds).ok ? raw : first.text
+      const whole = parseModelJson(raw, criterionIds).ok ? raw : first.text
       return { text: whole, repaired: first.repaired, reasked: false }
     }
     const problem = checked.errors.join(" ")
