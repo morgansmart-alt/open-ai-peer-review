@@ -212,6 +212,7 @@ describe("validateReport", () => {
     const after = `${JSON.stringify(sheet(70))}\nAnalysis. I read the whole paper and the yield is in the results section, with the limit named for a reader.`
     expect(reviewAnalysis(after)).toContain("I read the whole paper")
     expect(reviewAnalysis(after)).not.toContain("overallScore")
+    expect(reviewAnalysis("OK\n\nOK\n\nThe paper states the yield and the limit a reader can check in the results.\n" + JSON.stringify(sheet(70)))).toMatch(/^The paper states/)
     const settled = await settleChatJson(`${prose}\n{not json`, async () => JSON.stringify(sheet(70)), () => undefined)
     expect(settled.reasked).toBe(true)
     expect(settled.text).toContain("I read the whole paper")

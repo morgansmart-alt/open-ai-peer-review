@@ -2598,7 +2598,16 @@ ${output}
       if (end >= sheetAt) text2 = `${text2.slice(0, sheetAt)}
 ${text2.slice(end + 1)}`;
     }
-    return text2.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    return stripLeadingPartAcks(text2.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n")).trim();
+  }
+  function stripLeadingPartAcks(text2) {
+    let rest = text2.trimStart();
+    let previous = "";
+    while (rest !== previous) {
+      previous = rest;
+      rest = rest.replace(/^(?:ok|okay)[.!]?(?:\s+\d+\s*\/\s*\d+)?\s*(?:\n+|$)/i, "").replace(/^\d+\s*\/\s*\d+\s+(?:ok|okay)[.!]?\s*(?:\n+|$)/i, "");
+    }
+    return rest;
   }
   function parseModelJson(raw, criterionIds) {
     if (raw.includes("```")) {
@@ -3480,6 +3489,15 @@ ${text2.slice(end + 1)}`;
   function isProgress(entry) {
     return entry.status === "reading" || entry.status === "waiting";
   }
+  function patchReviewProgress(root2, status2, stepLog2) {
+    const statusEl = root2.querySelector("#status");
+    const log = root2.querySelector("#step-log");
+    if (!(statusEl instanceof HTMLElement) || !(log instanceof HTMLElement)) return false;
+    statusEl.textContent = status2;
+    log.replaceChildren();
+    for (const entry of stepLog2) el(log, "li", formatStepLog([entry]));
+    return true;
+  }
   function formatStepLog(log) {
     return log.map((entry) => `${entry.at} \xB7 ${entry.step} \xB7 ${entry.status}${entry.detail ? ` \xB7 ${entry.detail}` : ""}`).join("\n");
   }
@@ -3759,7 +3777,7 @@ ${text2.slice(end + 1)}`;
         send2.disabled = Boolean(item.mismatch) || Boolean(item.sendState) || model.busy;
         if (!send2.disabled) send2.addEventListener("click", () => actions.onSend(item.id));
       }
-      const sendSelected = el(form, "button", "Send selected", "quiet");
+      const sendSelected = el(form, "button", model.confirmThin ? "Send selected anyway" : "Send selected", "quiet");
       sendSelected.type = "button";
       sendSelected.id = "send-selected";
       sendSelected.disabled = model.busy || !model.history.some((item) => item.selected && !item.mismatch);
@@ -3853,6 +3871,38 @@ ${text2.slice(end + 1)}`;
     return `Rounds ${input.completed}/${input.requested} \xB7 blind ${summaryScore(input.blind)} \xB7 ${after}`;
   }
 
+  // src/services/webChat/pdfPaper.ts
+  var PDF_BYTE_CAP = 25 * 1024 * 1024;
+  function isOpenLicence(license) {
+    const value = license.trim().toLowerCase();
+    if (!value) return false;
+    if (value.includes("creativecommons.org/licenses/by")) return true;
+    if (value.includes("creativecommons.org/publicdomain/zero") || value.includes("/publicdomain/zero")) return true;
+    const path = value.replace(/^https?:\/\/(?:dx\.)?doi\.org\//, "").replace(/^https?:\/\/creativecommons\.org\/(?:licenses|publicdomain)\//, "").replace(/\/legalcode(?:\.[a-z0-9]+)?$/, "").replace(/[_\s]+/g, "-");
+    if (/^cc-?by(?:-|$)/.test(path)) return true;
+    if (/^cc-?0(?:-|$)/.test(path) || path.startsWith("cc-zero") || path === "cc0") return true;
+    if (path === "zero" || path.startsWith("zero/") || path === "public-domain" || path === "pd") return true;
+    return false;
+  }
+  function openLicenceFromCrossref(work) {
+    for (const item of work.license ?? []) {
+      const url = item.URL ?? "";
+      if (isOpenLicence(url)) return url;
+    }
+    return "";
+  }
+  function pdfLinkFromCrossref(work) {
+    for (const item of work.link ?? []) {
+      const type = (item["content-type"] ?? "").toLowerCase();
+      const url = item.URL ?? "";
+      if (type.includes("pdf") && url.startsWith("https://")) return url;
+    }
+    return "";
+  }
+  function crossrefAuthors(work) {
+    return (work.author ?? []).map((person) => person.name || [person.given, person.family].filter(Boolean).join(" ")).filter(Boolean).join("; ");
+  }
+
   // src/services/webChat/publication.ts
   function normalizePublicationLink(value) {
     return value.trim().replace(/^(?:https?:\/\/)+/i, "https://");
@@ -3932,11 +3982,66 @@ ${text2.slice(end + 1)}`;
       return { title: filenameFrom(ref.pdfUrl), authors: [], doi: "", url: ref.pdfUrl, pdfUrl: ref.pdfUrl, filename: filenameFrom(ref.pdfUrl) };
     }
     const landed = await fetcher(ref.url, { redirect: "follow" });
-    if (!landed.ok && landed.status !== 302 && landed.status !== 301) throw new Error(`doi.org returned ${landed.status}.`);
     const finalUrl = landed.url || ref.url;
     const next = classifyPublication(finalUrl);
-    if (next.kind === "doi") throw new Error("That DOI did not lead to a Zenodo record, an arXiv paper, or a PDF.");
-    return resolvePublication(finalUrl, fetcher);
+    if (next.kind !== "doi" && next.kind !== "unknown" && (landed.ok || landed.status === 302 || landed.status === 301)) {
+      return resolvePublication(finalUrl, fetcher);
+    }
+    return openAccessPreview(ref.doi, fetcher);
+  }
+  function previewFromCrossref(doi, work) {
+    const title = work.title?.[0]?.replace(/\s+/g, " ").trim() || doi;
+    const authors = crossrefAuthors(work).split("; ").filter(Boolean);
+    const licence = openLicenceFromCrossref(work);
+    const pdf = isOpenLicence(licence) ? pdfLinkFromCrossref(work) : "";
+    const abstractText = stripHtml(work.abstract ?? "").replace(/\s+/g, " ").trim();
+    const url = work.URL || `https://doi.org/${doi}`;
+    if (!pdf && !abstractText) {
+      throw new Error("That DOI has no open PDF and no abstract AIR can read.");
+    }
+    return {
+      title,
+      authors,
+      doi,
+      url,
+      pdfUrl: pdf,
+      filename: pdf ? "paper.pdf" : "abstract.txt",
+      ...abstractText ? { abstractText } : {},
+      ...!pdf ? { note: "Full text was not found. The review will use the abstract only." } : {}
+    };
+  }
+  async function openAccessPreview(doi, fetcher) {
+    const crossref = await fetcher(`https://api.crossref.org/works/${encodeURIComponent(doi)}`);
+    if (crossref.ok) {
+      const payload = await crossref.json();
+      if (payload.message) {
+        try {
+          return previewFromCrossref(doi, payload.message);
+        } catch {
+        }
+      }
+    }
+    const datacite = await fetcher(`https://api.datacite.org/dois/${encodeURIComponent(doi)}`);
+    if (datacite.ok) {
+      const payload = await datacite.json();
+      const attributes = payload.data?.attributes;
+      const title = attributes?.titles?.[0]?.title || doi;
+      const authors = (attributes?.creators ?? []).map((creator) => creator.name || "").filter(Boolean);
+      const abstractText = (attributes?.descriptions?.[0]?.description || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      if (abstractText || attributes?.url) {
+        return {
+          title,
+          authors,
+          doi,
+          url: attributes?.url || `https://doi.org/${doi}`,
+          pdfUrl: "",
+          filename: "abstract.txt",
+          ...abstractText ? { abstractText } : {},
+          note: "Full text was not found. The review will use the abstract only."
+        };
+      }
+    }
+    throw new Error("That DOI did not lead to a Zenodo record, an arXiv paper, an open PDF, or an abstract.");
   }
 
   // src/services/hash.ts
@@ -4134,6 +4239,13 @@ ${JSON.stringify(report)}`),
       notice: review.sourceNote ?? ""
     };
   }
+  var THIN_EXTRACT_WARNING = "Very little text could be extracted, likely figure/scanned PDF; score may not reflect the work";
+  function thinExtract(text2, pages) {
+    const chars = text2.replace(/\s+/g, "").length;
+    if (chars === 0) return false;
+    if (pages && pages >= 2) return chars / pages < 200;
+    return chars < 2500;
+  }
   async function textFromPdfDocument(pdf, pageCap) {
     const cap = Math.max(1, pageCap);
     const limit = Math.min(pdf.numPages, cap);
@@ -4144,10 +4256,12 @@ ${JSON.stringify(report)}`),
       const line = content.items.map((item) => item.str ?? "").join(" ").replace(/[ \t]{2,}/g, " ").trim();
       if (line) parts.push(line);
     }
-    return {
-      text: parts.join("\n\n"),
-      note: pdf.numPages > cap ? `Read the first ${cap} of ${pdf.numPages} pages.` : void 0
-    };
+    const text2 = parts.join("\n\n");
+    const notes = [
+      pdf.numPages > cap ? `Read the first ${cap} of ${pdf.numPages} pages.` : "",
+      thinExtract(text2, pdf.numPages) ? THIN_EXTRACT_WARNING : ""
+    ].filter(Boolean);
+    return { text: text2, note: notes.join(" ") || void 0 };
   }
 
   // src/services/webChat/submission.ts
@@ -4403,6 +4517,7 @@ ${JSON.stringify(report)}`),
   var error = "";
   var busy = false;
   var stepLog = [];
+  var confirmThin = false;
   var reviews = [];
   var sendState = {};
   var sendNotes = {};
@@ -4459,6 +4574,7 @@ ${JSON.stringify(report)}`),
         status,
         error,
         busy,
+        confirmThin,
         stepLog,
         result: latest ? resultCard(latest) : null,
         history: reviews.map(historyItem)
@@ -4528,14 +4644,17 @@ ${JSON.stringify(report)}`),
           URL.revokeObjectURL(url);
         },
         onToggle(id) {
+          confirmThin = false;
           if (selected.has(id)) selected.delete(id);
           else selected.add(id);
           paint();
         },
         onSend(id) {
+          if (!armThinSend([id])) return;
           void sendScores([id]);
         },
         onSendSelected() {
+          if (!armThinSend([...selected])) return;
           void sendScores([...selected]);
         }
       }
@@ -4588,8 +4707,15 @@ ${JSON.stringify(report)}`),
     }
   }
   async function paperFromPublication(preview) {
+    if (!preview.pdfUrl) {
+      if (preview.abstractText?.trim()) return { filename: preview.filename || "abstract.txt", text: preview.abstractText, note: preview.note };
+      throw new Error(preview.note || "The paper file could not be downloaded. You can save the PDF and choose the file instead.");
+    }
     const response = await fetch(preview.pdfUrl);
-    if (!response.ok) throw new Error("The paper file could not be downloaded. You can save the PDF and choose the file instead.");
+    if (!response.ok) {
+      if (preview.abstractText?.trim()) return { filename: "abstract.txt", text: preview.abstractText, note: preview.note || "The PDF could not be downloaded. The review will use the abstract only." };
+      throw new Error("The paper file could not be downloaded. You can save the PDF and choose the file instead.");
+    }
     const type = response.headers.get("content-type") || "";
     if (/\.pdf$/i.test(preview.filename) || type.includes("pdf")) {
       const bytes = await response.arrayBuffer();
@@ -4648,7 +4774,7 @@ ${JSON.stringify(report)}`),
       if (!busy) return;
       stepLog = rememberStep(message.step || "Review", message.status || "update", message.detail || "");
       status = message.message;
-      paint();
+      if (!patchReviewProgress(root, status, stepLog)) paint();
       return;
     }
     if (message.type === "air-web-chat-error") {
@@ -4701,6 +4827,10 @@ ${JSON.stringify(report)}`),
     const provider = webChatProvider(providerId);
     stored.modelId = webChatModelId(provider?.modelLabel ?? providerId, chatModel);
     const failure = notice?.includes("Defence step failed:") ? notice.slice(notice.indexOf("Defence step failed:")) : "";
+    if (thinExtract(pendingPaper?.text || "") || (notice || "").includes(THIN_EXTRACT_WARNING) || (pendingPaper?.note || "").includes(THIN_EXTRACT_WARNING)) {
+      stored.thinExtract = true;
+      notice = [notice, THIN_EXTRACT_WARNING].filter(Boolean).join(" ");
+    }
     if (notice?.trim()) stored.sourceNote = notice.trim();
     reviews = appendResult(reviews, stored);
     await storageSet(RESULT_STORAGE_KEY, reviews);
@@ -4716,6 +4846,17 @@ ${JSON.stringify(report)}`),
     status = failure ? failure : stopped ? "Stopped. The blind score is kept. The chat tab stays open." : summaryLine;
     error = "";
     paint();
+  }
+  function armThinSend(ids) {
+    const thin = reviews.some((review) => ids.includes(review.id) && review.thinExtract);
+    if (!thin || confirmThin) {
+      confirmThin = false;
+      return true;
+    }
+    confirmThin = true;
+    status = `${THIN_EXTRACT_WARNING} Press Send selected again to send anyway.`;
+    paint();
+    return false;
   }
   async function sendScores(ids) {
     try {

@@ -3,8 +3,13 @@ import { fullTextIncludedLine } from "./paperText.ts"
 /** The background returns at most this much of a page, plus the real length. */
 export const TEXT_PAGE_LIMIT = 400_000
 
-/** One Grok on X message held about 32,000 raw characters. Parts stay under that. */
-export const GROK_X_MESSAGE_CHARS = 32_000
+/**
+ * One Grok on X message. The box has held 32,000 raw characters.
+ * Parts use 80,000, under the 100,000 paste limit, so a long paper is two or three turns instead of four or more.
+ */
+export const GROK_X_MESSAGE_CHARS = 80_000
+/** A paper part that does not get a new OK within this time is sent once more. */
+export const PART_REPLY_TIMEOUT_MS = 90_000
 
 export function packTextPage(full: string, limit = TEXT_PAGE_LIMIT): { body: string; total: number } {
   if (full.length <= limit) return { body: full, total: full.length }

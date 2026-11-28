@@ -1,4 +1,5 @@
-import { normalizeZenodoRecord, parseRecordRef, type ZenodoRecord } from "../zenodo.ts"
+import { normalizeZenodoRecord, parseRecordRef, stripHtml, type ZenodoRecord } from "../zenodo.ts"
+import { crossrefAuthors, isOpenLicence, openLicenceFromCrossref, pdfLinkFromCrossref, type CrossrefWork } from "./pdfPaper.ts"
 
 export interface PublicationPreview {
   title: string
@@ -9,6 +10,10 @@ export interface PublicationPreview {
   filename: string
   /** Full public record when the lookup was Zenodo. The prompt uses its ids. */
   source?: ZenodoRecord
+  /** Used when the DOI has no open PDF. The review can still run on this text. */
+  abstractText?: string
+  /** Shown in the panel. An abstract-only lookup says the full text was not found. */
+  note?: string
 }
 
 export type PublicationRef =
@@ -115,9 +120,67 @@ export async function resolvePublication(input: string, fetcher: FetchLike): Pro
     return { title: filenameFrom(ref.pdfUrl), authors: [], doi: "", url: ref.pdfUrl, pdfUrl: ref.pdfUrl, filename: filenameFrom(ref.pdfUrl) }
   }
   const landed = await fetcher(ref.url, { redirect: "follow" })
-  if (!landed.ok && landed.status !== 302 && landed.status !== 301) throw new Error(`doi.org returned ${landed.status}.`)
   const finalUrl = landed.url || ref.url
   const next = classifyPublication(finalUrl)
-  if (next.kind === "doi") throw new Error("That DOI did not lead to a Zenodo record, an arXiv paper, or a PDF.")
-  return resolvePublication(finalUrl, fetcher)
+  if (next.kind !== "doi" && next.kind !== "unknown" && (landed.ok || landed.status === 302 || landed.status === 301)) {
+    return resolvePublication(finalUrl, fetcher)
+  }
+  return openAccessPreview(ref.doi, fetcher)
+}
+
+export function previewFromCrossref(doi: string, work: CrossrefWork & { abstract?: string; URL?: string }): PublicationPreview {
+  const title = work.title?.[0]?.replace(/\s+/g, " ").trim() || doi
+  const authors = crossrefAuthors(work).split("; ").filter(Boolean)
+  const licence = openLicenceFromCrossref(work)
+  const pdf = isOpenLicence(licence) ? pdfLinkFromCrossref(work) : ""
+  const abstractText = stripHtml(work.abstract ?? "").replace(/\s+/g, " ").trim()
+  const url = work.URL || `https://doi.org/${doi}`
+  if (!pdf && !abstractText) {
+    throw new Error("That DOI has no open PDF and no abstract AIR can read.")
+  }
+  return {
+    title,
+    authors,
+    doi,
+    url,
+    pdfUrl: pdf,
+    filename: pdf ? "paper.pdf" : "abstract.txt",
+    ...(abstractText ? { abstractText } : {}),
+    ...(!pdf ? { note: "Full text was not found. The review will use the abstract only." } : {}),
+  }
+}
+
+async function openAccessPreview(doi: string, fetcher: FetchLike): Promise<PublicationPreview> {
+  const crossref = await fetcher(`https://api.crossref.org/works/${encodeURIComponent(doi)}`)
+  if (crossref.ok) {
+    const payload = (await crossref.json()) as { message?: CrossrefWork & { abstract?: string; URL?: string } }
+    if (payload.message) {
+      try {
+        return previewFromCrossref(doi, payload.message)
+      } catch {
+        // Crossref had no usable text. DataCite is the next source.
+      }
+    }
+  }
+  const datacite = await fetcher(`https://api.datacite.org/dois/${encodeURIComponent(doi)}`)
+  if (datacite.ok) {
+    const payload = (await datacite.json()) as { data?: { attributes?: { titles?: { title?: string }[]; creators?: { name?: string }[]; descriptions?: { description?: string }[]; url?: string } } }
+    const attributes = payload.data?.attributes
+    const title = attributes?.titles?.[0]?.title || doi
+    const authors = (attributes?.creators ?? []).map((creator) => creator.name || "").filter(Boolean)
+    const abstractText = (attributes?.descriptions?.[0]?.description || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()
+    if (abstractText || attributes?.url) {
+      return {
+        title,
+        authors,
+        doi,
+        url: attributes?.url || `https://doi.org/${doi}`,
+        pdfUrl: "",
+        filename: "abstract.txt",
+        ...(abstractText ? { abstractText } : {}),
+        note: "Full text was not found. The review will use the abstract only.",
+      }
+    }
+  }
+  throw new Error("That DOI did not lead to a Zenodo record, an arXiv paper, an open PDF, or an abstract.")
 }

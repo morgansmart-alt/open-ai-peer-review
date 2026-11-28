@@ -1,6 +1,6 @@
 import type { ProviderAdapter } from "../../../extension/adapters/index.ts"
 import { planDelivery, type DeliveryStep } from "./deliver.ts"
-import { GROK_X_MESSAGE_CHARS, paperDeliveryPlan } from "./paperFit.ts"
+import { GROK_X_MESSAGE_CHARS, PART_REPLY_TIMEOUT_MS, paperDeliveryPlan } from "./paperFit.ts"
 import {
   choosePaperTextPage,
   couldNotReadPaper,
@@ -38,6 +38,7 @@ import {
   messageBlocks,
   replyAfter,
   reasoningActive,
+  isPartAck,
   reviewJsonBlock,
   sendLanded,
   stopControlActive,
@@ -204,6 +205,7 @@ async function waitForReply(
   let lastChange: number | null = null
   let lastLog = 0
   let selector = ""
+  let partAckFor = 0
   while (Date.now() - start < timeoutMs) {
     if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.")
     const live = liveTurnText(doc, provider.id, composer)
@@ -236,6 +238,11 @@ async function waitForReply(
       note(hooks, label, reply ? "reading" : "waiting", `Waiting for the reply: ${label}.`, diagnostic)
       lastLog = Date.now()
     }
+    const partAck = expect === "text" && sentPrompt.includes("Reply only: OK") && isPartAck(liveFresh)
+    if (partAck) {
+      partAckFor += pollMs
+      if (partAckFor >= 3_000) return liveFresh
+    } else partAckFor = 0
     if (expect === "text" && ack && !reply && !streaming) {
       if (ack === lastAck && ackStable >= stableMs) return ack
       if (ack !== lastAck) {
@@ -525,15 +532,21 @@ export async function runTurn(doc: Document, provider: ProviderAdapter, packet: 
     }
     let fellBack = false
     let linkFellBack = false
+    let partRetry = false
     let route: "link" | "paste" = activePacket.textUrl ? "link" : "paste"
     note(hooks, "Review route", route, route === "link" ? `Review route: public text link. ${activePacket.textUrl}` : "Review route: pasted paper.")
     for (let index = 0; index < steps.length; index += 1) {
       const step = steps[index]
       if (!step) continue
-      const label = step.link ? "public text link" : `part ${step.index} of ${step.total}`
-      hooks.onProgress?.(`Sending part ${step.index} of ${step.total} on ${provider.label}. Stay on this tab.`)
+      const paperPart = step.text.includes("Reply only: OK")
+      const label = step.link ? "public text link" : paperPart ? `paper part ${step.index} of ${step.total - 1}` : `part ${step.index} of ${step.total}`
+      hooks.onProgress?.(`Sending ${label} on ${provider.label}. Stay on this tab.`)
+      const stepHooks = paperPart
+        ? { ...sendingHooks, stepTimeoutMs: Math.min(sendingHooks.stepTimeoutMs ?? PART_REPLY_TIMEOUT_MS, PART_REPLY_TIMEOUT_MS), stableMs: Math.min(sendingHooks.stableMs ?? 3_000, 3_000) }
+        : sendingHooks
       try {
-        const reply = await sendStep(doc, provider, step, sendingHooks, label)
+        const reply = await sendStep(doc, provider, step, stepHooks, label)
+        partRetry = false
         if (step.link && !linkFellBack && (couldNotReadPaper(reply) || textPageUntrusted(reply))) {
           linkFellBack = true
           route = "paste"
@@ -550,6 +563,13 @@ export async function runTurn(doc: Document, provider: ProviderAdapter, packet: 
         }
         if (step.final) return { ok: true, text: reply, steps: steps.length, route, ...(notice ? { notice } : {}) }
       } catch (error) {
+        if (paperPart && !partRetry && error instanceof TurnError && (error.code === "timeout" || error.code === "send-timeout")) {
+          partRetry = true
+          hooks.onProgress?.(`Paper part ${step.index} did not get a new OK. Sending that part once more.`)
+          index -= 1
+          continue
+        }
+        partRetry = false
         if (error instanceof TurnError && error.code === "upload-miss" && !fellBack) {
           fellBack = true
           hooks.onProgress?.(`${provider.label} did not accept the file. Pasting the paper in parts instead.`)

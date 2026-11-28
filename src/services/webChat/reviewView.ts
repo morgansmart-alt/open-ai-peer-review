@@ -61,6 +61,17 @@ function isProgress(entry: StepLogEntry): boolean {
   return entry.status === "reading" || entry.status === "waiting"
 }
 
+/** Update the status and the log without rebuilding the link field. */
+export function patchReviewProgress(root: HTMLElement, status: string, stepLog: readonly StepLogEntry[]): boolean {
+  const statusEl = root.querySelector("#status")
+  const log = root.querySelector("#step-log")
+  if (!(statusEl instanceof HTMLElement) || !(log instanceof HTMLElement)) return false
+  statusEl.textContent = status
+  log.replaceChildren()
+  for (const entry of stepLog) el(log, "li", formatStepLog([entry]))
+  return true
+}
+
 export function formatStepLog(log: readonly StepLogEntry[]): string {
   return log.map((entry) => `${entry.at} · ${entry.step} · ${entry.status}${entry.detail ? ` · ${entry.detail}` : ""}`).join("\n")
 }
@@ -99,6 +110,8 @@ export interface ReviewModel {
   status: string
   error: string
   busy: boolean
+  /** Send selected must be pressed again before a thin extract is posted. */
+  confirmThin?: boolean
   stepLog?: StepLogEntry[]
   result: ReviewCard | null
   history: HistoryItem[]
@@ -397,7 +410,7 @@ export function renderReviewApp(root: HTMLElement, model: ReviewModel, actions: 
       send.disabled = Boolean(item.mismatch) || Boolean(item.sendState) || model.busy
       if (!send.disabled) send.addEventListener("click", () => actions.onSend(item.id))
     }
-    const sendSelected = el(form, "button", "Send selected", "quiet")
+    const sendSelected = el(form, "button", model.confirmThin ? "Send selected anyway" : "Send selected", "quiet")
     sendSelected.type = "button"
     sendSelected.id = "send-selected"
     sendSelected.disabled = model.busy || !model.history.some((item) => item.selected && !item.mismatch)

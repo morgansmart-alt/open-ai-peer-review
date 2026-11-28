@@ -2585,7 +2585,16 @@ ${output}
       if (end >= sheetAt) text = `${text.slice(0, sheetAt)}
 ${text.slice(end + 1)}`;
     }
-    return text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    return stripLeadingPartAcks(text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n")).trim();
+  }
+  function stripLeadingPartAcks(text) {
+    let rest = text.trimStart();
+    let previous = "";
+    while (rest !== previous) {
+      previous = rest;
+      rest = rest.replace(/^(?:ok|okay)[.!]?(?:\s+\d+\s*\/\s*\d+)?\s*(?:\n+|$)/i, "").replace(/^\d+\s*\/\s*\d+\s+(?:ok|okay)[.!]?\s*(?:\n+|$)/i, "");
+    }
+    return rest;
   }
   function retainProse(sheet, ...sources) {
     if (reviewAnalysis(sheet).length >= 40) return sheet;
@@ -3605,7 +3614,8 @@ ${CAREFUL_REVIEW_ENDING}` : finalText;
   }
 
   // src/services/webChat/paperFit.ts
-  var GROK_X_MESSAGE_CHARS = 32e3;
+  var GROK_X_MESSAGE_CHARS = 8e4;
+  var PART_REPLY_TIMEOUT_MS = 9e4;
   var PAPER_SEND_CAP = 12e4;
   var SECTION_KIND = /^(?:#{1,6}\s+)?(?:\d+(?:\.\d+)*\s+)?(references|bibliography|works cited|appendix|appendices|supplementary|supplement|results|discussion|conclusions?|abstract|introduction|methods?)\b/i;
   function kindOf(title) {
@@ -4458,6 +4468,11 @@ ${code}
     });
   }
   var ACK_PATTERN = /\bRECEIVED(?:\s+(?:FILES|INSTRUCTIONS))?\s+\d+\b/i;
+  function isPartAck(text) {
+    const compact = text.replace(/\s+/g, " ").trim();
+    if (!compact || compact.length > 48) return false;
+    return /^(?:ok|okay)[.!]?$/i.test(compact) || /^\d+\s*\/\s*\d+\s+(?:ok|okay)[.!]?$/i.test(compact);
+  }
   function ackLabel(text) {
     const compact = text.replace(/\s+/g, " ").trim();
     const match = compact.match(ACK_PATTERN);
@@ -4659,6 +4674,7 @@ ${code}
     let lastChange = null;
     let lastLog = 0;
     let selector = "";
+    let partAckFor = 0;
     while (Date.now() - start < timeoutMs) {
       if (hooks.aborted()) throw new TurnError("cancelled", "Cancelled. The provider tab stays open.");
       const live = liveTurnText(doc, provider.id, composer);
@@ -4687,6 +4703,11 @@ ${code}
         note(hooks, label, reply2 ? "reading" : "waiting", `Waiting for the reply: ${label}.`, diagnostic2);
         lastLog = Date.now();
       }
+      const partAck = expect === "text" && sentPrompt.includes("Reply only: OK") && isPartAck(liveFresh);
+      if (partAck) {
+        partAckFor += pollMs;
+        if (partAckFor >= 3e3) return liveFresh;
+      } else partAckFor = 0;
       if (expect === "text" && ack && !reply2 && !streaming) {
         if (ack === lastAck && ackStable >= stableMs) return ack;
         if (ack !== lastAck) {
@@ -4946,15 +4967,19 @@ ${code}
       }
       let fellBack = false;
       let linkFellBack = false;
+      let partRetry = false;
       let route = activePacket.textUrl ? "link" : "paste";
       note(hooks, "Review route", route, route === "link" ? `Review route: public text link. ${activePacket.textUrl}` : "Review route: pasted paper.");
       for (let index = 0; index < steps.length; index += 1) {
         const step = steps[index];
         if (!step) continue;
-        const label = step.link ? "public text link" : `part ${step.index} of ${step.total}`;
-        hooks.onProgress?.(`Sending part ${step.index} of ${step.total} on ${provider.label}. Stay on this tab.`);
+        const paperPart2 = step.text.includes("Reply only: OK");
+        const label = step.link ? "public text link" : paperPart2 ? `paper part ${step.index} of ${step.total - 1}` : `part ${step.index} of ${step.total}`;
+        hooks.onProgress?.(`Sending ${label} on ${provider.label}. Stay on this tab.`);
+        const stepHooks = paperPart2 ? { ...sendingHooks, stepTimeoutMs: Math.min(sendingHooks.stepTimeoutMs ?? PART_REPLY_TIMEOUT_MS, PART_REPLY_TIMEOUT_MS), stableMs: Math.min(sendingHooks.stableMs ?? 3e3, 3e3) } : sendingHooks;
         try {
-          const reply = await sendStep(doc, provider, step, sendingHooks, label);
+          const reply = await sendStep(doc, provider, step, stepHooks, label);
+          partRetry = false;
           if (step.link && !linkFellBack && (couldNotReadPaper(reply) || textPageUntrusted(reply))) {
             linkFellBack = true;
             route = "paste";
@@ -4971,6 +4996,13 @@ ${code}
           }
           if (step.final) return { ok: true, text: reply, steps: steps.length, route, ...notice ? { notice } : {} };
         } catch (error) {
+          if (paperPart2 && !partRetry && error instanceof TurnError && (error.code === "timeout" || error.code === "send-timeout")) {
+            partRetry = true;
+            hooks.onProgress?.(`Paper part ${step.index} did not get a new OK. Sending that part once more.`);
+            index -= 1;
+            continue;
+          }
+          partRetry = false;
           if (error instanceof TurnError && error.code === "upload-miss" && !fellBack) {
             fellBack = true;
             hooks.onProgress?.(`${provider.label} did not accept the file. Pasting the paper in parts instead.`);

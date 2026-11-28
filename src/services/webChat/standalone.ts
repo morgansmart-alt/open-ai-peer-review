@@ -276,6 +276,16 @@ export interface PdfTextSource {
   getPage(pageNumber: number): Promise<{ getTextContent(): Promise<{ items: { str?: string }[] }> }>
 }
 
+export const THIN_EXTRACT_WARNING = "Very little text could be extracted, likely figure/scanned PDF; score may not reflect the work"
+
+/** A scanned or figure-only PDF yields a few characters per page. A normal page is far longer. */
+export function thinExtract(text: string, pages?: number): boolean {
+  const chars = text.replace(/\s+/g, "").length
+  if (chars === 0) return false
+  if (pages && pages >= 2) return chars / pages < 200
+  return chars < 2_500
+}
+
 export async function textFromPdfDocument(pdf: PdfTextSource, pageCap: number): Promise<{ text: string; note?: string }> {
   const cap = Math.max(1, pageCap)
   const limit = Math.min(pdf.numPages, cap)
@@ -290,8 +300,10 @@ export async function textFromPdfDocument(pdf: PdfTextSource, pageCap: number): 
       .trim()
     if (line) parts.push(line)
   }
-  return {
-    text: parts.join("\n\n"),
-    note: pdf.numPages > cap ? `Read the first ${cap} of ${pdf.numPages} pages.` : undefined,
-  }
+  const text = parts.join("\n\n")
+  const notes = [
+    pdf.numPages > cap ? `Read the first ${cap} of ${pdf.numPages} pages.` : "",
+    thinExtract(text, pdf.numPages) ? THIN_EXTRACT_WARNING : "",
+  ].filter(Boolean)
+  return { text, note: notes.join(" ") || undefined }
 }

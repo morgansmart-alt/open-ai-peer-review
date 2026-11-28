@@ -5,7 +5,7 @@ import { acceptWebChatResult } from "../src/services/webChat/accept.ts"
 import { webChatModelId } from "../src/services/webChat/chatModel.ts"
 import { WEB_CHAT_PDF_PAGES } from "../src/services/webChat/packet.ts"
 import { EXTENSION_SOURCE, PAGE_SOURCE, PROTOCOL_VERSION } from "../src/services/webChat/protocol.ts"
-import { globalGoalsSendNote, recordStep, renderReviewApp, type ReviewModel, type StepLogEntry } from "../src/services/webChat/reviewView.ts"
+import { globalGoalsSendNote, patchReviewProgress, recordStep, renderReviewApp, type ReviewModel, type StepLogEntry } from "../src/services/webChat/reviewView.ts"
 import { defendedFromReply } from "../src/services/webChat/defence.ts"
 import { defenceRoundCounts, runSummary } from "../src/services/webChat/runSummary.ts"
 import { normalizePublicationLink, resolvePublication, type PublicationPreview } from "../src/services/webChat/publication.ts"
@@ -14,6 +14,8 @@ import { publishedStatus, submissionFromReview } from "../src/services/webChat/s
 import { postWebChatSubmission } from "../src/services/webChat/submit.ts"
 import {
   appendResult,
+  THIN_EXTRACT_WARNING,
+  thinExtract,
   exportBundle,
   ONBOARD_STORAGE_KEY,
   packetForLocalPaper,
@@ -45,6 +47,7 @@ let status = ""
 let error = ""
 let busy = false
 let stepLog: StepLogEntry[] = []
+let confirmThin = false
 let reviews: StoredReview[] = []
 let sendState: Record<string, "sending" | "published" | "duplicate"> = {}
 let sendNotes: Record<string, string> = {}
@@ -106,6 +109,7 @@ function paint(): void {
       status,
       error,
       busy,
+      confirmThin,
       stepLog,
       result: latest ? resultCard(latest) : null,
       history: reviews.map(historyItem),
@@ -175,14 +179,17 @@ function paint(): void {
         URL.revokeObjectURL(url)
       },
       onToggle(id) {
+        confirmThin = false
         if (selected.has(id)) selected.delete(id)
         else selected.add(id)
         paint()
       },
       onSend(id) {
+        if (!armThinSend([id])) return
         void sendScores([id])
       },
       onSendSelected() {
+        if (!armThinSend([...selected])) return
         void sendScores([...selected])
       },
     },
@@ -239,8 +246,15 @@ async function lookup(): Promise<void> {
 }
 
 async function paperFromPublication(preview: PublicationPreview): Promise<{ filename: string; text: string; note?: string }> {
+  if (!preview.pdfUrl) {
+    if (preview.abstractText?.trim()) return { filename: preview.filename || "abstract.txt", text: preview.abstractText, note: preview.note }
+    throw new Error(preview.note || "The paper file could not be downloaded. You can save the PDF and choose the file instead.")
+  }
   const response = await fetch(preview.pdfUrl)
-  if (!response.ok) throw new Error("The paper file could not be downloaded. You can save the PDF and choose the file instead.")
+  if (!response.ok) {
+    if (preview.abstractText?.trim()) return { filename: "abstract.txt", text: preview.abstractText, note: preview.note || "The PDF could not be downloaded. The review will use the abstract only." }
+    throw new Error("The paper file could not be downloaded. You can save the PDF and choose the file instead.")
+  }
   const type = response.headers.get("content-type") || ""
   if (/\.pdf$/i.test(preview.filename) || type.includes("pdf")) {
     const bytes = await response.arrayBuffer()
@@ -305,7 +319,7 @@ chrome.runtime.onMessage.addListener((message: { source?: string; type?: string;
     if (!busy) return
     stepLog = rememberStep(message.step || "Review", message.status || "update", message.detail || "")
     status = message.message
-    paint()
+    if (!patchReviewProgress(root as HTMLElement, status, stepLog)) paint()
     return
   }
   if (message.type === "air-web-chat-error") {
@@ -361,6 +375,10 @@ async function finish(raw: string, defendedRaw: string | null, transcript: { rou
   const provider = webChatProvider(providerId)
   stored.modelId = webChatModelId(provider?.modelLabel ?? providerId, chatModel)
   const failure = notice?.includes("Defence step failed:") ? notice.slice(notice.indexOf("Defence step failed:")) : ""
+  if (thinExtract(pendingPaper?.text || "") || (notice || "").includes(THIN_EXTRACT_WARNING) || (pendingPaper?.note || "").includes(THIN_EXTRACT_WARNING)) {
+    stored.thinExtract = true
+    notice = [notice, THIN_EXTRACT_WARNING].filter(Boolean).join(" ")
+  }
   if (notice?.trim()) stored.sourceNote = notice.trim()
   reviews = appendResult(reviews, stored)
   await storageSet(RESULT_STORAGE_KEY, reviews)
@@ -380,6 +398,18 @@ async function finish(raw: string, defendedRaw: string | null, transcript: { rou
       : summaryLine
   error = ""
   paint()
+}
+
+function armThinSend(ids: string[]): boolean {
+  const thin = reviews.some((review) => ids.includes(review.id) && review.thinExtract)
+  if (!thin || confirmThin) {
+    confirmThin = false
+    return true
+  }
+  confirmThin = true
+  status = `${THIN_EXTRACT_WARNING} Press Send selected again to send anyway.`
+  paint()
+  return false
 }
 
 async function sendScores(ids: string[]): Promise<void> {

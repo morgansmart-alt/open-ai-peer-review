@@ -3,7 +3,7 @@ import { officialCriteria } from "../../domain/officialCriteria.ts"
 import { normalizeZenodoRecord } from "../zenodo.ts"
 import { webChatModelId } from "./chatModel.ts"
 import { choosePaperTextUrl } from "./paperText.ts"
-import { classifyPublication, normalizePublicationLink, previewFromZenodo, resolvePublication, type FetchLike } from "./publication.ts"
+import { classifyPublication, normalizePublicationLink, previewFromCrossref, previewFromZenodo, resolvePublication, type FetchLike } from "./publication.ts"
 import { storedLocalReview } from "./standalone.ts"
 import { submissionFromReview, validateWebChatSubmission } from "./submission.ts"
 
@@ -58,6 +58,24 @@ describe("publication links", () => {
     expect(normalizePublicationLink("https://https://zenodo.org/records/437445")).toBe("https://zenodo.org/records/437445")
     expect(normalizePublicationLink("http://https://zenodo.org/records/437445")).toBe("https://zenodo.org/records/437445")
     expect(classifyPublication("https://https://zenodo.org/records/437445")).toMatchObject({ kind: "zenodo", recordId: "437445" })
+    expect(classifyPublication("10.12688/openreseurope.19781.1").kind).toBe("doi")
+    const ore = previewFromCrossref("10.12688/openreseurope.19781.1", {
+      title: ["Cell motility influences microfluidics capturing in scRNA-seq"],
+      author: [{ given: "Lara", family: "López-Escobar" }],
+      license: [{ URL: "https://creativecommons.org/licenses/by/4.0/" }],
+      link: [{ URL: "https://ore.eu/ore/article/download/952/version/1656/3309", "content-type": "application/pdf" }],
+      abstract: "<jats:p>Microfluidic isolation methods.</jats:p>",
+    })
+    expect(ore.title).toContain("Cell motility")
+    expect(ore.authors).toEqual(["Lara López-Escobar"])
+    expect(ore.pdfUrl).toContain("ore.eu")
+    expect(ore.note).toBeUndefined()
+    const closed = previewFromCrossref("10.1000/closed", {
+      title: ["Closed note"],
+      abstract: "Only the abstract is public for this record and it is long enough to review.",
+    })
+    expect(closed.pdfUrl).toBe("")
+    expect(closed.note).toContain("abstract only")
   })
 
   it("reads title, authors, DOI, and the PDF link from a Zenodo payload", () => {

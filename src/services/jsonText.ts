@@ -650,7 +650,18 @@ export function reviewAnalysis(raw: string): string {
     const end = matchingBrace(text, sheetAt)
     if (end >= sheetAt) text = `${text.slice(0, sheetAt)}\n${text.slice(end + 1)}`
   }
-  return text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim()
+  return stripLeadingPartAcks(text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n")).trim()
+}
+
+/** Part replies are "OK" or "7/18 OK". They are not the review. */
+export function stripLeadingPartAcks(text: string): string {
+  let rest = text.trimStart()
+  let previous = ""
+  while (rest !== previous) {
+    previous = rest
+    rest = rest.replace(/^(?:ok|okay)[.!]?(?:\s+\d+\s*\/\s*\d+)?\s*(?:\n+|$)/i, "").replace(/^\d+\s*\/\s*\d+\s+(?:ok|okay)[.!]?\s*(?:\n+|$)/i, "")
+  }
+  return rest
 }
 
 /** Keep prose that sat outside the score sheet when a repair returns only JSON. */
