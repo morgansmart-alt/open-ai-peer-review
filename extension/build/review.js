@@ -2572,11 +2572,32 @@ ${output}
     }
     return row;
   }
+  function looksLikeSheet(value) {
+    const summary = typeof value.summary === "string" && value.summary.trim().length >= 40;
+    const scores = Array.isArray(value.scores) && value.scores.length > 0;
+    const overall = numericScore(value.overallScore) != null;
+    return summary && scores || overall && scores || summary && overall;
+  }
+  function lastSheetStart(raw) {
+    let best = -1;
+    for (let index = 0; index < raw.length; index += 1) {
+      if (raw[index] !== "{") continue;
+      const end = matchingBrace(raw, index);
+      if (end < 0) continue;
+      const parsed2 = parseSlice(raw.slice(index, end + 1));
+      if (parsed2 && isRecord2(parsed2.value) && looksLikeSheet(parsed2.value)) best = index;
+      index = end;
+    }
+    return best;
+  }
   function reviewAnalysis(raw) {
     const marks = [...raw.matchAll(/```(?:json)?\s*[\s\S]*?```/gi)];
     const last = marks[marks.length - 1];
-    if (!last || last.index == null) return "";
-    return raw.slice(0, last.index).replace(/\s+$/g, "").trim();
+    const fenceAt = last?.index ?? -1;
+    const sheetAt = lastSheetStart(raw);
+    const cut = fenceAt >= 0 && (sheetAt < 0 || fenceAt <= sheetAt) ? fenceAt : sheetAt;
+    if (cut <= 0) return "";
+    return raw.slice(0, cut).replace(/\s+$/g, "").trim();
   }
   function parseModelJson(raw, criterionIds) {
     if (raw.includes("```")) {
@@ -4123,7 +4144,7 @@ ${JSON.stringify(report)}`),
   // src/services/webChat/submission.ts
   var SUBMIT_WINDOW_MS = 10 * 60 * 1e3;
   var WEB_CHAT_SUBMIT_URL = "https://lotswxboafsenmszijpf.supabase.co/functions/v1/submit-web-chat";
-  var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback", "analysis"]);
+  var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback", "analysis", "defenceAnalysis"]);
   var ANALYSIS_LIMIT = 12e3;
   var DEFENDED_KEYS = /* @__PURE__ */ new Set(["label", "overallScore", "recommendation", "summary", "scores"]);
   var PAPER_KEYS = /* @__PURE__ */ new Set(["title", "doi", "url"]);
@@ -4198,7 +4219,8 @@ ${JSON.stringify(report)}`),
       createdAt: review.createdAt,
       ...defended ? { defended } : {},
       ...review.report.airFeedback ? { airFeedback: review.report.airFeedback } : {},
-      ...review.analysis ? { analysis: stripChatShareLinks(review.analysis).slice(0, ANALYSIS_LIMIT) } : {}
+      ...review.analysis ? { analysis: stripChatShareLinks(review.analysis).slice(0, ANALYSIS_LIMIT) } : {},
+      ...review.defenceAnalysis ? { defenceAnalysis: stripChatShareLinks(review.defenceAnalysis).slice(0, ANALYSIS_LIMIT) } : {}
     };
     const checked = validateWebChatSubmission(submission, criteria);
     if (checked.ok) return { ok: true, submission: checked.submission };
@@ -4263,6 +4285,7 @@ ${JSON.stringify(report)}`),
     if (!defended.ok) return defended;
     const airFeedback = parseAirFeedback(input.airFeedback);
     const analysis = stripChatShareLinks(clip3(input.analysis, ANALYSIS_LIMIT));
+    const defenceAnalysis = stripChatShareLinks(clip3(input.defenceAnalysis, ANALYSIS_LIMIT));
     return {
       ok: true,
       submission: {
@@ -4280,7 +4303,8 @@ ${JSON.stringify(report)}`),
         createdAt,
         ...defended.score ? { defended: defended.score } : {},
         ...airFeedback ? { airFeedback } : {},
-        ...analysis ? { analysis } : {}
+        ...analysis ? { analysis } : {},
+        ...defenceAnalysis ? { defenceAnalysis } : {}
       }
     };
   }
@@ -4647,8 +4671,10 @@ ${JSON.stringify(report)}`),
       text: pendingPaper?.text
     });
     stored.defenceTranscript = transcript;
-    const analysis = reviewAnalysis(raw);
-    if (analysis) stored.analysis = analysis.slice(0, 12e3);
+    const analysis = reviewAnalysis(raw).slice(0, 12e3);
+    if (analysis) stored.analysis = analysis;
+    const defenceAnalysis = defendedRaw ? reviewAnalysis(defendedRaw).slice(0, 12e3) : "";
+    if (defenceAnalysis) stored.defenceAnalysis = defenceAnalysis;
     if (defended?.ok) {
       stored.defended = defended.defended;
       if (defended.partial) stored.defenceNote = "The after-defence reply named an overall score without a full score sheet. That number is shown.";

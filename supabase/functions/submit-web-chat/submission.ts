@@ -1155,7 +1155,7 @@ var SUBMIT_LIMIT = 12;
 var SUBMIT_WINDOW_MS = 10 * 60 * 1e3;
 var AIR_SITE_URL = "https://morgansmart-alt.github.io/open-ai-peer-review/";
 var WEB_CHAT_SUBMIT_URL = "https://lotswxboafsenmszijpf.supabase.co/functions/v1/submit-web-chat";
-var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback", "analysis"]);
+var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback", "analysis", "defenceAnalysis"]);
 var ANALYSIS_LIMIT = 12e3;
 var DEFENDED_KEYS = /* @__PURE__ */ new Set(["label", "overallScore", "recommendation", "summary", "scores"]);
 var PAPER_KEYS = /* @__PURE__ */ new Set(["title", "doi", "url"]);
@@ -1245,7 +1245,8 @@ function submissionFromReview(review, site) {
     createdAt: review.createdAt,
     ...defended ? { defended } : {},
     ...review.report.airFeedback ? { airFeedback: review.report.airFeedback } : {},
-    ...review.analysis ? { analysis: stripChatShareLinks(review.analysis).slice(0, ANALYSIS_LIMIT) } : {}
+    ...review.analysis ? { analysis: stripChatShareLinks(review.analysis).slice(0, ANALYSIS_LIMIT) } : {},
+    ...review.defenceAnalysis ? { defenceAnalysis: stripChatShareLinks(review.defenceAnalysis).slice(0, ANALYSIS_LIMIT) } : {}
   };
   const checked = validateWebChatSubmission(submission, criteria);
   if (checked.ok) return { ok: true, submission: checked.submission };
@@ -1310,6 +1311,7 @@ function validateWebChatSubmission(input, criteria = officialCriteria) {
   if (!defended.ok) return defended;
   const airFeedback = parseAirFeedback(input.airFeedback);
   const analysis = stripChatShareLinks(clip2(input.analysis, ANALYSIS_LIMIT));
+  const defenceAnalysis = stripChatShareLinks(clip2(input.defenceAnalysis, ANALYSIS_LIMIT));
   return {
     ok: true,
     submission: {
@@ -1327,7 +1329,8 @@ function validateWebChatSubmission(input, criteria = officialCriteria) {
       createdAt,
       ...defended.score ? { defended: defended.score } : {},
       ...airFeedback ? { airFeedback } : {},
-      ...analysis ? { analysis } : {}
+      ...analysis ? { analysis } : {},
+      ...defenceAnalysis ? { defenceAnalysis } : {}
     }
   };
 }
@@ -1424,6 +1427,7 @@ function submissionToStored(payload) {
     source: WEB_CHAT_SOURCE,
     paperUrl: payload.paper.url,
     ...payload.analysis ? { analysis: payload.analysis } : {},
+    ...payload.defenceAnalysis ? { defenceAnalysis: payload.defenceAnalysis } : {},
     defended: payload.defended,
     report: {
       summary: payload.summary,

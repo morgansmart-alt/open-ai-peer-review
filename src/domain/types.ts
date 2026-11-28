@@ -229,6 +229,8 @@ export interface StoredReview {
   sourceNote?: string
   /** Prose the reviewer wrote before the fenced score sheet. Kept in the payload. No separate column. */
   analysis?: string
+  /** Prose argument before the after-defence sheet. Kept in the payload. No separate column. */
+  defenceAnalysis?: string
   /** Public paper address. Private chat links are never stored here. */
   paperUrl?: string
   /** Second score after Defend my paper. The blind overallScore stays the displayed score. */
@@ -398,6 +400,7 @@ export const STORED_REVIEW_KEYS = [
   "source",
   "paperUrl",
   "analysis",
+  "defenceAnalysis",
   "report",
   "outputHash",
   "createdAt",

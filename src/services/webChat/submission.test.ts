@@ -335,6 +335,17 @@ describe("web-chat submission", () => {
       expect(withAnalysis.submission.analysis).toContain("I read the paper first")
       expect(withAnalysis.submission.analysis).not.toContain("SECRET")
       expect(toSubmissionRow(withAnalysis.submission).payload.analysis).toContain("I read the paper first")
+    const long = "The yield is measured. ".repeat(700)
+    const both = validateWebChatSubmission(payload(70, "revise", {
+      analysis: long,
+      defenceAnalysis: "The defence argues the limit is already stated in the results section of the record.",
+    }))
+    expect(both.ok).toBe(true)
+    if (both.ok) {
+      expect(both.submission.analysis?.length).toBe(12_000)
+      expect(both.submission.defenceAnalysis).toContain("defence argues")
+      expect(toSubmissionRow(both.submission).payload.defenceAnalysis).toContain("defence argues")
+    }
       expect(toSubmissionRow(withAnalysis.submission).blind_score).toBe(70)
     }
     expect(server.submission.defended?.scores).toEqual([{ criterionId: "clarity", score: 70, uncited: true }])

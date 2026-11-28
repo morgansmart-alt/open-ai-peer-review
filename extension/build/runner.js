@@ -2559,11 +2559,32 @@ ${output}
     }
     return normaliseScoreShape(left);
   }
+  function looksLikeSheet(value) {
+    const summary = typeof value.summary === "string" && value.summary.trim().length >= 40;
+    const scores = Array.isArray(value.scores) && value.scores.length > 0;
+    const overall = numericScore(value.overallScore) != null;
+    return summary && scores || overall && scores || summary && overall;
+  }
+  function lastSheetStart(raw) {
+    let best = -1;
+    for (let index = 0; index < raw.length; index += 1) {
+      if (raw[index] !== "{") continue;
+      const end = matchingBrace(raw, index);
+      if (end < 0) continue;
+      const parsed2 = parseSlice(raw.slice(index, end + 1));
+      if (parsed2 && isRecord2(parsed2.value) && looksLikeSheet(parsed2.value)) best = index;
+      index = end;
+    }
+    return best;
+  }
   function reviewAnalysis(raw) {
     const marks = [...raw.matchAll(/```(?:json)?\s*[\s\S]*?```/gi)];
     const last = marks[marks.length - 1];
-    if (!last || last.index == null) return "";
-    return raw.slice(0, last.index).replace(/\s+$/g, "").trim();
+    const fenceAt = last?.index ?? -1;
+    const sheetAt = lastSheetStart(raw);
+    const cut = fenceAt >= 0 && (sheetAt < 0 || fenceAt <= sheetAt) ? fenceAt : sheetAt;
+    if (cut <= 0) return "";
+    return raw.slice(0, cut).replace(/\s+$/g, "").trim();
   }
   function parseModelJson(raw, criterionIds) {
     if (raw.includes("```")) {
@@ -2645,7 +2666,7 @@ ${output}
         const analysis = reviewAnalysis(raw);
         if (analysis.length >= 40) log(`Peer analysis (${analysis.length} characters): ${analysis.slice(0, 2e3)}`);
         if (first.repaired) log("Repaired the chat's JSON before scoring.");
-        const whole = !first.repaired && parseModelJson(raw, criterionIds).ok ? raw : first.text;
+        const whole = parseModelJson(raw, criterionIds).ok ? raw : first.text;
         return { text: whole, repaired: first.repaired, reasked: false };
       }
       const problem = checked.errors.join(" ");
@@ -3901,12 +3922,28 @@ ${CAREFUL_REVIEW_ENDING}` : finalText;
     if (/^(copy|good response|bad response|share|regenerate|edit message|show more|copy message)$/i.test(label.trim())) return true;
     return false;
   }
+  function isRenderedCodeBlock(el) {
+    if (el.tagName === "PRE") return true;
+    const cls = el.getAttribute("class") ?? "";
+    return el.tagName === "CODE" && /language-|hljs|code-block/.test(cls);
+  }
   function textWithoutChips(root) {
     const chunks = [];
     const walk = (node) => {
       if (node instanceof Element) {
         if (skipChip(node)) return;
+        if (node.tagName === "CODE" && node.parentElement?.tagName === "PRE") return;
+        if (isRenderedCodeBlock(node)) {
+          const code = (node.textContent ?? "").trim();
+          if (code) chunks.push(`
+\`\`\`json
+${code}
+\`\`\`
+`);
+          return;
+        }
         for (const child of node.childNodes) walk(child);
+        if (/^(P|DIV|LI|H[1-6]|BR|TR|BLOCKQUOTE)$/.test(node.tagName)) chunks.push("\n");
         return;
       }
       if (node.nodeType === Node.TEXT_NODE) {
@@ -3932,7 +3969,7 @@ ${CAREFUL_REVIEW_ENDING}` : finalText;
     });
     const last = turns[turns.length - 1];
     if (!last) return { text: "", candidate: "" };
-    const markdown = last.querySelector(".whitespace-normal") ?? last.querySelector(".wrap-break-word") ?? last;
+    const markdown = last.querySelector(".wrap-break-word") ?? last.querySelector(".whitespace-normal") ?? last;
     return { text: textWithoutChips(markdown), candidate: "div.group" };
   }
   function liveTurnText(doc, providerId, composer) {

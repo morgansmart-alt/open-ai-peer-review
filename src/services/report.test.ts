@@ -205,6 +205,10 @@ describe("validateReport", () => {
     expect(accepted.ok).toBe(true)
     if (!accepted.ok) expect(accepted.errors).toEqual([])
     if (accepted.ok) expect(accepted.report.scores.find((score) => score.criterionId === "impact")?.score).toBe(90)
+    const rendered = `${prose}\n${JSON.stringify(sheet(56))}`
+    expect(rendered.includes("```")).toBe(false)
+    expect(reviewAnalysis(rendered)).toContain("I read the whole paper")
+    expect(reviewAnalysis(rendered)).not.toContain("overallScore")
   })
 
   it("keeps an uncited score, maps loose enums, and merges a thinner correction", () => {
