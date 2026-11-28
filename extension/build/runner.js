@@ -1029,10 +1029,10 @@
 
   // src/domain/officialCriteria.ts
   function load(raw, label) {
-    const parsed = parseCriteria(raw);
-    if (!parsed.ok) throw new Error(`${label} is invalid:
-${parsed.errors.join("\n")}`);
-    return parsed.criteria;
+    const parsed2 = parseCriteria(raw);
+    if (!parsed2.ok) throw new Error(`${label} is invalid:
+${parsed2.errors.join("\n")}`);
+    return parsed2.criteria;
   }
   var airCriteriaV01 = load(air_v0_1_default, "AIR v0.1");
   var airCriteriaV02 = load(air_v0_2_default, "AIR v0.2");
@@ -2015,9 +2015,9 @@ ${output}
 
   // src/services/jsonText.ts
   function fenced(raw) {
-    const trimmed = raw.trim();
-    const match = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-    return (match?.[1] ?? trimmed).trim();
+    const blocks = fencedBlocks(raw);
+    if (blocks.length > 0) return blocks[blocks.length - 1] ?? raw.trim();
+    return raw.trim();
   }
   function matchingBrace(text, start) {
     let depth = 0;
@@ -2341,10 +2341,10 @@ ${output}
       const end = matchingBrace(prepared, index);
       const balanced = end >= 0;
       const slice = balanced ? prepared.slice(index, end + 1) : closeTruncated(prepared.slice(index));
-      const parsed = parseSlice(slice);
-      if (!parsed) continue;
-      take(parsed.value);
-      if (balanced && isRecord2(parsed.value) && coversCriteria(parsed.value, officialCriteria.criteria.map((item) => item.id).filter((id) => !isBonusCriterion(id)))) index = end;
+      const parsed2 = parseSlice(slice);
+      if (!parsed2) continue;
+      take(parsed2.value);
+      if (balanced && isRecord2(parsed2.value) && coversCriteria(parsed2.value, officialCriteria.criteria.map((item) => item.id).filter((id) => !isBonusCriterion(id)))) index = end;
     }
   }
   function gatherCriteria(raw) {
@@ -2396,16 +2396,16 @@ ${output}
       const end = matchingBrace(prepared, index);
       const balanced = end >= 0;
       const slice = balanced ? prepared.slice(index, end + 1) : closeTruncated(prepared.slice(index));
-      const parsed = parseSlice(slice);
-      if (!parsed) {
+      const parsed2 = parseSlice(slice);
+      if (!parsed2) {
         if (balanced) index = end;
         continue;
       }
-      const preparedValue = prepareCandidate(parsed.value);
+      const preparedValue = prepareCandidate(parsed2.value);
       const rank = reviewRank(preparedValue.value);
       const keys = isRecord2(preparedValue.value) ? criterionKeyCount(preparedValue.value) : 0;
-      const text = preparedValue.changed ? JSON.stringify(preparedValue.value) : parsed.text;
-      const repaired = parsed.repaired || !balanced || preparedValue.changed;
+      const text = preparedValue.changed ? JSON.stringify(preparedValue.value) : parsed2.text;
+      const repaired = parsed2.repaired || !balanced || preparedValue.changed;
       if (rank > 0 && (!best || rank > best.rank || rank === best.rank && (keys > best.keys || keys === best.keys && text.length > best.text.length))) {
         best = { value: preparedValue.value, text, repaired, rank, keys };
       }
@@ -2422,8 +2422,8 @@ ${output}
       if (end < 0) continue;
       const slice = windowText.slice(index, end + 1);
       if (/"overallScore"\s*:/.test(slice)) {
-        const parsed = parseSlice(slice);
-        if (parsed && hasNumericScore(parsed.value)) last = parsed;
+        const parsed2 = parseSlice(slice);
+        if (parsed2 && hasNumericScore(parsed2.value)) last = parsed2;
       }
       index = end;
     }
@@ -2559,7 +2559,23 @@ ${output}
     }
     return normaliseScoreShape(left);
   }
+  function reviewAnalysis(raw) {
+    const marks = [...raw.matchAll(/```(?:json)?\s*[\s\S]*?```/gi)];
+    const last = marks[marks.length - 1];
+    if (!last || last.index == null) return "";
+    return raw.slice(0, last.index).replace(/\s+$/g, "").trim();
+  }
   function parseModelJson(raw, criterionIds) {
+    if (raw.includes("```")) {
+      const required2 = requiredCriterionIds(criterionIds);
+      const blocks = fencedBlocks(raw);
+      for (let index = blocks.length - 1; index >= 0; index -= 1) {
+        const block = blocks[index];
+        if (!block || block.includes("```")) continue;
+        const fenced2 = parseModelJson(block, criterionIds);
+        if (fenced2.ok && coversCriteria(fenced2.value, required2)) return fenced2;
+      }
+    }
     const required = requiredCriterionIds(criterionIds);
     const review = chooseReviewJson(raw);
     const shaped = review ? normaliseScoreShape(review.value) : null;
@@ -2575,8 +2591,8 @@ ${output}
     const scored = lastScoreJson(raw);
     if (scored) return { ok: true, value: normaliseScoreShape(scored.value), text: scored.text, repaired: scored.repaired };
     const slice = fenced(raw);
-    const parsed = slice.includes("{") ? parseSlice(slice) : null;
-    if (parsed) return { ok: true, value: normaliseScoreShape(parsed.value), text: parsed.text, repaired: parsed.repaired };
+    const parsed2 = slice.includes("{") ? parseSlice(slice) : null;
+    if (parsed2) return { ok: true, value: normaliseScoreShape(parsed2.value), text: parsed2.text, repaired: parsed2.repaired };
     return { ok: false, error: "No JSON object found in the model output." };
   }
   function reaskJsonPrompt(problem, criterionIds = []) {
@@ -2585,7 +2601,8 @@ ${output}
     const exampleId = criterionIds[0] ?? "impact";
     return [
       `Your JSON did not validate (${detail}).`,
-      "Return ONE flat JSON object and nothing else. Not a patch, and not one criterion. Repeat every field that was already valid.",
+      "You may explain the correction in prose. There is no length limit. End with the full corrected score sheet as one JSON object inside a ```json fenced block.",
+      "Repeat every field that was already valid. Do not send only one criterion.",
       "summary must be a string of at least 40 characters.",
       "scores must be an array with one object for each criterion id.",
       "Each scores object needs criterionId, score (integer 0-100), rationale (at least 20 characters), citations, and confidence (low, medium, or high).",
@@ -2596,7 +2613,7 @@ ${output}
       "Repeat the scores object for every criterion id. global-goals may be omitted."
     ].join(" ");
   }
-  var FILL_REVIEW_PROMPT = "Fill in the review now. Return one completed JSON object for this paper. Do not repeat the rubric template or the instructions.";
+  var FILL_REVIEW_PROMPT = "Fill in the review now. Write the analysis in prose, then end with one completed JSON object for this paper inside a ```json fenced block. Do not repeat the rubric template or the instructions.";
   function rubricTemplateProblem(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const row = value;
@@ -2616,17 +2633,20 @@ ${output}
     return `Rejected the reply. ${problem} ${found}Chosen JSON: ${chosen}`;
   }
   async function settleChatJson(raw, ask, log, validate, criterionIds = []) {
-    const ready = (parsed) => {
+    const ready = (parsed2) => {
       if (!validate) return { ok: true };
-      return validate(parsed.text);
+      return validate(parsed2.text);
     };
     const first = parseModelJson(raw, criterionIds);
     if (first.ok) {
       const template = rubricTemplateProblem(first.value);
       const checked = template ? { ok: false, errors: [template] } : ready(first);
       if (checked.ok) {
+        const analysis = reviewAnalysis(raw);
+        if (analysis.length >= 40) log(`Peer analysis (${analysis.length} characters): ${analysis.slice(0, 2e3)}`);
         if (first.repaired) log("Repaired the chat's JSON before scoring.");
-        return { text: first.repaired ? first.text : raw, repaired: first.repaired, reasked: false };
+        const whole = !first.repaired && parseModelJson(raw, criterionIds).ok ? raw : first.text;
+        return { text: whole, repaired: first.repaired, reasked: false };
       }
       const problem = checked.errors.join(" ");
       log(rejectionNote(problem, first.text || raw, describeCriterionGather(raw)));
@@ -2660,9 +2680,9 @@ ${output}
     return typeof value === "object" && value !== null && !Array.isArray(value);
   }
   function extractJsonValue(raw) {
-    const parsed = parseModelJson(raw);
-    if (!parsed.ok) throw new Error(parsed.error);
-    return parsed.value;
+    const parsed2 = parseModelJson(raw);
+    if (!parsed2.ok) throw new Error(parsed2.error);
+    return parsed2.value;
   }
   function clip2(value, max) {
     return typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -2910,14 +2930,184 @@ ${output}
 
   // src/services/webChat/accept.ts
   function acceptWebChatResult(raw, criteria) {
-    let parsed;
+    let parsed2;
     try {
-      parsed = extractJsonValue(raw);
+      parsed2 = extractJsonValue(raw);
     } catch (error) {
       return { ok: false, errors: [error instanceof Error ? error.message : "No JSON object was found in the chat reply."] };
     }
-    return validateReport(parsed, criteria);
+    return validateReport(parsed2, criteria);
   }
+
+  // criteria/global-goals.json
+  var global_goals_default = {
+    id: "global-goals",
+    version: "2026.1",
+    name: "Documented public goals used by AIR",
+    updated: "2026-11-19",
+    note: "Statements below are limited to wording checked against the linked sources. This list is editable. It is not a ranking of governments, and a project that does not touch these goals is not a failed project.",
+    goals: [
+      {
+        id: "sdg-7",
+        framework: "UN Sustainable Development Goals",
+        name: "SDG 7 \u2014 Affordable and clean energy",
+        statement: "Ensure access to affordable, reliable, sustainable and modern energy for all. Target 7.1: by 2030, ensure universal access to affordable, reliable and modern energy services.",
+        sourceUrl: "https://sdgs.un.org/goals/goal7",
+        keywords: ["energy access", "electricity", "clean energy", "renewable", "power"]
+      },
+      {
+        id: "sdg-13",
+        framework: "UN Sustainable Development Goals",
+        name: "SDG 13 \u2014 Climate action",
+        statement: "Take urgent action to combat climate change and its impacts.",
+        sourceUrl: "https://sdgs.un.org/goals/goal13",
+        keywords: ["climate", "emissions", "greenhouse", "carbon", "warming"]
+      },
+      {
+        id: "sdg-9",
+        framework: "UN Sustainable Development Goals",
+        name: "SDG 9 \u2014 Industry, innovation and infrastructure",
+        statement: "Build resilient infrastructure, promote inclusive and sustainable industrialization and foster innovation.",
+        sourceUrl: "https://sdgs.un.org/goals/goal9",
+        keywords: ["infrastructure", "industry", "innovation", "manufacturing"]
+      },
+      {
+        id: "sdg-6",
+        framework: "UN Sustainable Development Goals",
+        name: "SDG 6 \u2014 Clean water and sanitation",
+        statement: "Ensure availability and sustainable management of water and sanitation for all.",
+        sourceUrl: "https://sdgs.un.org/goals/goal6",
+        keywords: ["water", "sanitation", "irrigation", "drought"]
+      },
+      {
+        id: "sdg-2",
+        framework: "UN Sustainable Development Goals",
+        name: "SDG 2 \u2014 Zero hunger",
+        statement: "End hunger, achieve food security and improved nutrition and promote sustainable agriculture.",
+        sourceUrl: "https://sdgs.un.org/goals/goal2",
+        keywords: ["hunger", "food", "agriculture", "crop", "nutrition"]
+      },
+      {
+        id: "sdg-11",
+        framework: "UN Sustainable Development Goals",
+        name: "SDG 11 \u2014 Sustainable cities and communities",
+        statement: "Make cities and human settlements inclusive, safe, resilient and sustainable.",
+        sourceUrl: "https://sdgs.un.org/goals/goal11",
+        keywords: ["city", "cities", "urban", "housing", "shelter"]
+      },
+      {
+        id: "sdg-12",
+        framework: "UN Sustainable Development Goals",
+        name: "SDG 12 \u2014 Responsible consumption and production",
+        statement: "Ensure sustainable consumption and production patterns.",
+        sourceUrl: "https://sdgs.un.org/goals/goal12",
+        keywords: ["waste", "consumption", "recycling", "circular", "materials"]
+      },
+      {
+        id: "paris",
+        framework: "Paris Agreement",
+        name: "Paris Agreement temperature goal",
+        statement: "Holding the increase in the global average temperature to well below 2\xB0C above pre-industrial levels and pursuing efforts to limit the temperature increase to 1.5\xB0C (Article 2.1(a)).",
+        sourceUrl: "https://unfccc.int/sites/default/files/english_paris_agreement.pdf",
+        keywords: ["paris", "1.5", "2\xB0c", "2 c", "temperature", "climate"]
+      },
+      {
+        id: "cop28-renewables",
+        framework: "COP28 decision 1/CMA.5",
+        name: "UAE Consensus \u2014 renewables and efficiency by 2030",
+        statement: "Calls on Parties to contribute to tripling renewable energy capacity globally and doubling the global average annual rate of energy efficiency improvements by 2030 (Decision 1/CMA.5, paragraph 28(a)).",
+        sourceUrl: "https://unfccc.int/sites/default/files/resource/cma2023_16a01E.pdf",
+        keywords: ["renewable", "efficiency", "solar", "wind", "capacity"]
+      },
+      {
+        id: "cop28-fossils",
+        framework: "COP28 decision 1/CMA.5",
+        name: "UAE Consensus \u2014 transitioning away from fossil fuels",
+        statement: "Calls on Parties to contribute to transitioning away from fossil fuels in energy systems, in a just, orderly and equitable manner, so as to achieve net zero by 2050 in keeping with the science (Decision 1/CMA.5, paragraph 28(d)).",
+        sourceUrl: "https://unfccc.int/sites/default/files/resource/cma2023_16a01E.pdf",
+        keywords: ["fossil", "coal", "oil", "gas", "net zero", "combustion"]
+      },
+      {
+        id: "iea-nze",
+        framework: "IEA Net Zero by 2050",
+        name: "IEA Net Zero by 2050 pathway",
+        statement: "The IEA Net Zero by 2050 roadmap is a pathway for the global energy sector to reach net zero CO2 emissions by 2050.",
+        sourceUrl: "https://www.iea.org/reports/net-zero-by-2050",
+        keywords: ["net zero", "2050", "energy sector", "decarbon"]
+      },
+      {
+        id: "methane-pledge",
+        framework: "Global Methane Pledge",
+        name: "Global Methane Pledge",
+        statement: "Participants commit to work together to collectively reduce global anthropogenic methane emissions across all sectors by at least 30 percent below 2020 levels by 2030. This is a collective target, not a per-country quota.",
+        sourceUrl: "https://www.globalmethanepledge.org/",
+        keywords: ["methane", "ch4", "leak"]
+      },
+      {
+        id: "energy-access-2030",
+        framework: "UN Sustainable Development Goals",
+        name: "Universal energy access by 2030",
+        statement: "SDG target 7.1: by 2030, ensure universal access to affordable, reliable and modern energy services.",
+        sourceUrl: "https://sdgs.un.org/goals/goal7",
+        keywords: ["energy access", "universal access", "electricity access", "clean cooking"]
+      }
+    ]
+  };
+
+  // src/domain/goals.ts
+  function isRecord4(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+  function parseGlobalGoals(input) {
+    const errors = [];
+    if (!isRecord4(input)) return { ok: false, errors: ["Goals file must be a JSON object."] };
+    const version = typeof input.version === "string" ? input.version.trim() : "";
+    if (!version) errors.push("version is required.");
+    const goalsRaw = Array.isArray(input.goals) ? input.goals : [];
+    const goals = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const item of goalsRaw) {
+      if (!isRecord4(item)) continue;
+      const id = typeof item.id === "string" ? item.id.trim() : "";
+      const name = typeof item.name === "string" ? item.name.trim() : "";
+      const statement = typeof item.statement === "string" ? item.statement.trim() : "";
+      const sourceUrl = typeof item.sourceUrl === "string" ? item.sourceUrl.trim() : "";
+      if (!id || !name || !statement || !sourceUrl.startsWith("https://")) {
+        errors.push(`Goal ${id || name || "(missing)"} needs an id, name, statement, and https source.`);
+        continue;
+      }
+      if (seen.has(id)) errors.push(`Duplicate goal id ${id}.`);
+      seen.add(id);
+      goals.push({
+        id,
+        framework: typeof item.framework === "string" ? item.framework : "",
+        name,
+        statement,
+        sourceUrl,
+        keywords: Array.isArray(item.keywords) ? item.keywords.filter((word) => typeof word === "string") : []
+      });
+    }
+    if (goals.length === 0) errors.push("Add at least one goal.");
+    if (errors.length) return { ok: false, errors };
+    return {
+      ok: true,
+      file: {
+        id: typeof input.id === "string" ? input.id : "global-goals",
+        version,
+        name: typeof input.name === "string" ? input.name : "Global goals",
+        updated: typeof input.updated === "string" ? input.updated : "",
+        note: typeof input.note === "string" ? input.note : "",
+        goals
+      }
+    };
+  }
+  var parsed = parseGlobalGoals(global_goals_default);
+  if (!parsed.ok) throw new Error(parsed.errors.join("\n"));
+  var globalGoals = parsed.file;
+
+  // src/services/prompts.ts
+  var CAREFUL_REVIEW_ENDING = "Take your time. Read the whole paper and reason it through as a careful peer reviewer: write your analysis in plain prose first, criterion by criterion, quoting the passages you rely on. There is no length limit and no rush. When your analysis is finished, end your reply with the score sheet as one JSON object inside a ```json fenced block.";
+  var CAREFUL_DEFENCE_ENDING = "Take your time. Argue the defence fully in prose, criterion by criterion, quoting the passages you rely on. There is no length limit and no rush. When that argument is finished, end your reply with the revised score sheet as one JSON object inside a ```json fenced block.";
 
   // src/services/webChat/defence.ts
   var DEFENCE_DEFAULT_ROUNDS = 2;
@@ -2975,7 +3165,8 @@ ${output}
     return [
       "Score the paper again with the same AIR v0.2 rubric.",
       "The first score stays the official blind score. This second score is after author defence.",
-      "Use only the paper text in this chat. Do not invent data. Return one JSON object and nothing else.",
+      "Use only the paper text in this chat. Do not invent data. Do not ask for an attachment.",
+      CAREFUL_DEFENCE_ENDING,
       "Keep the same fields as the first review: summary, scores for every criterion, overallScore, and recommendation."
     ].join("\n");
   }
@@ -3039,12 +3230,12 @@ ${output}
   }
   function recordIdFromPaperTextUrl(url) {
     try {
-      const parsed = new URL(url);
-      const file = parsed.pathname.match(/\/paper-text\/(\d+)\.txt$/);
+      const parsed2 = new URL(url);
+      const file = parsed2.pathname.match(/\/paper-text\/(\d+)\.txt$/);
       if (file?.[1]) return file[1];
-      const query = parsed.searchParams.get("id");
+      const query = parsed2.searchParams.get("id");
       if (query && /^\d+$/.test(query)) return query;
-      const route = parsed.pathname.match(/\/paper\/(\d+)\/text\/?$/);
+      const route = parsed2.pathname.match(/\/paper\/(\d+)\/text\/?$/);
       return route?.[1] ?? null;
     } catch {
       return null;
@@ -3065,7 +3256,9 @@ ${output}
       "Open this public text page and read the full paper. No sign-in is required.",
       url,
       "",
-      "Score that paper with the instructions below. Return one JSON object and nothing else. Do not ask for an attachment.",
+      "Use only the paper text on that page. Do not invent data. Do not ask for an attachment.",
+      CAREFUL_REVIEW_ENDING,
+      "Score that paper with the instructions below.",
       "",
       instructions
     ].join("\n");
@@ -3213,7 +3406,8 @@ ${text}`;
     const finalText = [packet.system, packet.instructions].filter(Boolean).join("\n\n");
     const closing = files.length ? `${finalText}
 
-The paper is in the attached files or in the earlier messages labelled AIR PAPER. Score that text. Return one JSON object and nothing else.` : finalText;
+The paper is in the attached files or in the earlier messages labelled AIR PAPER. Use only that paper text. Do not invent data. Do not ask for an attachment.
+${CAREFUL_REVIEW_ENDING}` : finalText;
     const banner = sourceBanner(packet.instructions);
     const paper = paperBody(files);
     const combined = [paper, closing].filter(Boolean).join("\n\n");
@@ -3768,6 +3962,20 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
   function reviewJsonBlock(text) {
     return lastScoreJson(text)?.text ?? "";
   }
+  function reasoningActive(root) {
+    const nodes = [
+      ...queryAllDeep(root, "button"),
+      ...queryAllDeep(root, "[role='status']"),
+      ...queryAllDeep(root, "[aria-live]"),
+      ...queryAllDeep(root, "[data-testid]")
+    ];
+    return nodes.some((el) => {
+      if (isIgnoredRegion(el) || el.hasAttribute("hidden") || el.getAttribute("aria-hidden") === "true") return false;
+      const label = `${el.getAttribute("aria-label") ?? ""} ${(el.textContent ?? "").replace(/\s+/g, " ")}`.trim();
+      if (/thought for\s+\d+/i.test(label)) return false;
+      return /\bthinking\b/i.test(label) || /\breasoning\b/i.test(label);
+    });
+  }
   function stopControlActive(root, selectors) {
     const extra = ["button", "[role='button']"];
     const found = [];
@@ -4140,6 +4348,8 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
   function stepDiagnostic(doc) {
     return `${describeButtons(doc)} ${describeCandidates(doc)}`;
   }
+  var REPLY_TIMEOUT_MS = 10 * 60 * 1e3;
+  var REPLY_STABLE_MS = 2e4;
   function replySettled(quietMs, stableMs, streaming, hasReply) {
     return hasReply && !streaming && quietMs >= stableMs;
   }
@@ -4189,9 +4399,9 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
     note(hooks, label, "waiting", `Waiting for the reply: ${label}.`);
     await hooks.keepAwake?.();
     const pollMs = hooks.pollMs ?? 400;
-    const stableMs = hooks.stableMs ?? 5e3;
-    const timeoutMs = hooks.stepTimeoutMs ?? 9e4;
-    const silentMs = hooks.replySilentMs ?? 45e3;
+    const stableMs = hooks.stableMs ?? REPLY_STABLE_MS;
+    const timeoutMs = hooks.stepTimeoutMs ?? REPLY_TIMEOUT_MS;
+    const silentMs = hooks.replySilentMs ?? REPLY_TIMEOUT_MS;
     const startLimit = hooks.replyStartTimeoutMs ?? 2e4;
     const start = Date.now();
     let lastReply = "";
@@ -4215,14 +4425,16 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
       selector = picked2.candidate;
       const json = reviewJsonBlock(reply2);
       const ack = ackReply(doc, composer);
-      const streaming = stopControlActive(doc, provider.selectors.stop);
+      const stopping = stopControlActive(doc, provider.selectors.stop);
+      const thinking = reasoningActive(doc);
+      const streaming = stopping || thinking;
       const sendReady = Boolean(findSubmit(doc, provider.selectors.submit, composer));
       if (reply2 || ack) started = true;
       const changed = reply2 !== lastReply;
       if (changed) lastReply = reply2;
       if (changed || streaming || lastChange === null) lastChange = Date.now();
       const quietFor = Date.now() - lastChange;
-      const diagnostic2 = replyDiagnostic(selector, reply2.length, changed ? Date.now() : lastChange, changed || streaming ? 0 : quietFor, stableMs, streaming);
+      const diagnostic2 = `${replyDiagnostic(selector, reply2.length, changed ? Date.now() : lastChange, changed || streaming ? 0 : quietFor, stableMs, stopping)}${thinking ? ", thinking" : ""}`;
       if (changed || Date.now() - lastLog >= 3e3) {
         note(hooks, label, reply2 ? "reading" : "waiting", `Waiting for the reply: ${label}.`, diagnostic2);
         lastLog = Date.now();
@@ -4246,8 +4458,12 @@ The paper is in the attached files or in the earlier messages labelled AIR PAPER
         }
       }
       const settled = replySettled(quietFor, stableMs, streaming, Boolean(reply2) && !changed);
-      if (settled) return expect === "json" && json ? json : reply2;
-      if (!reply2 && Date.now() - start >= silentMs) {
+      if (settled) {
+        if (expect === "text") return reply2;
+        if (liveFresh.trim()) return liveFresh;
+        return json || reply2;
+      }
+      if (!reply2 && !streaming && Date.now() - start >= silentMs) {
         const empty = replyDiagnostic(selector, 0, null, 0, stableMs, streaming);
         if (attempt < 2) {
           note(hooks, label, "waiting", `Still waiting for a stable reply: ${label}. ${empty}`, empty);

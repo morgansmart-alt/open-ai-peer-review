@@ -7,7 +7,8 @@ import { weightedMean } from "../domain/criteria.ts"
 import { sha256Hex } from "./hash.ts"
 import { chunkText } from "./textTools.ts"
 import { extractJsonValue, validateReport } from "./validateReport.ts"
-import { describeCriterionGather, mergeReviewFields, parseModelJson, reaskJsonPrompt } from "./jsonText.ts"
+import { describeCriterionGather, mergeReviewFields, parseModelJson, reaskJsonPrompt, reviewAnalysis } from "./jsonText.ts"
+import { CAREFUL_REVIEW_ENDING } from "./prompts.ts"
 
 const good = {
   summary: "The record states a narrow claim and shows the weighing steps that support it, with the season limit written in the text.",
@@ -106,6 +107,8 @@ describe("validateReport", () => {
     expect(prompt).toContain("https://zenodo.org/records/1")
     expect(prompt).toContain("https://doi.org/10.5281/zenodo.1")
     expect(prompt).toContain("Concept record (all versions): https://zenodo.org/records/1")
+    expect(prompt).toContain("as long as it needs to be")
+    expect(prompt).not.toContain("80-180")
   })
 
   it("does not block on a missing global-goals citation or score, and accepts a scores object", () => {
@@ -158,8 +161,50 @@ describe("validateReport", () => {
     expect(prompt).toContain("at least 40 characters")
     expect(prompt).toContain("impact, clarity")
     expect(prompt).toContain('"criterionId":"impact"')
-    expect(prompt).toContain("ONE flat JSON object")
+    expect(prompt).toContain("```json")
+    expect(prompt).toContain("prose")
+    expect(prompt).not.toContain("nothing else")
+    expect(reviewSystemPrompt(officialCriteria)).toContain("Take your time")
+    expect(reviewSystemPrompt(officialCriteria)).toContain("```json")
+    expect(reviewSystemPrompt(officialCriteria)).toContain("Do not invent data")
+    expect(reviewSystemPrompt(officialCriteria)).toContain("Do not ask for an attachment")
+    expect(reviewSystemPrompt(officialCriteria)).not.toContain("nothing else")
+    expect(CAREFUL_REVIEW_ENDING).toContain("fenced block")
     expect(prompt).toContain("Never nest a citation")
+  })
+
+  it("keeps the prose and reads the last fenced score sheet", () => {
+    const sheet = (score: number) => ({
+      summary: "The record states a narrow claim and shows the weighing steps that support it, with the season limit written in the text.",
+      scores: officialCriteria.criteria.flatMap((criterion) => criterion.id === "global-goals" ? [] : [{
+        criterionId: criterion.id,
+        score,
+        rationale: "The text states this in a sentence a reader can find.",
+        citations: [{ quote: "Net B collected 1.8 litres.", location: "results" }],
+        confidence: "medium" as const,
+      }]),
+      overallScore: score,
+      recommendation: "encourage",
+      strengths: ["The files are public."],
+      questionsForAuthors: ["Which table changed?"],
+      suggestedNextSteps: ["Publish the table beside the text."],
+      ontologyClass: "physical-testable",
+      physics: { classification: "CONSISTENT", laws: ["conservation of mass"], howAddressed: "The mass balance is written out." },
+      simulation: { reported: 0, passed: 0, methods: "Simulation does not apply to this record.", inputsAvailable: false },
+      valueEstimate: { assumptions: ["The season is one site."], marketDisruption: "Not estimated." },
+      goals: [{ goalId: "sdg-9", level: "indirect", note: "Shared measurement standards." }],
+    })
+    const prose = "I read the whole paper. Impact rests on the measured yield {this brace is not a score sheet. Feasibility follows from the method section."
+    const reply = `${prose}\n\`\`\`json\n${JSON.stringify(sheet(10))}\n\`\`\`\nThe limitations are stated in the last section.\n\`\`\`json\n${JSON.stringify(sheet(90))}\n\`\`\``
+    expect(reviewAnalysis(reply)).toContain("I read the whole paper")
+    expect(reviewAnalysis(reply)).toContain("limitations are stated")
+    const parsed = parseModelJson(reply)
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    const accepted = validateReport(parsed.value, officialCriteria)
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) expect(accepted.errors).toEqual([])
+    if (accepted.ok) expect(accepted.report.scores.find((score) => score.criterionId === "impact")?.score).toBe(90)
   })
 
   it("keeps an uncited score, maps loose enums, and merges a thinner correction", () => {

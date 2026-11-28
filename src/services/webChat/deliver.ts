@@ -1,4 +1,5 @@
 import type { ProviderAdapter } from "../../../extension/adapters/index.ts"
+import { CAREFUL_REVIEW_ENDING } from "../prompts.ts"
 import { linkReadingPrompt } from "./paperText.ts"
 import type { WebChatFile, WebChatPacket } from "./protocol.ts"
 
@@ -155,7 +156,7 @@ export function planDelivery(packet: WebChatPacket, provider: ProviderAdapter): 
   const files = packet.files.filter((file) => file.text.trim())
   const finalText = [packet.system, packet.instructions].filter(Boolean).join("\n\n")
   const closing = files.length
-    ? `${finalText}\n\nThe paper is in the attached files or in the earlier messages labelled AIR PAPER. Score that text. Return one JSON object and nothing else.`
+    ? `${finalText}\n\nThe paper is in the attached files or in the earlier messages labelled AIR PAPER. Use only that paper text. Do not invent data. Do not ask for an attachment.\n${CAREFUL_REVIEW_ENDING}`
     : finalText
   const banner = sourceBanner(packet.instructions)
   const paper = paperBody(files)

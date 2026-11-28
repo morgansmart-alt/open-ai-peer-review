@@ -4,6 +4,10 @@ A Chrome and Edge extension that scores a PDF in a chat you are already signed i
 
 If you do not use a terminal, follow [INSTALL.md](../INSTALL.md). The file to download is [release/air-web-chat.zip](../release/air-web-chat.zip). Unzip it and use Load unpacked. Click the AIR icon, pick a paper, and click **Review my paper**.
 
+## Changelog
+
+- 0.2.25: The reviewer writes the analysis in prose first and ends with a fenced JSON score sheet. A reply step waits 10 minutes, stays quiet for 20 seconds, and treats a visible Thinking indicator as still streaming.
+
 The score is labelled **free web-chat, uncalibrated**. It stays in the browser until you opt in. **Save a copy** writes JSON the AIR site can import. **Send to Global Good Idea leaderboard** posts one score only when you click it. The extension does not read passwords or cookies.
 
 ## Rebuild (only if you change the code)

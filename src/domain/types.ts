@@ -227,6 +227,8 @@ export interface StoredReview {
   source?: "web-chat extension"
   /** Shown on the score card when the text page was down and the first reply used another source. */
   sourceNote?: string
+  /** Prose the reviewer wrote before the fenced score sheet. Kept in the payload. No separate column. */
+  analysis?: string
   /** Public paper address. Private chat links are never stored here. */
   paperUrl?: string
   /** Second score after Defend my paper. The blind overallScore stays the displayed score. */
@@ -395,6 +397,7 @@ export const STORED_REVIEW_KEYS = [
   "tier",
   "source",
   "paperUrl",
+  "analysis",
   "report",
   "outputHash",
   "createdAt",

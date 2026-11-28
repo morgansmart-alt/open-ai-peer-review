@@ -62,6 +62,10 @@ describe("defend my paper", () => {
     expect(linked).toContain("already in this chat")
     expect(prompt).toContain("The stopping rule is missing.")
     expect(rescorePrompt()).toContain("after author defence")
+    expect(rescorePrompt()).toContain("Argue the defence fully in prose")
+    expect(rescorePrompt()).toContain("```json")
+    expect(rescorePrompt()).toContain("Do not invent data")
+    expect(rescorePrompt()).not.toContain("nothing else")
     const finished = await runDefenceLoop({
       rounds: 2,
       critiques,

@@ -306,6 +306,16 @@ describe("web-chat submission", () => {
     expect(server.ok).toBe(true)
     if (!server.ok) return
     expect(toSubmissionRow(server.submission).defended_score).toBe(65)
+    const withAnalysis = validateWebChatSubmission(payload(70, "revise", {
+      analysis: "I read the paper first. The yield is measured in the results. https://share.google/aimode/SECRET",
+    }))
+    expect(withAnalysis.ok).toBe(true)
+    if (withAnalysis.ok) {
+      expect(withAnalysis.submission.analysis).toContain("I read the paper first")
+      expect(withAnalysis.submission.analysis).not.toContain("SECRET")
+      expect(toSubmissionRow(withAnalysis.submission).payload.analysis).toContain("I read the paper first")
+      expect(toSubmissionRow(withAnalysis.submission).blind_score).toBe(70)
+    }
     expect(server.submission.defended?.scores).toEqual([{ criterionId: "clarity", score: 70, uncited: true }])
   })
 })

@@ -9,6 +9,7 @@ import { recordStep, renderReviewApp, type ReviewModel, type StepLogEntry } from
 import { defendedFromReply } from "../src/services/webChat/defence.ts"
 import { defenceRoundCounts, runSummary } from "../src/services/webChat/runSummary.ts"
 import { resolvePublication, type PublicationPreview } from "../src/services/webChat/publication.ts"
+import { reviewAnalysis } from "../src/services/jsonText.ts"
 import { submissionFromReview } from "../src/services/webChat/submission.ts"
 import { postWebChatSubmission } from "../src/services/webChat/submit.ts"
 import {
@@ -336,6 +337,8 @@ async function finish(raw: string, defendedRaw: string | null, transcript: { rou
       : undefined,
   })
   stored.defenceTranscript = transcript
+  const analysis = reviewAnalysis(raw)
+  if (analysis) stored.analysis = analysis.slice(0, 12_000)
   if (defended?.ok) {
     stored.defended = defended.defended
     if (defended.partial) stored.defenceNote = "The after-defence reply named an overall score without a full score sheet. That number is shown."

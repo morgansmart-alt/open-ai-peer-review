@@ -1155,7 +1155,8 @@ var SUBMIT_LIMIT = 12;
 var SUBMIT_WINDOW_MS = 10 * 60 * 1e3;
 var AIR_SITE_URL = "https://morgansmart-alt.github.io/open-ai-peer-review/";
 var WEB_CHAT_SUBMIT_URL = "https://lotswxboafsenmszijpf.supabase.co/functions/v1/submit-web-chat";
-var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback"]);
+var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback", "analysis"]);
+var ANALYSIS_LIMIT = 12e3;
 var DEFENDED_KEYS = /* @__PURE__ */ new Set(["label", "overallScore", "recommendation", "summary", "scores"]);
 var PAPER_KEYS = /* @__PURE__ */ new Set(["title", "doi", "url"]);
 function isRecord3(value) {
@@ -1241,7 +1242,8 @@ function submissionFromReview(review, site) {
     recommendation: review.report.recommendation,
     createdAt: review.createdAt,
     ...defended ? { defended } : {},
-    ...review.report.airFeedback ? { airFeedback: review.report.airFeedback } : {}
+    ...review.report.airFeedback ? { airFeedback: review.report.airFeedback } : {},
+    ...review.analysis ? { analysis: stripChatShareLinks(review.analysis).slice(0, ANALYSIS_LIMIT) } : {}
   };
   const checked = validateWebChatSubmission(submission, criteria);
   if (checked.ok) return { ok: true, submission: checked.submission };
@@ -1305,6 +1307,7 @@ function validateWebChatSubmission(input, criteria = officialCriteria) {
   const defended = readDefended(input.defended, criteria);
   if (!defended.ok) return defended;
   const airFeedback = parseAirFeedback(input.airFeedback);
+  const analysis = stripChatShareLinks(clip2(input.analysis, ANALYSIS_LIMIT));
   return {
     ok: true,
     submission: {
@@ -1321,7 +1324,8 @@ function validateWebChatSubmission(input, criteria = officialCriteria) {
       recommendation,
       createdAt,
       ...defended.score ? { defended: defended.score } : {},
-      ...airFeedback ? { airFeedback } : {}
+      ...airFeedback ? { airFeedback } : {},
+      ...analysis ? { analysis } : {}
     }
   };
 }
@@ -1411,6 +1415,7 @@ function submissionToStored(payload) {
     tier: UNCALIBRATED_WEB_CHAT_TIER,
     source: WEB_CHAT_SOURCE,
     paperUrl: payload.paper.url,
+    ...payload.analysis ? { analysis: payload.analysis } : {},
     defended: payload.defended,
     report: {
       summary: payload.summary,
@@ -1439,6 +1444,7 @@ function submissionToStored(payload) {
 }
 export {
   AIR_SITE_URL,
+  ANALYSIS_LIMIT,
   SUBMIT_LIMIT,
   SUBMIT_WINDOW_MS,
   WEB_CHAT_SUBMIT_URL,

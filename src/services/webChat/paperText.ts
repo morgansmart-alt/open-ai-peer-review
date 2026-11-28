@@ -1,3 +1,4 @@
+import { CAREFUL_REVIEW_ENDING } from "../prompts.ts"
 import type { ZenodoRecord } from "../zenodo.ts"
 import { stripHtml } from "../zenodo.ts"
 
@@ -145,7 +146,9 @@ export function linkReadingPrompt(url: string, instructions: string): string {
     "Open this public text page and read the full paper. No sign-in is required.",
     url,
     "",
-    "Score that paper with the instructions below. Return one JSON object and nothing else. Do not ask for an attachment.",
+    "Use only the paper text on that page. Do not invent data. Do not ask for an attachment.",
+    CAREFUL_REVIEW_ENDING,
+    "Score that paper with the instructions below.",
     "",
     instructions,
   ].join("\n")

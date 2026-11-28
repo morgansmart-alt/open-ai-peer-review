@@ -2069,9 +2069,9 @@ ${output}
 
   // src/services/jsonText.ts
   function fenced(raw) {
-    const trimmed = raw.trim();
-    const match = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-    return (match?.[1] ?? trimmed).trim();
+    const blocks = fencedBlocks(raw);
+    if (blocks.length > 0) return blocks[blocks.length - 1] ?? raw.trim();
+    return raw.trim();
   }
   function matchingBrace(text2, start) {
     let depth = 0;
@@ -2572,7 +2572,23 @@ ${output}
     }
     return row;
   }
+  function reviewAnalysis(raw) {
+    const marks = [...raw.matchAll(/```(?:json)?\s*[\s\S]*?```/gi)];
+    const last = marks[marks.length - 1];
+    if (!last || last.index == null) return "";
+    return raw.slice(0, last.index).replace(/\s+$/g, "").trim();
+  }
   function parseModelJson(raw, criterionIds) {
+    if (raw.includes("```")) {
+      const required2 = requiredCriterionIds(criterionIds);
+      const blocks = fencedBlocks(raw);
+      for (let index = blocks.length - 1; index >= 0; index -= 1) {
+        const block = blocks[index];
+        if (!block || block.includes("```")) continue;
+        const fenced2 = parseModelJson(block, criterionIds);
+        if (fenced2.ok && coversCriteria(fenced2.value, required2)) return fenced2;
+      }
+    }
     const required = requiredCriterionIds(criterionIds);
     const review = chooseReviewJson(raw);
     const shaped = review ? normaliseScoreShape(review.value) : null;
@@ -3243,9 +3259,11 @@ ${output}
   }
 
   // src/services/prompts.ts
+  var CAREFUL_REVIEW_ENDING = "Take your time. Read the whole paper and reason it through as a careful peer reviewer: write your analysis in plain prose first, criterion by criterion, quoting the passages you rely on. There is no length limit and no rush. When your analysis is finished, end your reply with the score sheet as one JSON object inside a ```json fenced block.";
   function reviewSystemPrompt(criteria) {
     return [
-      "You are an AIR reviewer. Return one JSON object and nothing else.",
+      "You are an AIR reviewer. Use only the paper text you were given. Do not invent data. Do not ask for an attachment.",
+      CAREFUL_REVIEW_ENDING,
       "Judge the work on its logic and evidence. Do not score author credentials, affiliations, reputation, or identity. If those appear, ignore them.",
       "Be specific and kind. Every criticism needs a way to resolve it.",
       "Quote only passages that appear in the text you were given. Do not invent page numbers, results, or citations.",
@@ -3298,7 +3316,7 @@ ${output}
   }
   function reviewUserPrompt(record, criteria, packet, conversations = [], options) {
     const schema = {
-      summary: "string, 80-180 words",
+      summary: "string, as long as it needs to be",
       scores: criteria.criteria.map((criterion) => ({
         criterionId: criterion.id,
         score: `${criteria.scale.min}-${criteria.scale.max}`,
@@ -4100,7 +4118,8 @@ ${JSON.stringify(report)}`),
   // src/services/webChat/submission.ts
   var SUBMIT_WINDOW_MS = 10 * 60 * 1e3;
   var WEB_CHAT_SUBMIT_URL = "https://lotswxboafsenmszijpf.supabase.co/functions/v1/submit-web-chat";
-  var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback"]);
+  var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback", "analysis"]);
+  var ANALYSIS_LIMIT = 12e3;
   var DEFENDED_KEYS = /* @__PURE__ */ new Set(["label", "overallScore", "recommendation", "summary", "scores"]);
   var PAPER_KEYS = /* @__PURE__ */ new Set(["title", "doi", "url"]);
   function isRecord5(value) {
@@ -4171,7 +4190,8 @@ ${JSON.stringify(report)}`),
       recommendation: review.report.recommendation,
       createdAt: review.createdAt,
       ...defended ? { defended } : {},
-      ...review.report.airFeedback ? { airFeedback: review.report.airFeedback } : {}
+      ...review.report.airFeedback ? { airFeedback: review.report.airFeedback } : {},
+      ...review.analysis ? { analysis: stripChatShareLinks(review.analysis).slice(0, ANALYSIS_LIMIT) } : {}
     };
     const checked = validateWebChatSubmission(submission, criteria);
     if (checked.ok) return { ok: true, submission: checked.submission };
@@ -4235,6 +4255,7 @@ ${JSON.stringify(report)}`),
     const defended = readDefended(input.defended, criteria);
     if (!defended.ok) return defended;
     const airFeedback = parseAirFeedback(input.airFeedback);
+    const analysis = stripChatShareLinks(clip3(input.analysis, ANALYSIS_LIMIT));
     return {
       ok: true,
       submission: {
@@ -4251,7 +4272,8 @@ ${JSON.stringify(report)}`),
         recommendation,
         createdAt,
         ...defended.score ? { defended: defended.score } : {},
-        ...airFeedback ? { airFeedback } : {}
+        ...airFeedback ? { airFeedback } : {},
+        ...analysis ? { analysis } : {}
       }
     };
   }
@@ -4602,6 +4624,8 @@ ${JSON.stringify(report)}`),
       publication: publication ? { title: publication.title, doi: publication.doi, url: publication.url, authors: publication.authors } : void 0
     });
     stored.defenceTranscript = transcript;
+    const analysis = reviewAnalysis(raw);
+    if (analysis) stored.analysis = analysis.slice(0, 12e3);
     if (defended?.ok) {
       stored.defended = defended.defended;
       if (defended.partial) stored.defenceNote = "The after-defence reply named an overall score without a full score sheet. That number is shown.";
