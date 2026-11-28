@@ -1,5 +1,8 @@
 // Public paper text. Open-licence PDFs are extracted here. No auth and no private notes.
-// Deploy: supabase functions deploy paper-text --no-verify-jwt
+// Deploy bundles the shared src modules and leaves unpdf external:
+//   node scripts/bundle-paper-text.mjs
+//   supabase functions deploy paper-text --no-verify-jwt
+// deno.json maps unpdf to npm:unpdf@2.2.3.
 
 import { fetchZenodoRecord, fetchZenodoResponse } from "../../../src/services/zenodo.ts"
 import { extractPdfText } from "../../../src/services/webChat/pdfExtract.ts"

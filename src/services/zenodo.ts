@@ -231,9 +231,14 @@ export function normalizeZenodoRecord(input: unknown): ZenodoRecord {
   }
 }
 
+/** Zenodo file access AIR may copy. Legacy records say "public"; the API also says "open" or leaves it blank. */
+export function isOpenFiles(access: string): boolean {
+  const value = access.trim().toLowerCase()
+  return value === "" || value === "open" || value === "public"
+}
+
 export function filesAreRestricted(record: ZenodoRecord): boolean {
-  const files = record.access.files.toLowerCase()
-  return files !== "public" && files !== "open"
+  return !isOpenFiles(record.access.files)
 }
 
 export interface ZenodoAccess {
@@ -249,11 +254,11 @@ function accessWord(value: string): string {
 }
 
 export function isOpenFileAccess(access: ZenodoAccess): boolean {
-  const open = (value: string) => {
+  const recordOpen = (value: string) => {
     const word = accessWord(value)
     return word === "public" || word === "open"
   }
-  return open(access.record) && open(access.files)
+  return recordOpen(access.record) && isOpenFiles(access.files)
 }
 
 export function zenodoHttpMessage(status: number, access?: ZenodoAccess | null, kind: "record" | "file" = "record"): string {

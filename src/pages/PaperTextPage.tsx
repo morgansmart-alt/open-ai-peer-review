@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { downloadArrayBuffer, extractDocument } from "../services/extractText.ts"
 import { formatPaperText } from "../services/webChat/paperText.ts"
-import { fetchZenodoRecord, type ZenodoRecord } from "../services/zenodo.ts"
+import { fetchZenodoRecord, isOpenFiles, type ZenodoRecord } from "../services/zenodo.ts"
 
 /** A clean public page. Chat tools open this URL. It has no account and no private notes. */
 export function PaperTextPage({ recordId }: { recordId: string }) {
@@ -45,7 +45,7 @@ async function load(recordId: string): Promise<string> {
 }
 
 async function publicDocuments(record: ZenodoRecord): Promise<{ filename: string; text: string }[]> {
-  if (record.access.files !== "open") return []
+  if (!isOpenFiles(record.access.files)) return []
   const documents: { filename: string; text: string }[] = []
   for (const file of record.files) {
     if (!file.downloadUrl) continue

@@ -2,8 +2,9 @@ import { readFileSync } from "node:fs"
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
+import { isOpenFiles } from "../src/services/zenodo.ts"
 import { isOpenLicence } from "../src/services/webChat/pdfPaper.ts"
-import { collectPaperIds, documentsForOpenRecord, isOpenFileAccess, mergePaperIds, renderStaticPaperText } from "../src/services/webChat/paperTextFiles.ts"
+import { collectPaperIds, documentsForOpenRecord, mergePaperIds, renderStaticPaperText } from "../src/services/webChat/paperTextFiles.ts"
 
 const TEXT_EXTENSIONS = new Set(["txt", "md", "markdown", "csv", "tsv", "html", "htm", "json", "xml", "tex", "rst"])
 const FILE_CAP = 1_500_000
@@ -118,7 +119,7 @@ async function fileText(file: { key: string; url: string }, room: number): Promi
 }
 
 async function openText(record: NonNullable<ReturnType<typeof recordFromApi>>) {
-  if (!isOpenFileAccess(record.accessFiles)) return []
+  if (!isOpenFiles(record.accessFiles)) return []
   if (record.license && !isOpenLicence(record.license)) return []
   const gathered: { key: string; text: string }[] = []
   let used = 0
