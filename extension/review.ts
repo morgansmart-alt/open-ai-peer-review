@@ -9,7 +9,8 @@ import { recordStep, renderReviewApp, type ReviewModel, type StepLogEntry } from
 import { defendedFromReply } from "../src/services/webChat/defence.ts"
 import { defenceRoundCounts, runSummary } from "../src/services/webChat/runSummary.ts"
 import { resolvePublication, type PublicationPreview } from "../src/services/webChat/publication.ts"
-import { submissionFromReview } from "../src/services/webChat/submission.ts"
+import { reviewAnalysis } from "../src/services/jsonText.ts"
+import { publishedStatus, submissionFromReview } from "../src/services/webChat/submission.ts"
 import { postWebChatSubmission } from "../src/services/webChat/submit.ts"
 import {
   appendResult,
@@ -46,6 +47,7 @@ let busy = false
 let stepLog: StepLogEntry[] = []
 let reviews: StoredReview[] = []
 let sendState: Record<string, "sending" | "published" | "duplicate"> = {}
+let sendNotes: Record<string, string> = {}
 let publishedKeys: Record<string, "published" | "duplicate"> = {}
 let requestId = ""
 let pendingPaper: { filename: string; text: string; note?: string } | null = null
@@ -81,6 +83,7 @@ function historyItem(review: StoredReview) {
     mismatch: Boolean(card.mismatch),
     selected: selected.has(review.id),
     sendState: sendState[review.id] || rememberedSendState(review, publishedKeys),
+    sendNote: sendNotes[review.id] || "",
   }
 }
 
@@ -334,8 +337,11 @@ async function finish(raw: string, defendedRaw: string | null, transcript: { rou
     publication: publication
       ? { title: publication.title, doi: publication.doi, url: publication.url, authors: publication.authors }
       : undefined,
+    text: pendingPaper?.text,
   })
   stored.defenceTranscript = transcript
+  const analysis = reviewAnalysis(raw)
+  if (analysis) stored.analysis = analysis.slice(0, 12_000)
   if (defended?.ok) {
     stored.defended = defended.defended
     if (defended.partial) stored.defenceNote = "The after-defence reply named an overall score without a full score sheet. That number is shown."
@@ -365,52 +371,83 @@ async function finish(raw: string, defendedRaw: string | null, transcript: { rou
 }
 
 async function sendScores(ids: string[]): Promise<void> {
-  const chosen = reviews.filter((review) => ids.includes(review.id) && !sendState[review.id])
-  if (chosen.length === 0) return
-  for (const review of chosen) sendState[review.id] = "sending"
-  busy = true
-  error = ""
-  status = "Sending…"
-  paint()
-  const notes: string[] = []
-  const failures: string[] = []
-  for (const review of chosen) {
-    const built = submissionFromReview(review, review.modelId)
-    if (!built.ok) {
-      delete sendState[review.id]
-      failures.push(built.error)
-      continue
+  try {
+    const chosen = reviews.filter((review) => ids.includes(review.id) && !sendState[review.id])
+    if (chosen.length === 0) {
+      error = ids.length === 0
+        ? "Nothing was sent. Choose a saved score first."
+        : "Nothing was sent. That score is not in the list, or it was already sent."
+      status = ""
+      paint()
+      return
     }
-    try {
-      const response = await postWebChatSubmission(built.submission)
-      if (response.status === 404 || response.status === 405) {
+    for (const review of chosen) {
+      sendState[review.id] = "sending"
+      delete sendNotes[review.id]
+    }
+    busy = true
+    error = ""
+    status = "Sending…"
+    paint()
+    const notes: string[] = []
+    const failures: string[] = []
+    for (const review of chosen) {
+      const built = submissionFromReview(review, review.modelId)
+      if (!built.ok) {
         delete sendState[review.id]
-        failures.push("The leaderboard is not accepting web-chat scores yet. The submission service still has to be deployed. Your score stays on this browser.")
+        sendNotes[review.id] = built.error
+        failures.push(built.error)
+        continue
+      }
+      try {
+        const response = await postWebChatSubmission(built.submission)
+        if (response.status === 0 || response.status === 404 || response.status === 405) {
+          delete sendState[review.id]
+          const message = response.error || "The leaderboard is not accepting web-chat scores yet. The submission service still has to be deployed. Your score stays on this browser."
+          sendNotes[review.id] = message
+          failures.push(message)
+          break
+        }
+        if (!response.ok) {
+          delete sendState[review.id]
+          const message = response.error || `The board returned ${response.status}. Nothing was saved.`
+          sendNotes[review.id] = message
+          failures.push(message)
+        } else if (response.duplicate) {
+          sendState[review.id] = "duplicate"
+          publishedKeys[publishedResultKey(review)] = "duplicate"
+          const message = publishedStatus(review.title, built.submission, true)
+          sendNotes[review.id] = message
+          notes.push(message)
+        } else {
+          sendState[review.id] = "published"
+          publishedKeys[publishedResultKey(review)] = "published"
+          const message = publishedStatus(review.title, built.submission, false)
+          sendNotes[review.id] = message
+          notes.push(message)
+        }
+      } catch (caught) {
+        delete sendState[review.id]
+        const message = caught instanceof Error ? caught.message : "The browser could not reach the leaderboard. Your score stays on this browser."
+        sendNotes[review.id] = message
+        failures.push(message)
         break
       }
-      if (!response.ok) {
-        delete sendState[review.id]
-        failures.push(response.error || `The board returned ${response.status}.`)
-      } else if (response.duplicate) {
-        sendState[review.id] = "duplicate"
-        publishedKeys[publishedResultKey(review)] = "duplicate"
-        notes.push("Already on board")
-      } else {
-        sendState[review.id] = "published"
-        publishedKeys[publishedResultKey(review)] = "published"
-        notes.push("Published")
-      }
-    } catch {
-      delete sendState[review.id]
-      failures.push("The browser could not reach the leaderboard. Your score stays on this browser.")
-      break
     }
+    busy = false
+    status = notes.join(" ")
+    error = failures.join(" ")
+    if (notes.length > 0) await storageSet(PUBLISHED_STORAGE_KEY, publishedKeys)
+    paint()
+  } catch (caught) {
+    busy = false
+    for (const id of ids) {
+      if (sendState[id] === "sending") delete sendState[id]
+    }
+    error = caught instanceof Error ? caught.message : "The score was not sent."
+    status = ""
+    paint()
   }
-  busy = false
-  status = notes.join(" ")
-  error = failures.join(" ")
-  if (notes.length > 0) await storageSet(PUBLISHED_STORAGE_KEY, publishedKeys)
-  paint()
 }
 
 function restoreSaved(): Promise<void> {

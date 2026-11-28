@@ -1155,7 +1155,8 @@ var SUBMIT_LIMIT = 12;
 var SUBMIT_WINDOW_MS = 10 * 60 * 1e3;
 var AIR_SITE_URL = "https://morgansmart-alt.github.io/open-ai-peer-review/";
 var WEB_CHAT_SUBMIT_URL = "https://lotswxboafsenmszijpf.supabase.co/functions/v1/submit-web-chat";
-var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback"]);
+var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback", "analysis"]);
+var ANALYSIS_LIMIT = 12e3;
 var DEFENDED_KEYS = /* @__PURE__ */ new Set(["label", "overallScore", "recommendation", "summary", "scores"]);
 var PAPER_KEYS = /* @__PURE__ */ new Set(["title", "doi", "url"]);
 function isRecord3(value) {
@@ -1223,8 +1224,10 @@ function submissionFromReview(review, site) {
   if (described.scoringCheck.mismatch) {
     return { ok: false, error: "Scoring mismatch, needs re-check. This score stays on this browser until the chat is run again." };
   }
-  const paperKey = review.doi && review.doi !== "local-file" ? review.doi : review.paperUrl || review.doi;
-  if (!paperKey) return { ok: false, error: "Add a DOI or a link before sending this score." };
+  const paperKey = review.doi && review.doi !== "local-file" ? review.doi : review.paperUrl || "";
+  if (!paperKey) {
+    return { ok: false, error: `${review.title || "This score"} has no DOI or paper link, so it was not sent. Paste a Zenodo, DOI, or arXiv link and review again.` };
+  }
   const defended = postedDefended(review.defended);
   const summary = stripChatShareLinks(review.report.summary);
   const submission = {
@@ -1241,7 +1244,8 @@ function submissionFromReview(review, site) {
     recommendation: review.report.recommendation,
     createdAt: review.createdAt,
     ...defended ? { defended } : {},
-    ...review.report.airFeedback ? { airFeedback: review.report.airFeedback } : {}
+    ...review.report.airFeedback ? { airFeedback: review.report.airFeedback } : {},
+    ...review.analysis ? { analysis: stripChatShareLinks(review.analysis).slice(0, ANALYSIS_LIMIT) } : {}
   };
   const checked = validateWebChatSubmission(submission, criteria);
   if (checked.ok) return { ok: true, submission: checked.submission };
@@ -1305,6 +1309,7 @@ function validateWebChatSubmission(input, criteria = officialCriteria) {
   const defended = readDefended(input.defended, criteria);
   if (!defended.ok) return defended;
   const airFeedback = parseAirFeedback(input.airFeedback);
+  const analysis = stripChatShareLinks(clip2(input.analysis, ANALYSIS_LIMIT));
   return {
     ok: true,
     submission: {
@@ -1321,7 +1326,8 @@ function validateWebChatSubmission(input, criteria = officialCriteria) {
       recommendation,
       createdAt,
       ...defended.score ? { defended: defended.score } : {},
-      ...airFeedback ? { airFeedback } : {}
+      ...airFeedback ? { airFeedback } : {},
+      ...analysis ? { analysis } : {}
     }
   };
 }
@@ -1361,6 +1367,12 @@ function postedDefended(defended) {
       ...score.uncited ? { uncited: true } : {}
     }))
   };
+}
+function publishedStatus(title, submission, duplicate) {
+  const paper = submission.paper.doi || submission.paper.url;
+  const score = submission.overallScore.toFixed(2);
+  const lead = duplicate ? "Already on board" : "Published";
+  return `${lead}: ${title} \xB7 ${paper} \xB7 ${score}`;
 }
 function toSubmissionRow(submission) {
   const paperKey = submission.paper.doi || submission.paper.url;
@@ -1411,6 +1423,7 @@ function submissionToStored(payload) {
     tier: UNCALIBRATED_WEB_CHAT_TIER,
     source: WEB_CHAT_SOURCE,
     paperUrl: payload.paper.url,
+    ...payload.analysis ? { analysis: payload.analysis } : {},
     defended: payload.defended,
     report: {
       summary: payload.summary,
@@ -1439,11 +1452,13 @@ function submissionToStored(payload) {
 }
 export {
   AIR_SITE_URL,
+  ANALYSIS_LIMIT,
   SUBMIT_LIMIT,
   SUBMIT_WINDOW_MS,
   WEB_CHAT_SUBMIT_URL,
   decideWebChatSubmission,
   dedupeKey,
+  publishedStatus,
   submissionFromReview,
   submissionId,
   submissionToStored,

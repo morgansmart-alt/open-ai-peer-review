@@ -2069,9 +2069,9 @@ ${output}
 
   // src/services/jsonText.ts
   function fenced(raw) {
-    const trimmed = raw.trim();
-    const match = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-    return (match?.[1] ?? trimmed).trim();
+    const blocks = fencedBlocks(raw);
+    if (blocks.length > 0) return blocks[blocks.length - 1] ?? raw.trim();
+    return raw.trim();
   }
   function matchingBrace(text2, start) {
     let depth = 0;
@@ -2572,7 +2572,23 @@ ${output}
     }
     return row;
   }
+  function reviewAnalysis(raw) {
+    const marks = [...raw.matchAll(/```(?:json)?\s*[\s\S]*?```/gi)];
+    const last = marks[marks.length - 1];
+    if (!last || last.index == null) return "";
+    return raw.slice(0, last.index).replace(/\s+$/g, "").trim();
+  }
   function parseModelJson(raw, criterionIds) {
+    if (raw.includes("```")) {
+      const required2 = requiredCriterionIds(criterionIds);
+      const blocks = fencedBlocks(raw);
+      for (let index = blocks.length - 1; index >= 0; index -= 1) {
+        const block = blocks[index];
+        if (!block || block.includes("```")) continue;
+        const fenced2 = parseModelJson(block, criterionIds);
+        if (fenced2.ok && coversCriteria(fenced2.value, required2)) return fenced2;
+      }
+    }
     const required = requiredCriterionIds(criterionIds);
     const review = chooseReviewJson(raw);
     const shaped = review ? normaliseScoreShape(review.value) : null;
@@ -3243,9 +3259,11 @@ ${output}
   }
 
   // src/services/prompts.ts
+  var CAREFUL_REVIEW_ENDING = "Take your time. Read the whole paper and reason it through as a careful peer reviewer: write your analysis in plain prose first, criterion by criterion, quoting the passages you rely on. There is no length limit and no rush. When your analysis is finished, end your reply with the score sheet as one JSON object inside a ```json fenced block.";
   function reviewSystemPrompt(criteria) {
     return [
-      "You are an AIR reviewer. Return one JSON object and nothing else.",
+      "You are an AIR reviewer. Use only the paper text you were given. Do not invent data. Do not ask for an attachment.",
+      CAREFUL_REVIEW_ENDING,
       "Judge the work on its logic and evidence. Do not score author credentials, affiliations, reputation, or identity. If those appear, ignore them.",
       "Be specific and kind. Every criticism needs a way to resolve it.",
       "Quote only passages that appear in the text you were given. Do not invent page numbers, results, or citations.",
@@ -3298,7 +3316,7 @@ ${output}
   }
   function reviewUserPrompt(record, criteria, packet, conversations = [], options) {
     const schema = {
-      summary: "string, 80-180 words",
+      summary: "string, as long as it needs to be",
       scores: criteria.criteria.map((criterion) => ({
         criterionId: criterion.id,
         score: `${criteria.scale.min}-${criteria.scale.max}`,
@@ -3703,6 +3721,10 @@ ${output}
         const detail = [item.doi || item.url, item.site, item.model, item.createdAt ? item.createdAt.slice(0, 16).replace("T", " ") : "", `${Math.round(item.overall)} / 100`].filter(Boolean).join(" \xB7 ");
         el(row, "p", detail, "note");
         if (item.mismatch) el(row, "p", "Scoring mismatch, needs re-check. Not sent.", "mismatch");
+        if (item.sendNote) {
+          const note = el(row, "p", item.sendNote, item.sendNote.startsWith("Published") || item.sendNote.startsWith("Already on board") ? "status" : "error");
+          note.setAttribute("role", "alert");
+        }
         const sendLabel = item.sendState === "sending" ? "Sending\u2026" : item.sendState === "published" ? "Published" : item.sendState === "duplicate" ? "Already on board" : "Send to Global Good Idea leaderboard";
         const send2 = el(row, "button", sendLabel, "quiet");
         send2.type = "button";
@@ -3983,6 +4005,7 @@ ${output}
     return walk(value);
   }
   async function storedLocalReview(options) {
+    const discovered = options.text ? sourceRecordFromText(options.filename, options.text) : null;
     const record = localPaperRecord(options.filename);
     const report = stripChatShareLinks(scrubPrivateUrls(options.report, options.privateUrls ?? []));
     const modelHint = `${options.providerId} (web chat, uncalibrated)`;
@@ -4021,10 +4044,10 @@ ${JSON.stringify(report)}`),
       tier: "uncalibrated web-chat",
       source: "web-chat extension",
       criterionProfile: options.criterionProfile || review.criterionProfile,
-      doi: options.publication?.doi || review.doi,
+      doi: options.publication?.doi || (discovered && discovered.doi !== "local-file" ? discovered.doi : review.doi),
       title: options.publication?.title || review.title,
       creators: options.publication?.authors ?? review.creators,
-      paperUrl: options.publication?.url || review.paperUrl
+      paperUrl: options.publication?.url || discovered?.htmlUrl || review.paperUrl
     };
   }
   function appendResult(existing, next, cap = RESULT_CAP) {
@@ -4100,7 +4123,8 @@ ${JSON.stringify(report)}`),
   // src/services/webChat/submission.ts
   var SUBMIT_WINDOW_MS = 10 * 60 * 1e3;
   var WEB_CHAT_SUBMIT_URL = "https://lotswxboafsenmszijpf.supabase.co/functions/v1/submit-web-chat";
-  var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback"]);
+  var TOP_KEYS = /* @__PURE__ */ new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback", "analysis"]);
+  var ANALYSIS_LIMIT = 12e3;
   var DEFENDED_KEYS = /* @__PURE__ */ new Set(["label", "overallScore", "recommendation", "summary", "scores"]);
   var PAPER_KEYS = /* @__PURE__ */ new Set(["title", "doi", "url"]);
   function isRecord5(value) {
@@ -4153,8 +4177,10 @@ ${JSON.stringify(report)}`),
     if (described.scoringCheck.mismatch) {
       return { ok: false, error: "Scoring mismatch, needs re-check. This score stays on this browser until the chat is run again." };
     }
-    const paperKey = review.doi && review.doi !== "local-file" ? review.doi : review.paperUrl || review.doi;
-    if (!paperKey) return { ok: false, error: "Add a DOI or a link before sending this score." };
+    const paperKey = review.doi && review.doi !== "local-file" ? review.doi : review.paperUrl || "";
+    if (!paperKey) {
+      return { ok: false, error: `${review.title || "This score"} has no DOI or paper link, so it was not sent. Paste a Zenodo, DOI, or arXiv link and review again.` };
+    }
     const defended = postedDefended(review.defended);
     const summary = stripChatShareLinks(review.report.summary);
     const submission = {
@@ -4171,7 +4197,8 @@ ${JSON.stringify(report)}`),
       recommendation: review.report.recommendation,
       createdAt: review.createdAt,
       ...defended ? { defended } : {},
-      ...review.report.airFeedback ? { airFeedback: review.report.airFeedback } : {}
+      ...review.report.airFeedback ? { airFeedback: review.report.airFeedback } : {},
+      ...review.analysis ? { analysis: stripChatShareLinks(review.analysis).slice(0, ANALYSIS_LIMIT) } : {}
     };
     const checked = validateWebChatSubmission(submission, criteria);
     if (checked.ok) return { ok: true, submission: checked.submission };
@@ -4235,6 +4262,7 @@ ${JSON.stringify(report)}`),
     const defended = readDefended(input.defended, criteria);
     if (!defended.ok) return defended;
     const airFeedback = parseAirFeedback(input.airFeedback);
+    const analysis = stripChatShareLinks(clip3(input.analysis, ANALYSIS_LIMIT));
     return {
       ok: true,
       submission: {
@@ -4251,7 +4279,8 @@ ${JSON.stringify(report)}`),
         recommendation,
         createdAt,
         ...defended.score ? { defended: defended.score } : {},
-        ...airFeedback ? { airFeedback } : {}
+        ...airFeedback ? { airFeedback } : {},
+        ...analysis ? { analysis } : {}
       }
     };
   }
@@ -4292,24 +4321,37 @@ ${JSON.stringify(report)}`),
       }))
     };
   }
+  function publishedStatus(title, submission, duplicate) {
+    const paper = submission.paper.doi || submission.paper.url;
+    const score = submission.overallScore.toFixed(2);
+    const lead = duplicate ? "Already on board" : "Published";
+    return `${lead}: ${title} \xB7 ${paper} \xB7 ${score}`;
+  }
 
   // src/services/webChat/submit.ts
-  function webChatSubmitHeaders() {
-    const anon = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvdHN3eGJvYWZzZW5tc3ppanBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUxMTM0MDEsImV4cCI6MjExMDY4OTQwMX0.K0zYMdv3vkBMXiL4PePWemwodcDactb8rcZJc2cmi5w";
-    const key = typeof anon === "string" ? anon.trim() : "";
+  function leaderboardRequest(anonKey) {
+    const key = typeof anonKey === "string" ? anonKey.trim() : "";
+    if (!key) return { ok: false, error: "This extension build has no leaderboard key, so the score was not sent." };
     return {
-      "content-type": "application/json",
-      ...key ? { apikey: key, authorization: `Bearer ${key}` } : {}
+      ok: true,
+      headers: {
+        "content-type": "application/json",
+        apikey: key,
+        authorization: `Bearer ${key}`
+      }
     };
   }
   async function postWebChatSubmission(body) {
+    const ready = leaderboardRequest("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvdHN3eGJvYWZzZW5tc3ppanBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUxMTM0MDEsImV4cCI6MjExMDY4OTQwMX0.K0zYMdv3vkBMXiL4PePWemwodcDactb8rcZJc2cmi5w");
+    if (!ready.ok) return { ok: false, status: 0, error: ready.error };
     const response = await fetch(WEB_CHAT_SUBMIT_URL, {
       method: "POST",
-      headers: webChatSubmitHeaders(),
+      headers: ready.headers,
       body: JSON.stringify(body)
     });
     const payload = await response.json().catch(() => null);
-    return { ok: response.ok, status: response.status, error: payload?.error, duplicate: payload?.duplicate };
+    const error2 = payload?.error || payload?.message;
+    return { ok: response.ok, status: response.status, error: error2, duplicate: payload?.duplicate };
   }
 
   // extension/review.ts
@@ -4330,6 +4372,7 @@ ${JSON.stringify(report)}`),
   var stepLog = [];
   var reviews = [];
   var sendState = {};
+  var sendNotes = {};
   var publishedKeys = {};
   var requestId = "";
   var pendingPaper = null;
@@ -4360,7 +4403,8 @@ ${JSON.stringify(report)}`),
       createdAt: review.createdAt,
       mismatch: Boolean(card.mismatch),
       selected: selected.has(review.id),
-      sendState: sendState[review.id] || rememberedSendState(review, publishedKeys)
+      sendState: sendState[review.id] || rememberedSendState(review, publishedKeys),
+      sendNote: sendNotes[review.id] || ""
     };
   }
   function paint() {
@@ -4599,9 +4643,12 @@ ${JSON.stringify(report)}`),
       filename: pendingPaper?.filename || file?.name || publication?.filename || "paper",
       report: accepted.report,
       criterionProfile: profileId,
-      publication: publication ? { title: publication.title, doi: publication.doi, url: publication.url, authors: publication.authors } : void 0
+      publication: publication ? { title: publication.title, doi: publication.doi, url: publication.url, authors: publication.authors } : void 0,
+      text: pendingPaper?.text
     });
     stored.defenceTranscript = transcript;
+    const analysis = reviewAnalysis(raw);
+    if (analysis) stored.analysis = analysis.slice(0, 12e3);
     if (defended?.ok) {
       stored.defended = defended.defended;
       if (defended.partial) stored.defenceNote = "The after-defence reply named an overall score without a full score sheet. That number is shown.";
@@ -4626,52 +4673,81 @@ ${JSON.stringify(report)}`),
     paint();
   }
   async function sendScores(ids) {
-    const chosen = reviews.filter((review) => ids.includes(review.id) && !sendState[review.id]);
-    if (chosen.length === 0) return;
-    for (const review of chosen) sendState[review.id] = "sending";
-    busy = true;
-    error = "";
-    status = "Sending\u2026";
-    paint();
-    const notes = [];
-    const failures = [];
-    for (const review of chosen) {
-      const built = submissionFromReview(review, review.modelId);
-      if (!built.ok) {
-        delete sendState[review.id];
-        failures.push(built.error);
-        continue;
+    try {
+      const chosen = reviews.filter((review) => ids.includes(review.id) && !sendState[review.id]);
+      if (chosen.length === 0) {
+        error = ids.length === 0 ? "Nothing was sent. Choose a saved score first." : "Nothing was sent. That score is not in the list, or it was already sent.";
+        status = "";
+        paint();
+        return;
       }
-      try {
-        const response = await postWebChatSubmission(built.submission);
-        if (response.status === 404 || response.status === 405) {
+      for (const review of chosen) {
+        sendState[review.id] = "sending";
+        delete sendNotes[review.id];
+      }
+      busy = true;
+      error = "";
+      status = "Sending\u2026";
+      paint();
+      const notes = [];
+      const failures = [];
+      for (const review of chosen) {
+        const built = submissionFromReview(review, review.modelId);
+        if (!built.ok) {
           delete sendState[review.id];
-          failures.push("The leaderboard is not accepting web-chat scores yet. The submission service still has to be deployed. Your score stays on this browser.");
+          sendNotes[review.id] = built.error;
+          failures.push(built.error);
+          continue;
+        }
+        try {
+          const response = await postWebChatSubmission(built.submission);
+          if (response.status === 0 || response.status === 404 || response.status === 405) {
+            delete sendState[review.id];
+            const message = response.error || "The leaderboard is not accepting web-chat scores yet. The submission service still has to be deployed. Your score stays on this browser.";
+            sendNotes[review.id] = message;
+            failures.push(message);
+            break;
+          }
+          if (!response.ok) {
+            delete sendState[review.id];
+            const message = response.error || `The board returned ${response.status}. Nothing was saved.`;
+            sendNotes[review.id] = message;
+            failures.push(message);
+          } else if (response.duplicate) {
+            sendState[review.id] = "duplicate";
+            publishedKeys[publishedResultKey(review)] = "duplicate";
+            const message = publishedStatus(review.title, built.submission, true);
+            sendNotes[review.id] = message;
+            notes.push(message);
+          } else {
+            sendState[review.id] = "published";
+            publishedKeys[publishedResultKey(review)] = "published";
+            const message = publishedStatus(review.title, built.submission, false);
+            sendNotes[review.id] = message;
+            notes.push(message);
+          }
+        } catch (caught) {
+          delete sendState[review.id];
+          const message = caught instanceof Error ? caught.message : "The browser could not reach the leaderboard. Your score stays on this browser.";
+          sendNotes[review.id] = message;
+          failures.push(message);
           break;
         }
-        if (!response.ok) {
-          delete sendState[review.id];
-          failures.push(response.error || `The board returned ${response.status}.`);
-        } else if (response.duplicate) {
-          sendState[review.id] = "duplicate";
-          publishedKeys[publishedResultKey(review)] = "duplicate";
-          notes.push("Already on board");
-        } else {
-          sendState[review.id] = "published";
-          publishedKeys[publishedResultKey(review)] = "published";
-          notes.push("Published");
-        }
-      } catch {
-        delete sendState[review.id];
-        failures.push("The browser could not reach the leaderboard. Your score stays on this browser.");
-        break;
       }
+      busy = false;
+      status = notes.join(" ");
+      error = failures.join(" ");
+      if (notes.length > 0) await storageSet(PUBLISHED_STORAGE_KEY, publishedKeys);
+      paint();
+    } catch (caught) {
+      busy = false;
+      for (const id of ids) {
+        if (sendState[id] === "sending") delete sendState[id];
+      }
+      error = caught instanceof Error ? caught.message : "The score was not sent.";
+      status = "";
+      paint();
     }
-    busy = false;
-    status = notes.join(" ");
-    error = failures.join(" ");
-    if (notes.length > 0) await storageSet(PUBLISHED_STORAGE_KEY, publishedKeys);
-    paint();
   }
   function restoreSaved() {
     return storageGet(ONBOARD_STORAGE_KEY).then((seen) => {

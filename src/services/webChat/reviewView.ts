@@ -32,6 +32,8 @@ export interface HistoryItem {
   selected?: boolean
   /** sending, published, or duplicate. Empty means the score can still be sent. */
   sendState?: "" | "sending" | "published" | "duplicate"
+  /** Shown under the button when Send is refused or after it lands. */
+  sendNote?: string
 }
 
 export interface PublicationDraft {
@@ -377,6 +379,10 @@ export function renderReviewApp(root: HTMLElement, model: ReviewModel, actions: 
         .join(" · ")
       el(row, "p", detail, "note")
       if (item.mismatch) el(row, "p", "Scoring mismatch, needs re-check. Not sent.", "mismatch")
+      if (item.sendNote) {
+        const note = el(row, "p", item.sendNote, item.sendNote.startsWith("Published") || item.sendNote.startsWith("Already on board") ? "status" : "error")
+        note.setAttribute("role", "alert")
+      }
       const sendLabel = item.sendState === "sending" ? "Sending…" : item.sendState === "published" ? "Published" : item.sendState === "duplicate" ? "Already on board" : "Send to Global Good Idea leaderboard"
       const send = el(row, "button", sendLabel, "quiet")
       send.type = "button"

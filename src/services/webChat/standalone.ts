@@ -111,7 +111,10 @@ export async function storedLocalReview(options: {
   privateUrls?: string[]
   publication?: { title: string; doi: string; url: string; authors: string[] }
   criterionProfile?: string
+  /** Paper text. A Zenodo DOI in the file is kept so Send can name the public record. */
+  text?: string
 }): Promise<StoredReview> {
+  const discovered = options.text ? sourceRecordFromText(options.filename, options.text) : null
   const record = localPaperRecord(options.filename)
   const report = stripChatShareLinks(scrubPrivateUrls(options.report, options.privateUrls ?? []))
   const modelHint = `${options.providerId} (web chat, uncalibrated)`
@@ -149,10 +152,10 @@ export async function storedLocalReview(options: {
     tier: "uncalibrated web-chat",
     source: "web-chat extension",
     criterionProfile: options.criterionProfile || review.criterionProfile,
-    doi: options.publication?.doi || review.doi,
+    doi: options.publication?.doi || (discovered && discovered.doi !== "local-file" ? discovered.doi : review.doi),
     title: options.publication?.title || review.title,
     creators: options.publication?.authors ?? review.creators,
-    paperUrl: options.publication?.url || review.paperUrl,
+    paperUrl: options.publication?.url || discovered?.htmlUrl || review.paperUrl,
   }
 }
 

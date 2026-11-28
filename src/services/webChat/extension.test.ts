@@ -5,9 +5,9 @@ import { describe, expect, it } from "vitest"
 import { webChatProvider } from "../../../extension/adapters/index.ts"
 import { CRITERION_PROFILES, readingCriteria } from "../../domain/profiles.ts"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
-import { ackReply, assistantText, attachmentReady, chooseReplyBlock, clickElement, composerTextMatches, confirmComposerText, describeCandidates, diagnose, fillComposer, findComposer, findSubmit, heldPrefix, isPromptEcho, liveTurnText, messageBlocks, placeComposerText, reviewJsonBlock, reviewJsonOnPage, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
+import { ackReply, assistantText, attachmentReady, chooseReplyBlock, clickElement, composerTextMatches, confirmComposerText, describeCandidates, diagnose, fillComposer, findComposer, findSubmit, heldPrefix, isPromptEcho, liveTurnText, messageBlocks, placeComposerText, reasoningActive, reviewJsonBlock, reviewJsonOnPage, stopControlActive, submitOnce, writeComposer } from "./dom.ts"
 import { buildWebChatPacket } from "./packet.ts"
-import { replySettled, runTurn, sendFollowUp } from "./runTurn.ts"
+import { REPLY_STABLE_MS, REPLY_TIMEOUT_MS, replySettled, runTurn, sendFollowUp } from "./runTurn.ts"
 import { acceptWebChatResult } from "./accept.ts"
 import { parseModelJson, settleChatJson } from "../jsonText.ts"
 import { extensionEnvelope, relayFromProvider, relayTargets, type RelayJob } from "./relay.ts"
@@ -1143,9 +1143,49 @@ describe("live chat composers", () => {
       "json",
     )
     expect(Date.now() - started).toBeLessThan(1_000)
+    expect(REPLY_STABLE_MS).toBe(20_000)
+    expect(REPLY_TIMEOUT_MS).toBe(10 * 60 * 1000)
+    document.body.innerHTML = `<button data-testid="conversation-thought-toggle">Thought for 12s</button><div role="status">Thinking</div>`
+    expect(reasoningActive(document)).toBe(true)
+    document.body.innerHTML = `<button data-testid="conversation-thought-toggle">Thought for 12s</button>`
+    expect(reasoningActive(document)).toBe(false)
     expect(returned).toContain('"criterionId":"availability"')
     expect(returned).toContain("31 December 2014")
     expect(notes.join("\n")).not.toContain("Still waiting")
     expect(reviewJsonBlock(nested)).toBe("")
+  })
+
+  it("waits while Grok is still thinking and does not take the prose as the finished reply", async () => {
+    document.body.innerHTML = `<main>
+      <textarea id="box" aria-label="Ask anything"></textarea>
+      <button id="send" type="button" aria-label="Send">Send</button>
+      <div role="status" id="think">Thinking</div>
+      <div class="group"><div class="whitespace-normal" id="reply"></div></div>
+    </main>`
+    const provider = webChatProvider("grok-x")
+    if (!provider) throw new Error("missing grok-x")
+    document.getElementById("send")?.addEventListener("click", () => {
+      ;(document.getElementById("box") as HTMLTextAreaElement).value = ""
+      document.getElementById("reply")!.textContent = "I am still reading the methods. The yield is measured, and the limit is named."
+    })
+    await expect(sendFollowUp(
+      document,
+      provider,
+      "Review the paper.",
+      {
+        aborted: () => false,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        pollMs: 10,
+        stableMs: 20,
+        stepTimeoutMs: 80,
+        replySilentMs: 80,
+        replyStartTimeoutMs: 200,
+        submitStableMs: 0,
+        submitReadyMs: 20,
+        sendVerifyMs: 20,
+      },
+      "review",
+      "json",
+    )).rejects.toThrow(/did not finish|timed out/)
   })
 })

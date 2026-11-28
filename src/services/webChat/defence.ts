@@ -2,6 +2,7 @@ import type { CriteriaSet, ReviewReport } from "../../domain/types.ts"
 import { acceptWebChatResult } from "./accept.ts"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
 import { lastScoreJson } from "../jsonText.ts"
+import { CAREFUL_DEFENCE_ENDING } from "../prompts.ts"
 import type { DefendedScore } from "./submission.ts"
 
 export const DEFENCE_DEFAULT_ROUNDS = 2
@@ -89,7 +90,8 @@ export function rescorePrompt(): string {
   return [
     "Score the paper again with the same AIR v0.2 rubric.",
     "The first score stays the official blind score. This second score is after author defence.",
-    "Use only the paper text in this chat. Do not invent data. Return one JSON object and nothing else.",
+    "Use only the paper text in this chat. Do not invent data. Do not ask for an attachment.",
+    CAREFUL_DEFENCE_ENDING,
     "Keep the same fields as the first review: summary, scores for every criterion, overallScore, and recommendation.",
   ].join("\n")
 }

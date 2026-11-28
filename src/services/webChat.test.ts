@@ -508,6 +508,7 @@ describe("extension panel", () => {
           { id: "posted", title: "Posted note", overall: 67, sendState: "published" },
           { id: "again", title: "Duplicate note", overall: 68, sendState: "duplicate" },
           { id: "open", title: "Open note", overall: 58, sendState: "sending" },
+          { id: "blocked", title: "Local file", overall: 70, sendNote: "Local file has no DOI or paper link, so it was not sent." },
         ],
       }),
       actions(),
@@ -517,6 +518,7 @@ describe("extension panel", () => {
     expect((document.getElementById("send-again") as HTMLButtonElement).textContent).toBe("Already on board")
     expect((document.getElementById("send-again") as HTMLButtonElement).disabled).toBe(true)
     expect((document.getElementById("send-open") as HTMLButtonElement).disabled).toBe(true)
+    expect(app.textContent).toContain("Local file has no DOI or paper link, so it was not sent.")
 
     const packet = packetForLocalPaper({
       requestId: "web-local",
@@ -555,6 +557,15 @@ describe("extension panel", () => {
     expect(stored.tier).toBe("uncalibrated web-chat")
     expect(stored.source).toBe("web-chat extension")
     expect(stored.modelId).toContain("x.com")
+    const discovered = await storedLocalReview({
+      providerId: "grok-x",
+      criteria: officialCriteria,
+      filename: "qi.pdf",
+      report: accepted.report,
+      text: "Zenodo record: https://zenodo.org/records/999001 and 10.5281/zenodo.999001",
+    })
+    expect(discovered.doi).toBe("10.5281/zenodo.999001")
+    expect(discovered.paperUrl).toBe("https://zenodo.org/records/999001")
     const saved = JSON.stringify(stored)
     expect(saved).not.toContain("share.google")
     expect(saved).not.toContain("Measured yield")

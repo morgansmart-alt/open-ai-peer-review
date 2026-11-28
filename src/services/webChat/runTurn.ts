@@ -24,6 +24,7 @@ import {
   liveTurnText,
   messageBlocks,
   replyAfter,
+  reasoningActive,
   reviewJsonBlock,
   sendLanded,
   stopControlActive,
@@ -102,6 +103,11 @@ function stepDiagnostic(doc: Document): string {
 
 export type ReplyExpect = "json" | "text"
 
+/** A thinking reply can run for many minutes. One step waits this long. */
+export const REPLY_TIMEOUT_MS = 10 * 60 * 1000
+/** The reply must sit still this long, with no Thinking indicator, before it is read. */
+export const REPLY_STABLE_MS = 20_000
+
 /** A reply is ready only after the text has been still for the full gate and the stop control is gone. */
 export function replySettled(quietMs: number, stableMs: number, streaming: boolean, hasReply: boolean): boolean {
   return hasReply && !streaming && quietMs >= stableMs
@@ -171,9 +177,9 @@ async function waitForReply(
   note(hooks, label, "waiting", `Waiting for the reply: ${label}.`)
   await hooks.keepAwake?.()
   const pollMs = hooks.pollMs ?? 400
-  const stableMs = hooks.stableMs ?? 5_000
-  const timeoutMs = hooks.stepTimeoutMs ?? 90_000
-  const silentMs = hooks.replySilentMs ?? 45_000
+  const stableMs = hooks.stableMs ?? REPLY_STABLE_MS
+  const timeoutMs = hooks.stepTimeoutMs ?? REPLY_TIMEOUT_MS
+  const silentMs = hooks.replySilentMs ?? REPLY_TIMEOUT_MS
   const startLimit = hooks.replyStartTimeoutMs ?? 20_000
   const start = Date.now()
   let lastReply = ""
@@ -201,14 +207,16 @@ async function waitForReply(
     selector = picked.candidate
     const json = reviewJsonBlock(reply)
     const ack = ackReply(doc, composer)
-    const streaming = stopControlActive(doc, provider.selectors.stop)
+    const stopping = stopControlActive(doc, provider.selectors.stop)
+    const thinking = reasoningActive(doc)
+    const streaming = stopping || thinking
     const sendReady = Boolean(findSubmit(doc, provider.selectors.submit, composer))
     if (reply || ack) started = true
     const changed = reply !== lastReply
     if (changed) lastReply = reply
     if (changed || streaming || lastChange === null) lastChange = Date.now()
     const quietFor = Date.now() - lastChange
-    const diagnostic = replyDiagnostic(selector, reply.length, changed ? Date.now() : lastChange, changed || streaming ? 0 : quietFor, stableMs, streaming)
+    const diagnostic = `${replyDiagnostic(selector, reply.length, changed ? Date.now() : lastChange, changed || streaming ? 0 : quietFor, stableMs, stopping)}${thinking ? ", thinking" : ""}`
     if (changed || Date.now() - lastLog >= 3_000) {
       note(hooks, label, reply ? "reading" : "waiting", `Waiting for the reply: ${label}.`, diagnostic)
       lastLog = Date.now()
@@ -232,8 +240,12 @@ async function waitForReply(
       }
     }
     const settled = replySettled(quietFor, stableMs, streaming, Boolean(reply) && !changed)
-    if (settled) return expect === "json" && json ? json : reply
-    if (!reply && Date.now() - start >= silentMs) {
+    if (settled) {
+      if (expect === "text") return reply
+      if (liveFresh.trim()) return liveFresh
+      return json || reply
+    }
+    if (!reply && !streaming && Date.now() - start >= silentMs) {
       const empty = replyDiagnostic(selector, 0, null, 0, stableMs, streaming)
       if (attempt < 2) {
         note(hooks, label, "waiting", `Still waiting for a stable reply: ${label}. ${empty}`, empty)

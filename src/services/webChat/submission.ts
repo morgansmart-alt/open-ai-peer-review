@@ -12,7 +12,9 @@ export const AIR_SITE_URL = "https://morgansmart-alt.github.io/open-ai-peer-revi
 /** Scores are posted straight to the Supabase function. GitHub Pages does not receive them. */
 export const WEB_CHAT_SUBMIT_URL = "https://lotswxboafsenmszijpf.supabase.co/functions/v1/submit-web-chat"
 
-const TOP_KEYS = new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback"])
+const TOP_KEYS = new Set(["source", "tier", "paper", "site", "model", "criteriaVersion", "criterionProfile", "scores", "summary", "overallScore", "recommendation", "createdAt", "defended", "airFeedback", "analysis"])
+/** The prose before the score sheet. The payload is one jsonb column, so this needs no new SQL. */
+export const ANALYSIS_LIMIT = 12_000
 const DEFENDED_KEYS = new Set(["label", "overallScore", "recommendation", "summary", "scores"])
 const PAPER_KEYS = new Set(["title", "doi", "url"])
 
@@ -49,6 +51,8 @@ export interface WebChatSubmission {
   defended?: DefendedScore
   /** Optional notes about AIR. Not used in the score. */
   airFeedback?: AirFeedback
+  /** Plain-prose analysis written before the fenced score sheet. Not used in the score. */
+  analysis?: string
 }
 
 export interface SubmissionRow {
@@ -138,8 +142,10 @@ export function submissionFromReview(review: StoredReview, site: string): { ok: 
   if (described.scoringCheck.mismatch) {
     return { ok: false, error: "Scoring mismatch, needs re-check. This score stays on this browser until the chat is run again." }
   }
-  const paperKey = review.doi && review.doi !== "local-file" ? review.doi : review.paperUrl || review.doi
-  if (!paperKey) return { ok: false, error: "Add a DOI or a link before sending this score." }
+  const paperKey = review.doi && review.doi !== "local-file" ? review.doi : review.paperUrl || ""
+  if (!paperKey) {
+    return { ok: false, error: `${review.title || "This score"} has no DOI or paper link, so it was not sent. Paste a Zenodo, DOI, or arXiv link and review again.` }
+  }
   const defended = postedDefended(review.defended)
   const summary = stripChatShareLinks(review.report.summary)
   const submission: WebChatSubmission = {
@@ -157,6 +163,7 @@ export function submissionFromReview(review: StoredReview, site: string): { ok: 
     createdAt: review.createdAt,
     ...(defended ? { defended } : {}),
     ...(review.report.airFeedback ? { airFeedback: review.report.airFeedback } : {}),
+    ...(review.analysis ? { analysis: stripChatShareLinks(review.analysis).slice(0, ANALYSIS_LIMIT) } : {}),
   }
   const checked = validateWebChatSubmission(submission, criteria)
   if (checked.ok) return { ok: true, submission: checked.submission }
@@ -224,6 +231,7 @@ export function validateWebChatSubmission(
   const defended = readDefended(input.defended, criteria)
   if (!defended.ok) return defended
   const airFeedback = parseAirFeedback(input.airFeedback)
+  const analysis = stripChatShareLinks(clip(input.analysis, ANALYSIS_LIMIT))
   return {
     ok: true,
     submission: {
@@ -241,6 +249,7 @@ export function validateWebChatSubmission(
       createdAt,
       ...(defended.score ? { defended: defended.score } : {}),
       ...(airFeedback ? { airFeedback } : {}),
+      ...(analysis ? { analysis } : {}),
     },
   }
 }
@@ -287,6 +296,13 @@ function postedDefended(defended: StoredReview["defended"]): DefendedScore | und
       ...(score.uncited ? { uncited: true } : {}),
     })),
   }
+}
+
+export function publishedStatus(title: string, submission: WebChatSubmission, duplicate: boolean): string {
+  const paper = submission.paper.doi || submission.paper.url
+  const score = submission.overallScore.toFixed(2)
+  const lead = duplicate ? "Already on board" : "Published"
+  return `${lead}: ${title} · ${paper} · ${score}`
 }
 
 export function toSubmissionRow(submission: WebChatSubmission): SubmissionRow {
@@ -343,6 +359,7 @@ export function submissionToStored(payload: WebChatSubmission & { id?: string })
     tier: UNCALIBRATED_WEB_CHAT_TIER,
     source: WEB_CHAT_SOURCE,
     paperUrl: payload.paper.url,
+    ...(payload.analysis ? { analysis: payload.analysis } : {}),
     defended: payload.defended,
     report: {
       summary: payload.summary,

@@ -577,6 +577,22 @@ export function reviewJsonOnPage(root: ParentNode, composer: Element | null): st
   return reviewJsonBlock(visibleReplyText(root, composer))
 }
 
+/** A live Thinking or Reasoning label. A finished "Thought for 12s" chip is not still streaming. */
+export function reasoningActive(root: ParentNode): boolean {
+  const nodes = [
+    ...queryAllDeep(root, "button"),
+    ...queryAllDeep(root, "[role='status']"),
+    ...queryAllDeep(root, "[aria-live]"),
+    ...queryAllDeep(root, "[data-testid]"),
+  ]
+  return nodes.some((el) => {
+    if (isIgnoredRegion(el) || el.hasAttribute("hidden") || el.getAttribute("aria-hidden") === "true") return false
+    const label = `${el.getAttribute("aria-label") ?? ""} ${(el.textContent ?? "").replace(/\s+/g, " ")}`.trim()
+    if (/thought for\s+\d+/i.test(label)) return false
+    return /\bthinking\b/i.test(label) || /\breasoning\b/i.test(label)
+  })
+}
+
 export function stopControlActive(root: ParentNode, selectors: string[]): boolean {
   const extra = ["button", "[role='button']"]
   const found: Element[] = []

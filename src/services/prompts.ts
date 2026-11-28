@@ -17,9 +17,17 @@ export function textFitsSingleCall(documents: { text: string }[], provider: stri
   return total <= singleCallCharBudget(provider)
 }
 
+/** The reviewer writes the analysis first. The score sheet is the last fenced block. */
+export const CAREFUL_REVIEW_ENDING =
+  "Take your time. Read the whole paper and reason it through as a careful peer reviewer: write your analysis in plain prose first, criterion by criterion, quoting the passages you rely on. There is no length limit and no rush. When your analysis is finished, end your reply with the score sheet as one JSON object inside a ```json fenced block."
+
+export const CAREFUL_DEFENCE_ENDING =
+  "Take your time. Argue the defence fully in prose, criterion by criterion, quoting the passages you rely on. There is no length limit and no rush. When that argument is finished, end your reply with the revised score sheet as one JSON object inside a ```json fenced block."
+
 export function reviewSystemPrompt(criteria: CriteriaSet): string {
   return [
-    "You are an AIR reviewer. Return one JSON object and nothing else.",
+    "You are an AIR reviewer. Use only the paper text you were given. Do not invent data. Do not ask for an attachment.",
+    CAREFUL_REVIEW_ENDING,
     "Judge the work on its logic and evidence. Do not score author credentials, affiliations, reputation, or identity. If those appear, ignore them.",
     "Be specific and kind. Every criticism needs a way to resolve it.",
     "Quote only passages that appear in the text you were given. Do not invent page numbers, results, or citations.",
@@ -93,7 +101,7 @@ export function reviewUserPrompt(
   options?: { compact?: boolean },
 ): string {
   const schema = {
-    summary: "string, 80-180 words",
+    summary: "string, as long as it needs to be",
     scores: criteria.criteria.map((criterion) => ({
       criterionId: criterion.id,
       score: `${criteria.scale.min}-${criteria.scale.max}`,

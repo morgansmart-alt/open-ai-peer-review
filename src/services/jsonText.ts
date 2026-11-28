@@ -10,9 +10,9 @@ export interface ParsedModelJson {
 }
 
 function fenced(raw: string): string {
-  const trimmed = raw.trim()
-  const match = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
-  return (match?.[1] ?? trimmed).trim()
+  const blocks = fencedBlocks(raw)
+  if (blocks.length > 0) return blocks[blocks.length - 1] ?? raw.trim()
+  return raw.trim()
 }
 
 function matchingBrace(text: string, start: number): number {
@@ -619,7 +619,25 @@ export function mergeReviewFields(base: unknown, patch: unknown): unknown {
 }
 
 /** Strict JSON first. A repair pass covers trailing commas, missing commas, and similar damage. */
+/** Prose written before the last fenced score sheet. Empty when the reply has no fence. */
+export function reviewAnalysis(raw: string): string {
+  const marks = [...raw.matchAll(/```(?:json)?\s*[\s\S]*?```/gi)]
+  const last = marks[marks.length - 1]
+  if (!last || last.index == null) return ""
+  return raw.slice(0, last.index).replace(/\s+$/g, "").trim()
+}
+
 export function parseModelJson(raw: string, criterionIds?: readonly string[]): ParsedModelJson | { ok: false; error: string } {
+  if (raw.includes("```")) {
+    const required = requiredCriterionIds(criterionIds)
+    const blocks = fencedBlocks(raw)
+    for (let index = blocks.length - 1; index >= 0; index -= 1) {
+      const block = blocks[index]
+      if (!block || block.includes("```")) continue
+      const fenced = parseModelJson(block, criterionIds)
+      if (fenced.ok && coversCriteria(fenced.value, required)) return fenced
+    }
+  }
   const required = requiredCriterionIds(criterionIds)
   const review = chooseReviewJson(raw)
   const shaped = review ? normaliseScoreShape(review.value) : null
@@ -646,7 +664,8 @@ export function reaskJsonPrompt(problem: string, criterionIds: readonly string[]
   const exampleId = criterionIds[0] ?? "impact"
   return [
     `Your JSON did not validate (${detail}).`,
-    "Return ONE flat JSON object and nothing else. Not a patch, and not one criterion. Repeat every field that was already valid.",
+    "You may explain the correction in prose. There is no length limit. End with the full corrected score sheet as one JSON object inside a ```json fenced block.",
+    "Repeat every field that was already valid. Do not send only one criterion.",
     "summary must be a string of at least 40 characters.",
     "scores must be an array with one object for each criterion id.",
     "Each scores object needs criterionId, score (integer 0-100), rationale (at least 20 characters), citations, and confidence (low, medium, or high).",
@@ -659,7 +678,7 @@ export function reaskJsonPrompt(problem: string, criterionIds: readonly string[]
 }
 
 export const FILL_REVIEW_PROMPT =
-  "Fill in the review now. Return one completed JSON object for this paper. Do not repeat the rubric template or the instructions."
+  "Fill in the review now. Write the analysis in prose, then end with one completed JSON object for this paper inside a ```json fenced block. Do not repeat the rubric template or the instructions."
 
 /** A reply that echoes the rubric schema instead of a completed review. */
 export function rubricTemplateProblem(value: unknown): string | null {
@@ -701,8 +720,11 @@ export async function settleChatJson(
     const template = rubricTemplateProblem(first.value)
     const checked = template ? { ok: false as const, errors: [template] } : ready(first)
     if (checked.ok) {
+      const analysis = reviewAnalysis(raw)
+      if (analysis.length >= 40) log(`Peer analysis (${analysis.length} characters): ${analysis.slice(0, 2000)}`)
       if (first.repaired) log("Repaired the chat's JSON before scoring.")
-      return { text: first.repaired ? first.text : raw, repaired: first.repaired, reasked: false }
+      const whole = !first.repaired && parseModelJson(raw, criterionIds).ok ? raw : first.text
+      return { text: whole, repaired: first.repaired, reasked: false }
     }
     const problem = checked.errors.join(" ")
     log(rejectionNote(problem, first.text || raw, describeCriterionGather(raw)))
