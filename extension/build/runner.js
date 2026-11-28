@@ -2578,13 +2578,24 @@ ${output}
     return best;
   }
   function reviewAnalysis(raw) {
-    const marks = [...raw.matchAll(/```(?:json)?\s*[\s\S]*?```/gi)];
-    const last = marks[marks.length - 1];
-    const fenceAt = last?.index ?? -1;
-    const sheetAt = lastSheetStart(raw);
-    const cut = fenceAt >= 0 && (sheetAt < 0 || fenceAt <= sheetAt) ? fenceAt : sheetAt;
-    if (cut <= 0) return "";
-    return raw.slice(0, cut).replace(/\s+$/g, "").trim();
+    let text = raw.replace(/```(?:json)?\s*[\s\S]*?```/gi, "\n");
+    const sheetAt = lastSheetStart(text);
+    if (sheetAt >= 0) {
+      const end = matchingBrace(text, sheetAt);
+      if (end >= sheetAt) text = `${text.slice(0, sheetAt)}
+${text.slice(end + 1)}`;
+    }
+    return text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  }
+  function retainProse(sheet, ...sources) {
+    if (reviewAnalysis(sheet).length >= 40) return sheet;
+    for (const source of sources) {
+      const prose = reviewAnalysis(source);
+      if (prose.length >= 40 && !sheet.includes(prose.slice(0, Math.min(80, prose.length)))) return `${prose}
+
+${sheet}`;
+    }
+    return sheet;
   }
   function parseModelJson(raw, criterionIds) {
     if (raw.includes("```")) {
@@ -2666,7 +2677,7 @@ ${output}
         const analysis = reviewAnalysis(raw);
         if (analysis.length >= 40) log(`Peer analysis (${analysis.length} characters): ${analysis.slice(0, 2e3)}`);
         if (first.repaired) log("Repaired the chat's JSON before scoring.");
-        const whole = parseModelJson(raw, criterionIds).ok ? raw : first.text;
+        const whole = parseModelJson(raw, criterionIds).ok ? raw : retainProse(first.text, raw);
         return { text: whole, repaired: first.repaired, reasked: false };
       }
       const problem = checked.errors.join(" ");
@@ -2678,22 +2689,23 @@ ${output}
       const mergedCheck = validate ? validate(mergedText) : { ok: true };
       if (mergedCheck.ok) {
         if (second2.ok && second2.repaired) log("Repaired the corrected JSON.");
-        return { text: mergedText, repaired: true, reasked: true };
+        return { text: retainProse(mergedText, follow2, raw), repaired: true, reasked: true };
       }
       const firstText = JSON.stringify(first.value);
       const firstCheck = validate ? validate(firstText) : { ok: false, errors: ["The first reply was not usable."] };
       if (firstCheck.ok) {
         log("The correction was less complete than the first reply. Kept the first reply.");
-        return { text: firstText, repaired: true, reasked: true };
+        return { text: retainProse(firstText, raw), repaired: true, reasked: true };
       }
       log(rejectionNote("errors" in mergedCheck ? mergedCheck.errors.join(" ") : "The corrected JSON was not usable.", mergedText, describeCriterionGather(follow2)));
-      return { text: mergedText, repaired: true, reasked: true };
+      return { text: retainProse(mergedText, follow2, raw), repaired: true, reasked: true };
     }
     log(rejectionNote(first.error, raw, describeCriterionGather(raw)));
     const follow = await ask(reaskJsonPrompt(first.error, criterionIds));
     const second = parseModelJson(follow, criterionIds);
     if (second.ok && second.repaired) log("Repaired the corrected JSON.");
-    return { text: second.ok ? second.repaired ? second.text : follow : follow, repaired: Boolean(second.ok && second.repaired), reasked: true };
+    const settled = second.ok ? second.repaired ? second.text : follow : follow;
+    return { text: retainProse(settled, follow, raw), repaired: Boolean(second.ok && second.repaired), reasked: true };
   }
 
   // src/services/validateReport.ts
@@ -3231,9 +3243,9 @@ ${output}
     return roundedOverall(Number(match[1]));
   }
   function chooseDefendedText(original, settled, criteria) {
-    if (acceptWebChatResult(settled, criteria).ok) return settled;
+    if (acceptWebChatResult(settled, criteria).ok) return retainProse(settled, original);
     if (acceptWebChatResult(original, criteria).ok) return original;
-    if (statedDefenceOverall(settled) != null) return settled;
+    if (statedDefenceOverall(settled) != null) return retainProse(settled, original);
     return original;
   }
 
@@ -3277,7 +3289,7 @@ ${output}
     for (const url of paperTextCandidates(recordId)) {
       try {
         const loaded = await load2(url);
-        if (textPageHasPaper(loaded.status, loaded.body)) found.push({ url, body: loaded.body });
+        if (textPageHasPaper(loaded.status, loaded.body)) found.push({ url, body: loaded.body, total: loaded.total ?? loaded.body.length });
       } catch {
       }
     }
@@ -3285,7 +3297,7 @@ ${output}
     const best = found[0];
     if (!best) return null;
     const unavailable = fullTextPanelLine(best.body) === "Full text unavailable";
-    return { url: best.url, body: best.body, unavailable };
+    return { url: best.url, body: best.body, total: best.total, unavailable };
   }
   var FULL_TEXT_PANEL_NOTE = "Full text unavailable";
   var FILES_CLOSED = /the files on this record are not public/i;
@@ -3329,24 +3341,26 @@ ${prompt}`;
   }
   var READ_THE_PAGE = "The paper is on the public text page named above. Read that page. Do not ask for an attachment.";
   var SCORE_THE_COPY = "The paper text is copied above. Score that text. Do not open the Zenodo record page for the paper. Do not ask for an attachment.";
-  function linkReadingPrompt(url, instructions, paper = "") {
+  function linkReadingPrompt(url, instructions, paper = "", note2 = "") {
     const copied = paper.trim();
-    const rubric = copied ? instructions.replaceAll(READ_THE_PAGE, SCORE_THE_COPY) : instructions;
+    const rubric = copied || note2 ? instructions.replaceAll(READ_THE_PAGE, SCORE_THE_COPY) : instructions;
+    const caution = note2.trim();
     if (!copied) {
       return [
-        "Open this public text page and read the full paper. No sign-in is required.",
-        url,
-        "",
-        "Use only the paper text on that page. Do not invent data. Do not ask for an attachment.",
+        note2 ? "The paper text was sent in the messages above. Score only that text." : "Open this public text page and read the full paper. No sign-in is required.",
+        note2 ? "" : url,
+        caution,
+        "Use only the paper text you were given. Do not invent data. Do not ask for an attachment.",
         CAREFUL_REVIEW_ENDING,
         "Score that paper with the instructions below.",
         "",
         rubric
-      ].join("\n");
+      ].filter((line) => line !== void 0).join("\n");
     }
     return [
       "The paper text is copied below from the public text page. Score only that text.",
       "The Zenodo record link is the citation. It is not the paper. Do not ask for an attachment.",
+      caution,
       `Public text: ${url}`,
       "",
       copied,
@@ -3356,7 +3370,7 @@ ${prompt}`;
       "Score that paper with the instructions below.",
       "",
       rubric
-    ].join("\n");
+    ].filter(Boolean).join("\n");
   }
   var ACCESS_FAILURE = /could not (?:access|open|read|fetch|browse|reach)|couldn't (?:access|open|read|fetch|browse)|cannot (?:access|open|read|browse)|can't (?:access|open|read)|unable to (?:access|open|read|fetch|reach)|no access to (?:the |that )?(?:url|page|link)|page not found|sign in to (?:view|read|continue)|login required|failed to (?:load|fetch|open)|403 forbidden|404\b/i;
   function couldNotReadPaper(reply) {
@@ -3588,6 +3602,122 @@ ${CAREFUL_REVIEW_ENDING}` : finalText;
       notes.push(`${provider.label} will receive ${turns} messages. A thread that long can hit the site's rate limit. The tab stays in front of you.`);
     }
     return notes.join(" ") || null;
+  }
+
+  // src/services/webChat/paperFit.ts
+  var GROK_X_MESSAGE_CHARS = 32e3;
+  var PAPER_SEND_CAP = 12e4;
+  var SECTION_KIND = /^(?:#{1,6}\s+)?(?:\d+(?:\.\d+)*\s+)?(references|bibliography|works cited|appendix|appendices|supplementary|supplement|results|discussion|conclusions?|abstract|introduction|methods?)\b/i;
+  function kindOf(title) {
+    const match = title.match(SECTION_KIND);
+    const word = (match?.[1] ?? "").toLowerCase();
+    if (word === "references" || word === "bibliography" || word === "works cited") return "references";
+    if (word === "appendix" || word === "appendices" || word === "supplementary" || word === "supplement") return "appendix";
+    if (word === "results") return "results";
+    if (word === "discussion") return "discussion";
+    if (word.startsWith("conclusion")) return "conclusion";
+    if (word === "abstract") return "abstract";
+    if (word === "introduction") return "introduction";
+    if (word.startsWith("method")) return "methods";
+    return "other";
+  }
+  function paperSections(paper) {
+    const lines = paper.split("\n");
+    const sections = [];
+    let title = "";
+    let kind = "other";
+    let buffer = [];
+    const flush = () => {
+      const text = buffer.join("\n").trim();
+      if (text || title) sections.push({ title: title || "Opening", kind, text: [title, text].filter(Boolean).join("\n") });
+    };
+    for (const line of lines) {
+      if (SECTION_KIND.test(line.trim()) && (buffer.length > 0 || title)) {
+        flush();
+        title = line.trim();
+        kind = kindOf(title);
+        buffer = [];
+        continue;
+      }
+      if (!title && !buffer.length && SECTION_KIND.test(line.trim())) {
+        title = line.trim();
+        kind = kindOf(title);
+        continue;
+      }
+      buffer.push(line);
+    }
+    flush();
+    return sections.filter((section) => section.text.trim());
+  }
+  function fitPaperText(paper, budget) {
+    const source = paper.length;
+    if (source <= budget) return { text: paper, sent: source, source, capped: false, omitted: [] };
+    const sections = paperSections(paper);
+    const omitted = [];
+    const kept = sections.filter((section) => {
+      if (section.kind === "references" || section.kind === "appendix") {
+        omitted.push(section.title);
+        return false;
+      }
+      return true;
+    });
+    const ordered = kept.length ? kept : sections;
+    let text = ordered.map((section) => section.text).join("\n\n");
+    if (text.length > budget) {
+      const late = ordered.filter((section) => section.kind === "results" || section.kind === "discussion" || section.kind === "conclusion");
+      const early = ordered.filter((section) => section.kind !== "results" && section.kind !== "discussion" && section.kind !== "conclusion");
+      const lateText = late.map((section) => section.text).join("\n\n");
+      const room = Math.max(0, budget - lateText.length - 2);
+      const earlyText = early.map((section) => section.text).join("\n\n");
+      const earlyKept = room <= 0 ? "" : earlyText.length <= room ? earlyText : `${earlyText.slice(0, room).trimEnd()}
+
+[AIR shortened the earlier sections to keep the results, discussion, and conclusions.]`;
+      if (room <= 0 && early.length) omitted.push(...early.map((section) => section.title));
+      text = [earlyKept, lateText.length > budget ? lateText.slice(lateText.length - budget) : lateText].filter(Boolean).join("\n\n");
+      if (text.length > budget) text = text.slice(text.length - budget);
+    }
+    return { text: text.trim(), sent: text.trim().length, source, capped: true, omitted };
+  }
+  function paperParts(text, partSize) {
+    if (text.length <= partSize) return [text];
+    const parts = [];
+    let cursor = 0;
+    while (cursor < text.length) {
+      let end = Math.min(text.length, cursor + partSize);
+      if (end < text.length) {
+        const paragraph = text.lastIndexOf("\n\n", end);
+        if (paragraph > cursor + partSize * 0.6) end = paragraph;
+      }
+      const piece = text.slice(cursor, end).trim();
+      if (piece) parts.push(piece);
+      cursor = end;
+    }
+    return parts;
+  }
+  function omissionNote(omitted) {
+    if (!omitted.length) return "";
+    return `AIR did not send these sections: ${omitted.join("; ")}. Do not penalise the paper for a section AIR cut. Score only the text you were given.`;
+  }
+  function paperPartMessage(index, total, text) {
+    return [`AIR PAPER PART ${index} of ${total}.`, "Reply only: OK", "", text].join("\n");
+  }
+  function paperDeliveryPlan(options) {
+    const fitted = fitPaperText(options.paper, PAPER_SEND_CAP);
+    const note2 = omissionNote(fitted.omitted);
+    const combined = fitted.text.length + options.instructions.length + 1500;
+    const parts = combined <= options.oneMessage ? [fitted.text] : paperParts(fitted.text, Math.max(4e3, options.oneMessage - 200));
+    const notice = fullTextIncludedLine(options.sourceChars, fitted.sent, fitted.sent < options.sourceChars);
+    if (parts.length === 1) {
+      return { texts: [options.prompt(options.url, options.instructions, parts[0] ?? "", note2)], notice, sent: fitted.sent };
+    }
+    return {
+      texts: [
+        ...parts.map((part, index) => paperPartMessage(index + 1, parts.length, part)),
+        options.prompt(options.url, options.instructions, "", note2 || "The paper text was sent in the messages above.")
+      ],
+      notice,
+      sent: fitted.sent
+    };
   }
 
   // src/services/webChat/dom.ts
@@ -4035,16 +4165,23 @@ ${code}
     const markdown = last.querySelector(".streamdown-chat-md, .response-content-markdown") ?? last;
     return { text: textWithoutChips(markdown), candidate: '[data-testid="assistant-message"]' };
   }
+  function isUserTurn(el) {
+    const name = classNameOf(el);
+    return name.includes("group/user") || name.includes("items-end");
+  }
   function grokXTurn(doc, composer) {
     const turns = queryAllDeep(doc, "div.group").filter((el) => {
-      if (classNameOf(el).includes("group/user")) return false;
       if (composer && (el === composer || el.contains(composer) || composer.contains(el))) return false;
       return true;
     });
-    const last = turns[turns.length - 1];
-    if (!last) return { text: "", candidate: "" };
-    const markdown = last.querySelector(".wrap-break-word") ?? last.querySelector(".whitespace-normal") ?? last;
-    return { text: textWithoutChips(markdown), candidate: "div.group" };
+    let lastUser = -1;
+    turns.forEach((el, index) => {
+      if (isUserTurn(el)) lastUser = index;
+    });
+    const reply = turns.filter((el, index) => index > lastUser && !isUserTurn(el));
+    if (!reply.length) return { text: "", candidate: "" };
+    const text = reply.map((el) => textWithoutChips(el)).map((part) => part.trim()).filter(Boolean).join("\n\n");
+    return { text, candidate: "div.group" };
   }
   function liveTurnText(doc, providerId, composer) {
     if (providerId === "grok") return grokComTurn(doc, composer);
@@ -4722,18 +4859,11 @@ ${code}
     const step = { kind: "paste", text, files: [], index: 1, total: 1, final: true };
     return sendStep(doc, provider, step, hooks, label, expect);
   }
-  function clipPaper(paper, pasteLimit) {
-    const room = Math.max(2e3, pasteLimit - 8e3);
-    if (paper.length <= room) return paper;
-    return `${paper.slice(0, room).trimEnd()}
-
-[AIR truncated this file.]`;
-  }
   async function loadedPage(url, load2) {
     try {
       const loaded = await load2(url);
       if (!textPageHasPaper(loaded.status, loaded.body)) return null;
-      return { url, body: loaded.body, unavailable: fullTextPanelLine(loaded.body) === "Full text unavailable" };
+      return { url, body: loaded.body, total: loaded.total ?? loaded.body.length, unavailable: fullTextPanelLine(loaded.body) === "Full text unavailable" };
     } catch {
       return null;
     }
@@ -4750,6 +4880,7 @@ ${code}
       let notice;
       let fullTextMissing = false;
       let fetchedPaper = "";
+      let sourceChars = 0;
       if (activePacket.textUrl) {
         const id = recordIdFromPaperTextUrl(activePacket.textUrl);
         const load2 = hooks.loadTextPage ?? ((url) => fetch(url).then(async (response) => ({ status: response.status, body: await response.text() })));
@@ -4768,30 +4899,50 @@ ${code}
           activePacket = { ...activePacket, textUrl: page.url };
           fullTextMissing = page.unavailable;
           fetchedPaper = page.body;
+          sourceChars = page.total;
         }
       }
+      let noticeSent = 0;
       const reportSent = (info) => {
-        if (info.label !== "public text link" || !fetchedPaper || fullTextMissing) return;
-        const sourceFold = foldComposerText(paperForReviewer(fetchedPaper));
-        const sentFold = foldComposerText(info.chunk);
-        const capped = sourceFold.length > 0 && !sentFold.includes(sourceFold);
-        notice = fullTextIncludedLine(fetchedPaper.length, foldComposerText(info.actual).length, capped);
+        if (!fetchedPaper || fullTextMissing || info.chunk.length >= info.pending.length) return;
+        const sent = Math.max(0, noticeSent - (info.pending.length - info.chunk.length));
+        noticeSent = sent;
+        notice = fullTextIncludedLine(sourceChars, sent, sent < sourceChars);
         hooks.onProgress?.(notice);
       };
       const sendingHooks = { ...hooks, onVerified: reportSent };
       let planned = planDelivery(activePacket, providerForPlan);
       if (planned.warning) hooks.onProgress?.(planned.warning);
       let steps = planned.steps;
-      if (fetchedPaper) {
-        const line = fullTextPanelLine(fetchedPaper);
-        notice = line;
-        hooks.onProgress?.(line);
-        const copied = fullTextMissing ? "" : clipPaper(paperForReviewer(fetchedPaper), provider.pasteLimit);
-        steps = steps.map((step) => {
-          if (!step.link || !activePacket.textUrl) return step;
-          const prompt = linkReadingPrompt(activePacket.textUrl, activePacket.instructions, copied);
-          return { ...step, text: fullTextMissing ? withFullTextUnavailable(prompt) : prompt };
-        });
+      if (fetchedPaper && activePacket.textUrl) {
+        if (fullTextMissing) {
+          notice = "Full text unavailable";
+          hooks.onProgress?.(notice);
+          steps = steps.map((step) => step.link ? { ...step, text: withFullTextUnavailable(linkReadingPrompt(activePacket.textUrl ?? "", activePacket.instructions)) } : step);
+        } else {
+          const oneMessage = provider.id === "grok-x" ? GROK_X_MESSAGE_CHARS : provider.pasteLimit;
+          const plannedPaper = paperDeliveryPlan({
+            url: activePacket.textUrl,
+            instructions: activePacket.instructions,
+            paper: paperForReviewer(fetchedPaper),
+            sourceChars,
+            oneMessage,
+            prompt: linkReadingPrompt
+          });
+          noticeSent = plannedPaper.sent;
+          notice = plannedPaper.notice;
+          hooks.onProgress?.(notice);
+          const texts = plannedPaper.texts;
+          steps = texts.map((text, index) => ({
+            kind: "paste",
+            text,
+            files: [],
+            index: index + 1,
+            total: texts.length,
+            final: index === texts.length - 1,
+            link: index === texts.length - 1
+          }));
+        }
       }
       let fellBack = false;
       let linkFellBack = false;
@@ -4965,10 +5116,14 @@ ${code}
       loadTextPage: (url) => new Promise((resolve) => {
         chrome.runtime.sendMessage({ type: "air-web-chat-text-page", url }, (response) => {
           if (chrome.runtime.lastError || !response || typeof response.status !== "number") {
-            void fetch(url).then(async (page) => resolve({ status: page.status, body: await page.text() })).catch(() => resolve({ status: 0, body: "" }));
+            void fetch(url).then(async (page) => {
+              const body2 = await page.text();
+              resolve({ status: page.status, body: body2, total: body2.length });
+            }).catch(() => resolve({ status: 0, body: "", total: 0 }));
             return;
           }
-          resolve({ status: response.status, body: typeof response.body === "string" ? response.body : "" });
+          const body = typeof response.body === "string" ? response.body : "";
+          resolve({ status: response.status, body, total: typeof response.total === "number" ? response.total : body.length });
         });
       })
     };

@@ -7,7 +7,7 @@ import { weightedMean } from "../domain/criteria.ts"
 import { sha256Hex } from "./hash.ts"
 import { chunkText } from "./textTools.ts"
 import { extractJsonValue, validateReport } from "./validateReport.ts"
-import { describeCriterionGather, mergeReviewFields, parseModelJson, reaskJsonPrompt, reviewAnalysis } from "./jsonText.ts"
+import { describeCriterionGather, mergeReviewFields, parseModelJson, reaskJsonPrompt, reviewAnalysis, settleChatJson } from "./jsonText.ts"
 import { CAREFUL_REVIEW_ENDING } from "./prompts.ts"
 
 const good = {
@@ -173,7 +173,7 @@ describe("validateReport", () => {
     expect(prompt).toContain("Never nest a citation")
   })
 
-  it("keeps the prose and reads the last fenced score sheet", () => {
+  it("keeps the prose and reads the last fenced score sheet", async () => {
     const sheet = (score: number) => ({
       summary: "The record states a narrow claim and shows the weighing steps that support it, with the season limit written in the text.",
       scores: officialCriteria.criteria.flatMap((criterion) => criterion.id === "global-goals" ? [] : [{
@@ -209,6 +209,13 @@ describe("validateReport", () => {
     expect(rendered.includes("```")).toBe(false)
     expect(reviewAnalysis(rendered)).toContain("I read the whole paper")
     expect(reviewAnalysis(rendered)).not.toContain("overallScore")
+    const after = `${JSON.stringify(sheet(70))}\nAnalysis. I read the whole paper and the yield is in the results section, with the limit named for a reader.`
+    expect(reviewAnalysis(after)).toContain("I read the whole paper")
+    expect(reviewAnalysis(after)).not.toContain("overallScore")
+    const settled = await settleChatJson(`${prose}\n{not json`, async () => JSON.stringify(sheet(70)), () => undefined)
+    expect(settled.reasked).toBe(true)
+    expect(settled.text).toContain("I read the whole paper")
+    expect(settled.text).toContain("70")
   })
 
   it("keeps an uncited score, maps loose enums, and merges a thinner correction", () => {

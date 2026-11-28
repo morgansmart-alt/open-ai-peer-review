@@ -435,6 +435,188 @@
     return { source: EXTENSION_SOURCE, version: PROTOCOL_VERSION, type: "air-web-chat-error", requestId: decision.requestId, message: decision.message };
   }
 
+  // criteria/global-goals.json
+  var global_goals_default = {
+    id: "global-goals",
+    version: "2026.1",
+    name: "Documented public goals used by AIR",
+    updated: "2026-11-19",
+    note: "Statements below are limited to wording checked against the linked sources. This list is editable. It is not a ranking of governments, and a project that does not touch these goals is not a failed project.",
+    goals: [
+      {
+        id: "sdg-7",
+        framework: "UN Sustainable Development Goals",
+        name: "SDG 7 \u2014 Affordable and clean energy",
+        statement: "Ensure access to affordable, reliable, sustainable and modern energy for all. Target 7.1: by 2030, ensure universal access to affordable, reliable and modern energy services.",
+        sourceUrl: "https://sdgs.un.org/goals/goal7",
+        keywords: ["energy access", "electricity", "clean energy", "renewable", "power"]
+      },
+      {
+        id: "sdg-13",
+        framework: "UN Sustainable Development Goals",
+        name: "SDG 13 \u2014 Climate action",
+        statement: "Take urgent action to combat climate change and its impacts.",
+        sourceUrl: "https://sdgs.un.org/goals/goal13",
+        keywords: ["climate", "emissions", "greenhouse", "carbon", "warming"]
+      },
+      {
+        id: "sdg-9",
+        framework: "UN Sustainable Development Goals",
+        name: "SDG 9 \u2014 Industry, innovation and infrastructure",
+        statement: "Build resilient infrastructure, promote inclusive and sustainable industrialization and foster innovation.",
+        sourceUrl: "https://sdgs.un.org/goals/goal9",
+        keywords: ["infrastructure", "industry", "innovation", "manufacturing"]
+      },
+      {
+        id: "sdg-6",
+        framework: "UN Sustainable Development Goals",
+        name: "SDG 6 \u2014 Clean water and sanitation",
+        statement: "Ensure availability and sustainable management of water and sanitation for all.",
+        sourceUrl: "https://sdgs.un.org/goals/goal6",
+        keywords: ["water", "sanitation", "irrigation", "drought"]
+      },
+      {
+        id: "sdg-2",
+        framework: "UN Sustainable Development Goals",
+        name: "SDG 2 \u2014 Zero hunger",
+        statement: "End hunger, achieve food security and improved nutrition and promote sustainable agriculture.",
+        sourceUrl: "https://sdgs.un.org/goals/goal2",
+        keywords: ["hunger", "food", "agriculture", "crop", "nutrition"]
+      },
+      {
+        id: "sdg-11",
+        framework: "UN Sustainable Development Goals",
+        name: "SDG 11 \u2014 Sustainable cities and communities",
+        statement: "Make cities and human settlements inclusive, safe, resilient and sustainable.",
+        sourceUrl: "https://sdgs.un.org/goals/goal11",
+        keywords: ["city", "cities", "urban", "housing", "shelter"]
+      },
+      {
+        id: "sdg-12",
+        framework: "UN Sustainable Development Goals",
+        name: "SDG 12 \u2014 Responsible consumption and production",
+        statement: "Ensure sustainable consumption and production patterns.",
+        sourceUrl: "https://sdgs.un.org/goals/goal12",
+        keywords: ["waste", "consumption", "recycling", "circular", "materials"]
+      },
+      {
+        id: "paris",
+        framework: "Paris Agreement",
+        name: "Paris Agreement temperature goal",
+        statement: "Holding the increase in the global average temperature to well below 2\xB0C above pre-industrial levels and pursuing efforts to limit the temperature increase to 1.5\xB0C (Article 2.1(a)).",
+        sourceUrl: "https://unfccc.int/sites/default/files/english_paris_agreement.pdf",
+        keywords: ["paris", "1.5", "2\xB0c", "2 c", "temperature", "climate"]
+      },
+      {
+        id: "cop28-renewables",
+        framework: "COP28 decision 1/CMA.5",
+        name: "UAE Consensus \u2014 renewables and efficiency by 2030",
+        statement: "Calls on Parties to contribute to tripling renewable energy capacity globally and doubling the global average annual rate of energy efficiency improvements by 2030 (Decision 1/CMA.5, paragraph 28(a)).",
+        sourceUrl: "https://unfccc.int/sites/default/files/resource/cma2023_16a01E.pdf",
+        keywords: ["renewable", "efficiency", "solar", "wind", "capacity"]
+      },
+      {
+        id: "cop28-fossils",
+        framework: "COP28 decision 1/CMA.5",
+        name: "UAE Consensus \u2014 transitioning away from fossil fuels",
+        statement: "Calls on Parties to contribute to transitioning away from fossil fuels in energy systems, in a just, orderly and equitable manner, so as to achieve net zero by 2050 in keeping with the science (Decision 1/CMA.5, paragraph 28(d)).",
+        sourceUrl: "https://unfccc.int/sites/default/files/resource/cma2023_16a01E.pdf",
+        keywords: ["fossil", "coal", "oil", "gas", "net zero", "combustion"]
+      },
+      {
+        id: "iea-nze",
+        framework: "IEA Net Zero by 2050",
+        name: "IEA Net Zero by 2050 pathway",
+        statement: "The IEA Net Zero by 2050 roadmap is a pathway for the global energy sector to reach net zero CO2 emissions by 2050.",
+        sourceUrl: "https://www.iea.org/reports/net-zero-by-2050",
+        keywords: ["net zero", "2050", "energy sector", "decarbon"]
+      },
+      {
+        id: "methane-pledge",
+        framework: "Global Methane Pledge",
+        name: "Global Methane Pledge",
+        statement: "Participants commit to work together to collectively reduce global anthropogenic methane emissions across all sectors by at least 30 percent below 2020 levels by 2030. This is a collective target, not a per-country quota.",
+        sourceUrl: "https://www.globalmethanepledge.org/",
+        keywords: ["methane", "ch4", "leak"]
+      },
+      {
+        id: "energy-access-2030",
+        framework: "UN Sustainable Development Goals",
+        name: "Universal energy access by 2030",
+        statement: "SDG target 7.1: by 2030, ensure universal access to affordable, reliable and modern energy services.",
+        sourceUrl: "https://sdgs.un.org/goals/goal7",
+        keywords: ["energy access", "universal access", "electricity access", "clean cooking"]
+      }
+    ]
+  };
+
+  // src/domain/goals.ts
+  function isRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+  function parseGlobalGoals(input) {
+    const errors = [];
+    if (!isRecord(input)) return { ok: false, errors: ["Goals file must be a JSON object."] };
+    const version = typeof input.version === "string" ? input.version.trim() : "";
+    if (!version) errors.push("version is required.");
+    const goalsRaw = Array.isArray(input.goals) ? input.goals : [];
+    const goals = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const item of goalsRaw) {
+      if (!isRecord(item)) continue;
+      const id = typeof item.id === "string" ? item.id.trim() : "";
+      const name = typeof item.name === "string" ? item.name.trim() : "";
+      const statement = typeof item.statement === "string" ? item.statement.trim() : "";
+      const sourceUrl = typeof item.sourceUrl === "string" ? item.sourceUrl.trim() : "";
+      if (!id || !name || !statement || !sourceUrl.startsWith("https://")) {
+        errors.push(`Goal ${id || name || "(missing)"} needs an id, name, statement, and https source.`);
+        continue;
+      }
+      if (seen.has(id)) errors.push(`Duplicate goal id ${id}.`);
+      seen.add(id);
+      goals.push({
+        id,
+        framework: typeof item.framework === "string" ? item.framework : "",
+        name,
+        statement,
+        sourceUrl,
+        keywords: Array.isArray(item.keywords) ? item.keywords.filter((word) => typeof word === "string") : []
+      });
+    }
+    if (goals.length === 0) errors.push("Add at least one goal.");
+    if (errors.length) return { ok: false, errors };
+    return {
+      ok: true,
+      file: {
+        id: typeof input.id === "string" ? input.id : "global-goals",
+        version,
+        name: typeof input.name === "string" ? input.name : "Global goals",
+        updated: typeof input.updated === "string" ? input.updated : "",
+        note: typeof input.note === "string" ? input.note : "",
+        goals
+      }
+    };
+  }
+  var parsed = parseGlobalGoals(global_goals_default);
+  if (!parsed.ok) throw new Error(parsed.errors.join("\n"));
+  var globalGoals = parsed.file;
+
+  // src/services/webChat/paperFit.ts
+  var TEXT_PAGE_LIMIT = 4e5;
+  function packTextPage(full, limit = TEXT_PAGE_LIMIT) {
+    if (full.length <= limit) return { body: full, total: full.length };
+    const tail = Math.min(1e5, Math.floor(limit / 3));
+    const head = Math.max(0, limit - tail);
+    return {
+      body: `${full.slice(0, head).trimEnd()}
+
+[AIR omitted a middle stretch of this long file.]
+
+${full.slice(-tail).trimStart()}`,
+      total: full.length
+    };
+  }
+
   // extension/background.ts
   function senderOrigin(sender) {
     try {
@@ -576,7 +758,8 @@
       const url = message.url;
       void fetch(url).then(async (response) => {
         const body = await response.text();
-        sendResponse({ status: response.status, body: body.slice(0, 2e4) });
+        const packed = packTextPage(body);
+        sendResponse({ status: response.status, body: packed.body, total: packed.total });
       }).catch(() => sendResponse({ status: 0, body: "" }));
       return true;
     }

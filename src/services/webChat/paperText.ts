@@ -64,13 +64,13 @@ function paperPageRank(page: { url: string; body: string }): number {
 
 export async function choosePaperTextPage(
   recordId: string,
-  load: (url: string) => Promise<{ status: number; body: string }>,
-): Promise<{ url: string; body: string; unavailable: boolean } | null> {
-  const found: { url: string; body: string }[] = []
+  load: (url: string) => Promise<{ status: number; body: string; total?: number }>,
+): Promise<{ url: string; body: string; total: number; unavailable: boolean } | null> {
+  const found: { url: string; body: string; total: number }[] = []
   for (const url of paperTextCandidates(recordId)) {
     try {
       const loaded = await load(url)
-      if (textPageHasPaper(loaded.status, loaded.body)) found.push({ url, body: loaded.body })
+      if (textPageHasPaper(loaded.status, loaded.body)) found.push({ url, body: loaded.body, total: loaded.total ?? loaded.body.length })
     } catch {
       // The next address is tried.
     }
@@ -79,7 +79,7 @@ export async function choosePaperTextPage(
   const best = found[0]
   if (!best) return null
   const unavailable = fullTextPanelLine(best.body) === "Full text unavailable"
-  return { url: best.url, body: best.body, unavailable }
+  return { url: best.url, body: best.body, total: best.total, unavailable }
 }
 
 export async function choosePaperTextUrl(
@@ -233,24 +233,26 @@ const SCORE_THE_COPY = "The paper text is copied above. Score that text. Do not 
  * The link route. When the service text is known, it is copied into the message.
  * The system prompt is not repeated here. The instructions are the compact rubric.
  */
-export function linkReadingPrompt(url: string, instructions: string, paper = ""): string {
+export function linkReadingPrompt(url: string, instructions: string, paper = "", note = ""): string {
   const copied = paper.trim()
-  const rubric = copied ? instructions.replaceAll(READ_THE_PAGE, SCORE_THE_COPY) : instructions
+  const rubric = copied || note ? instructions.replaceAll(READ_THE_PAGE, SCORE_THE_COPY) : instructions
+  const caution = note.trim()
   if (!copied) {
     return [
-      "Open this public text page and read the full paper. No sign-in is required.",
-      url,
-      "",
-      "Use only the paper text on that page. Do not invent data. Do not ask for an attachment.",
+      note ? "The paper text was sent in the messages above. Score only that text." : "Open this public text page and read the full paper. No sign-in is required.",
+      note ? "" : url,
+      caution,
+      "Use only the paper text you were given. Do not invent data. Do not ask for an attachment.",
       CAREFUL_REVIEW_ENDING,
       "Score that paper with the instructions below.",
       "",
       rubric,
-    ].join("\n")
+    ].filter((line) => line !== undefined).join("\n")
   }
   return [
     "The paper text is copied below from the public text page. Score only that text.",
     "The Zenodo record link is the citation. It is not the paper. Do not ask for an attachment.",
+    caution,
     `Public text: ${url}`,
     "",
     copied,
@@ -260,7 +262,7 @@ export function linkReadingPrompt(url: string, instructions: string, paper = "")
     "Score that paper with the instructions below.",
     "",
     rubric,
-  ].join("\n")
+  ].filter(Boolean).join("\n")
 }
 
 const ACCESS_FAILURE =

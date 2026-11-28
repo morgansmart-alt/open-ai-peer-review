@@ -1,7 +1,7 @@
 import type { CriteriaSet, ReviewReport } from "../../domain/types.ts"
 import { acceptWebChatResult } from "./accept.ts"
 import { officialCriteria } from "../../domain/officialCriteria.ts"
-import { lastScoreJson } from "../jsonText.ts"
+import { lastScoreJson, retainProse } from "../jsonText.ts"
 import { CAREFUL_DEFENCE_ENDING } from "../prompts.ts"
 import type { DefendedScore } from "./submission.ts"
 
@@ -202,10 +202,10 @@ export function defendedFromReply(
   return { ok: true, partial: true, defended: partialDefended(raw, stated) }
 }
 
-/** Prefer a sheet that validates. Otherwise keep whichever reply still names an overall. */
+/** Prefer a sheet that validates. Otherwise keep whichever reply still names an overall. Prose outside the sheet is kept. */
 export function chooseDefendedText(original: string, settled: string, criteria: CriteriaSet): string {
-  if (acceptWebChatResult(settled, criteria).ok) return settled
+  if (acceptWebChatResult(settled, criteria).ok) return retainProse(settled, original)
   if (acceptWebChatResult(original, criteria).ok) return original
-  if (statedDefenceOverall(settled) != null) return settled
+  if (statedDefenceOverall(settled) != null) return retainProse(settled, original)
   return original
 }

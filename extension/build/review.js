@@ -2591,13 +2591,14 @@ ${output}
     return best;
   }
   function reviewAnalysis(raw) {
-    const marks = [...raw.matchAll(/```(?:json)?\s*[\s\S]*?```/gi)];
-    const last = marks[marks.length - 1];
-    const fenceAt = last?.index ?? -1;
-    const sheetAt = lastSheetStart(raw);
-    const cut = fenceAt >= 0 && (sheetAt < 0 || fenceAt <= sheetAt) ? fenceAt : sheetAt;
-    if (cut <= 0) return "";
-    return raw.slice(0, cut).replace(/\s+$/g, "").trim();
+    let text2 = raw.replace(/```(?:json)?\s*[\s\S]*?```/gi, "\n");
+    const sheetAt = lastSheetStart(text2);
+    if (sheetAt >= 0) {
+      const end = matchingBrace(text2, sheetAt);
+      if (end >= sheetAt) text2 = `${text2.slice(0, sheetAt)}
+${text2.slice(end + 1)}`;
+    }
+    return text2.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
   }
   function parseModelJson(raw, criterionIds) {
     if (raw.includes("```")) {

@@ -644,13 +644,23 @@ function lastSheetStart(raw: string): number {
  * A rendered chat has no ``` markers: the sheet is the last JSON object, and the words before it are the analysis.
  */
 export function reviewAnalysis(raw: string): string {
-  const marks = [...raw.matchAll(/```(?:json)?\s*[\s\S]*?```/gi)]
-  const last = marks[marks.length - 1]
-  const fenceAt = last?.index ?? -1
-  const sheetAt = lastSheetStart(raw)
-  const cut = fenceAt >= 0 && (sheetAt < 0 || fenceAt <= sheetAt) ? fenceAt : sheetAt
-  if (cut <= 0) return ""
-  return raw.slice(0, cut).replace(/\s+$/g, "").trim()
+  let text = raw.replace(/```(?:json)?\s*[\s\S]*?```/gi, "\n")
+  const sheetAt = lastSheetStart(text)
+  if (sheetAt >= 0) {
+    const end = matchingBrace(text, sheetAt)
+    if (end >= sheetAt) text = `${text.slice(0, sheetAt)}\n${text.slice(end + 1)}`
+  }
+  return text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim()
+}
+
+/** Keep prose that sat outside the score sheet when a repair returns only JSON. */
+export function retainProse(sheet: string, ...sources: string[]): string {
+  if (reviewAnalysis(sheet).length >= 40) return sheet
+  for (const source of sources) {
+    const prose = reviewAnalysis(source)
+    if (prose.length >= 40 && !sheet.includes(prose.slice(0, Math.min(80, prose.length)))) return `${prose}\n\n${sheet}`
+  }
+  return sheet
 }
 
 export function parseModelJson(raw: string, criterionIds?: readonly string[]): ParsedModelJson | { ok: false; error: string } {
@@ -749,7 +759,7 @@ export async function settleChatJson(
       const analysis = reviewAnalysis(raw)
       if (analysis.length >= 40) log(`Peer analysis (${analysis.length} characters): ${analysis.slice(0, 2000)}`)
       if (first.repaired) log("Repaired the chat's JSON before scoring.")
-      const whole = parseModelJson(raw, criterionIds).ok ? raw : first.text
+      const whole = parseModelJson(raw, criterionIds).ok ? raw : retainProse(first.text, raw)
       return { text: whole, repaired: first.repaired, reasked: false }
     }
     const problem = checked.errors.join(" ")
@@ -761,20 +771,21 @@ export async function settleChatJson(
     const mergedCheck = validate ? validate(mergedText) : { ok: true as const }
     if (mergedCheck.ok) {
       if (second.ok && second.repaired) log("Repaired the corrected JSON.")
-      return { text: mergedText, repaired: true, reasked: true }
+      return { text: retainProse(mergedText, follow, raw), repaired: true, reasked: true }
     }
     const firstText = JSON.stringify(first.value)
     const firstCheck = validate ? validate(firstText) : { ok: false as const, errors: ["The first reply was not usable."] }
     if (firstCheck.ok) {
       log("The correction was less complete than the first reply. Kept the first reply.")
-      return { text: firstText, repaired: true, reasked: true }
+      return { text: retainProse(firstText, raw), repaired: true, reasked: true }
     }
     log(rejectionNote("errors" in mergedCheck ? mergedCheck.errors.join(" ") : "The corrected JSON was not usable.", mergedText, describeCriterionGather(follow)))
-    return { text: mergedText, repaired: true, reasked: true }
+    return { text: retainProse(mergedText, follow, raw), repaired: true, reasked: true }
   }
   log(rejectionNote(first.error, raw, describeCriterionGather(raw)))
   const follow = await ask(reaskJsonPrompt(first.error, criterionIds))
   const second = parseModelJson(follow, criterionIds)
   if (second.ok && second.repaired) log("Repaired the corrected JSON.")
-  return { text: second.ok ? (second.repaired ? second.text : follow) : follow, repaired: Boolean(second.ok && second.repaired), reasked: true }
+  const settled = second.ok ? (second.repaired ? second.text : follow) : follow
+  return { text: retainProse(settled, follow, raw), repaired: Boolean(second.ok && second.repaired), reasked: true }
 }

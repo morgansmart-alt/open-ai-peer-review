@@ -1,6 +1,7 @@
 import { webChatProvider } from "./adapters/index.ts"
 import { JOB_KEY, sessionGet, sessionRemove, sessionSet, tabSend, type JobRecord } from "./browser.ts"
 import { airTabForRequest, extensionEnvelope, relayFromProvider } from "../src/services/webChat/relay.ts"
+import { packTextPage } from "../src/services/webChat/paperFit.ts"
 import { EXTENSION_SOURCE, originAllowed, PROTOCOL_VERSION, validatePacket } from "../src/services/webChat/protocol.ts"
 
 function senderOrigin(sender: { url?: string }): string {
@@ -153,7 +154,8 @@ chrome.runtime.onMessage.addListener((message: { source?: string; type?: string;
     void fetch(url)
       .then(async (response) => {
         const body = await response.text()
-        sendResponse({ status: response.status, body: body.slice(0, 20_000) })
+        const packed = packTextPage(body)
+        sendResponse({ status: response.status, body: packed.body, total: packed.total })
       })
       .catch(() => sendResponse({ status: 0, body: "" }))
     return true
