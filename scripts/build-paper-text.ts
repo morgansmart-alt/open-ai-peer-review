@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs"
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
+import { extractPdfText } from "../src/services/webChat/pdfExtract.ts"
 import { isOpenFiles } from "../src/services/zenodo.ts"
 import { isOpenLicence } from "../src/services/webChat/pdfPaper.ts"
 import { collectPaperIds, documentsForOpenRecord, mergePaperIds, renderStaticPaperText } from "../src/services/webChat/paperTextFiles.ts"
@@ -9,7 +10,6 @@ import { collectPaperIds, documentsForOpenRecord, mergePaperIds, renderStaticPap
 const TEXT_EXTENSIONS = new Set(["txt", "md", "markdown", "csv", "tsv", "html", "htm", "json", "xml", "tex", "rst"])
 const FILE_CAP = 1_500_000
 const PDF_BYTE_CAP = 25 * 1024 * 1024
-const PDF_PAGE_CAP = 80
 const USER_AGENT = "open-ai-peer-review (https://github.com/morgansmart-alt/open-ai-peer-review)"
 
 function curatedIds(): string[] {
@@ -78,25 +78,8 @@ function recordFromApi(data: Record<string, unknown>) {
 }
 
 async function pdfText(bytes: Uint8Array, cap: number): Promise<string> {
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs")
-  const document = await pdfjs.getDocument({ data: bytes, disableWorker: true }).promise
-  const parts: string[] = []
-  let used = 0
-  const pages = Math.min(document.numPages, PDF_PAGE_CAP)
-  for (let pageNumber = 1; pageNumber <= pages && used < cap; pageNumber += 1) {
-    const page = await document.getPage(pageNumber)
-    const content = await page.getTextContent()
-    const line = content.items
-      .map((item: { str?: string }) => item.str ?? "")
-      .join(" ")
-      .replace(/[ \t]{2,}/g, " ")
-      .trim()
-    if (!line) continue
-    const slice = line.slice(0, cap - used)
-    used += slice.length
-    parts.push(slice)
-  }
-  return parts.join("\n\n")
+  const extracted = await extractPdfText(bytes, cap)
+  return extracted.text
 }
 
 async function fileText(file: { key: string; url: string }, room: number): Promise<string> {

@@ -3848,8 +3848,11 @@ ${output}
   }
 
   // src/services/webChat/publication.ts
+  function normalizePublicationLink(value) {
+    return value.trim().replace(/^(?:https?:\/\/)+/i, "https://");
+  }
   function classifyPublication(input) {
-    const raw = input.trim();
+    const raw = normalizePublicationLink(input);
     if (!raw) return { kind: "unknown" };
     const zenodo = parseRecordRef(raw);
     if (zenodo && /zenodo/i.test(raw)) {
@@ -4474,8 +4477,18 @@ ${JSON.stringify(report)}`),
           paint();
         },
         onLink(value) {
-          link = value;
+          const next = normalizePublicationLink(value);
+          link = next;
           publication = null;
+          if (next !== value) {
+            const field = document.getElementById("publication-link");
+            if (field instanceof HTMLInputElement && field.value !== next) {
+              const caret2 = field.selectionStart ?? next.length;
+              field.value = next;
+              const at = Math.max(0, caret2 - (value.length - next.length));
+              field.setSelectionRange(at, at);
+            }
+          }
         },
         onLookup() {
           void lookup();

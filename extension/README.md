@@ -6,6 +6,7 @@ If you do not use a terminal, follow [INSTALL.md](../INSTALL.md). The file to do
 
 ## Changelog
 
+- 0.2.29: The link route sends the paper-text service, including the PDF, and the panel says whether that full text was included. A doubled https:// in the publication link is collapsed.
 - 0.2.28: An open-licence Zenodo PDF is copied onto the public text page. When that text is missing, the page and the review say full text unavailable.
 - 0.2.27: The prose before the score sheet is posted, including when X renders the fence as a code block. The defence argument is posted beside it. Both are capped at 12,000 characters.
 - 0.2.26: A Zenodo link of the form /doi/10.5281/zenodo.N keeps that record id. Send for a looked-up Zenodo record still uses the DOI and record URL.

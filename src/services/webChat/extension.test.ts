@@ -471,7 +471,7 @@ describe("live chat composers", () => {
       sendVerifyMs: 20,
       loadTextPage: async () => ({ status: 200, body: livePage }),
     })
-    expect(sent[0]).toContain("paper-text/1.txt")
+    expect(sent[0]).toContain("functions/v1/paper-text?id=1")
     expect(sent[0]).not.toContain("UNIQUEYIELD")
     expect(sent[1]).toContain("UNIQUEYIELD")
     expect(result.ok).toBe(true)
@@ -515,8 +515,11 @@ describe("live chat composers", () => {
       onProgress: (message) => progress.push(message),
     })
     expect(sent).toHaveLength(1)
-    expect(sent[0]).toContain("paper-text/1.txt")
+    expect(sent[0]).toContain("functions/v1/paper-text?id=1")
+    expect(sent[0]).toContain("The public paper text is long enough")
     expect(sent.join("\n")).not.toContain("UNIQUEYIELD")
+    expect(sent.join("\n")).not.toContain("are not public")
+    expect(progress.some((message) => message.startsWith("Full text included"))).toBe(true)
     expect(progress.some((message) => message.startsWith("Review route: public text link."))).toBe(true)
     expect(progress.some((message) => message.includes("Waiting for the reply: public text link."))).toBe(true)
     expect(result.ok).toBe(true)
@@ -563,6 +566,55 @@ describe("live chat composers", () => {
     if (result.ok) {
       expect(result.route).toBe("link")
       expect(result.notice).toContain("Full text unavailable")
+    }
+  })
+
+  it("sends the paper-text service PDF instead of a static page that says the files are not public", async () => {
+    document.body.innerHTML = `<main><textarea id="box" aria-label="Message Grok"></textarea><button id="send" type="submit" aria-label="Send">Send</button><div id="reply" class="assistant-message"></div></main>`
+    const provider = webChatProvider("grok")
+    if (!provider) throw new Error("missing grok")
+    const sent: string[] = []
+    const progress: string[] = []
+    document.getElementById("send")?.addEventListener("click", () => {
+      const text = (document.getElementById("box") as HTMLTextAreaElement).value
+      sent.push(text)
+      ;(document.getElementById("box") as HTMLTextAreaElement).value = ""
+      document.getElementById("reply")!.textContent = '{"overallScore":86}'
+    })
+    const packet = buildWebChatPacket({
+      requestId: "service-pdf",
+      providerId: "grok",
+      criteria: officialCriteria,
+      record,
+      documents: [{ filename: "paper.md", text: "UNIQUEYIELD in one season." }],
+      useTextPage: true,
+    })
+    const stale = "Energy costs\nAuthors: Roeske\n\nZenodo record: https://zenodo.org/records/1\nVersion DOI: https://doi.org/10.5281/zenodo.1\n\nAn outline of the study.\n\nThe files on this record are not public. This page does not include them."
+    const service = "Energy costs\nAuthors: Roeske\n\nZenodo record: https://zenodo.org/records/1\nVersion DOI: https://doi.org/10.5281/zenodo.1\n\n## HSLU-CO2-impact-BIPV-active-interface.pdf\neconomy irradiation on facades"
+    const result = await runTurn(document, { ...provider, fileUpload: false, pasteLimit: 200_000 }, packet, {
+      aborted: () => false,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      pollMs: 5,
+      stableMs: 0,
+      stepTimeoutMs: 2000,
+      replyStartTimeoutMs: 400,
+      submitStableMs: 0,
+      submitReadyMs: 20,
+      sendVerifyMs: 20,
+      loadTextPage: async (url) => ({ status: 200, body: url.includes("functions/v1/paper-text") ? service : stale }),
+      onProgress: (message) => progress.push(message),
+    })
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toContain("functions/v1/paper-text?id=1")
+    expect(sent[0]).toContain("economy irradiation on facades")
+    expect(sent[0]).not.toContain("are not public")
+    expect(sent[0]).not.toContain("Read that page")
+    expect(sent.join("\n")).not.toContain("UNIQUEYIELD")
+    expect(progress.some((message) => message === "Full text included (30 chars from PDF)")).toBe(true)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.route).toBe("link")
+      expect(result.notice).toBe("Full text included (30 chars from PDF)")
     }
   })
 

@@ -8,7 +8,7 @@ import { EXTENSION_SOURCE, PAGE_SOURCE, PROTOCOL_VERSION } from "../src/services
 import { recordStep, renderReviewApp, type ReviewModel, type StepLogEntry } from "../src/services/webChat/reviewView.ts"
 import { defendedFromReply } from "../src/services/webChat/defence.ts"
 import { defenceRoundCounts, runSummary } from "../src/services/webChat/runSummary.ts"
-import { resolvePublication, type PublicationPreview } from "../src/services/webChat/publication.ts"
+import { normalizePublicationLink, resolvePublication, type PublicationPreview } from "../src/services/webChat/publication.ts"
 import { reviewAnalysis } from "../src/services/jsonText.ts"
 import { publishedStatus, submissionFromReview } from "../src/services/webChat/submission.ts"
 import { postWebChatSubmission } from "../src/services/webChat/submit.ts"
@@ -130,8 +130,18 @@ function paint(): void {
         paint()
       },
       onLink(value) {
-        link = value
+        const next = normalizePublicationLink(value)
+        link = next
         publication = null
+        if (next !== value) {
+          const field = document.getElementById("publication-link")
+          if (field instanceof HTMLInputElement && field.value !== next) {
+            const caret = field.selectionStart ?? next.length
+            field.value = next
+            const at = Math.max(0, caret - (value.length - next.length))
+            field.setSelectionRange(at, at)
+          }
+        }
       },
       onLookup() {
         void lookup()

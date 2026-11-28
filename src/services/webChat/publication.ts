@@ -18,8 +18,13 @@ export type PublicationRef =
   | { kind: "pdf"; pdfUrl: string }
   | { kind: "unknown" }
 
+/** Collapse a doubled scheme from a laggy paste, such as https://https://zenodo.org/… */
+export function normalizePublicationLink(value: string): string {
+  return value.trim().replace(/^(?:https?:\/\/)+/i, "https://")
+}
+
 export function classifyPublication(input: string): PublicationRef {
-  const raw = input.trim()
+  const raw = normalizePublicationLink(input)
   if (!raw) return { kind: "unknown" }
   const zenodo = parseRecordRef(raw)
   if (zenodo && /zenodo/i.test(raw)) {
