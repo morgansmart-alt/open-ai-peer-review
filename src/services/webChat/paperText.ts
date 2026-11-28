@@ -52,21 +52,34 @@ export function recordIdFromPaperTextUrl(url: string): string | null {
   }
 }
 
+function paperPageRank(page: { url: string; body: string }): number {
+  const pdf = pdfBodyChars(page.body)
+  const closed = pageSaysFilesClosed(page.body) || (pageSaysFullTextUnavailable(page.body) && pdf === 0)
+  const service = page.url.includes("/functions/v1/paper-text") ? 1 : 0
+  if (pdf > 0 && !pageSaysFilesClosed(page.body)) return 300 + service
+  if (pdf > 0) return 200 + service
+  if (!closed && /^##\s+\S+/m.test(page.body)) return 100 + service
+  return service
+}
+
 export async function choosePaperTextPage(
   recordId: string,
   load: (url: string) => Promise<{ status: number; body: string }>,
-): Promise<{ url: string; unavailable: boolean } | null> {
+): Promise<{ url: string; body: string; unavailable: boolean } | null> {
+  const found: { url: string; body: string }[] = []
   for (const url of paperTextCandidates(recordId)) {
     try {
       const loaded = await load(url)
-      if (textPageHasPaper(loaded.status, loaded.body)) {
-        return { url, unavailable: pageSaysFullTextUnavailable(loaded.body) }
-      }
+      if (textPageHasPaper(loaded.status, loaded.body)) found.push({ url, body: loaded.body })
     } catch {
       // The next address is tried.
     }
   }
-  return null
+  found.sort((left, right) => paperPageRank(right) - paperPageRank(left))
+  const best = found[0]
+  if (!best) return null
+  const unavailable = fullTextPanelLine(best.body) === "Full text unavailable"
+  return { url: best.url, body: best.body, unavailable }
 }
 
 export async function choosePaperTextUrl(
@@ -154,30 +167,88 @@ export function formatPaperText(
 }
 
 /** Shown on the saved row when the page the model opens is not the paper. */
-export const FULL_TEXT_PANEL_NOTE = "Full text unavailable. The public page is record metadata, so this review must not treat it as the paper."
+export const FULL_TEXT_PANEL_NOTE = "Full text unavailable"
+
+const FILES_CLOSED = /the files on this record are not public/i
 
 export function pageSaysFullTextUnavailable(body: string): boolean {
   return new RegExp(`(?:^|\\n)${FULL_TEXT_UNAVAILABLE}\\.`, "m").test(body)
 }
 
-export function withFullTextUnavailable(prompt: string): string {
-  return `${FULL_TEXT_PANEL_NOTE}\n\n${prompt}`
+export function pageSaysFilesClosed(body: string): boolean {
+  return FILES_CLOSED.test(body)
 }
 
+/** Characters under a `## something.pdf` heading. That is the extracted paper, not the record outline. */
+export function pdfBodyChars(page: string): number {
+  let count = 0
+  for (const chunk of page.split(/\n(?=## )/)) {
+    const heading = chunk.trimStart().match(/^##\s+(.+)$/m)?.[1]?.trim() ?? ""
+    if (!/\.pdf\b/i.test(heading)) continue
+    count += chunk.replace(/^##\s+.+\n?/, "").trim().length
+  }
+  return count
+}
+
+/** The panel line for a fetched paper-text page. */
+export function fullTextPanelLine(body: string): string {
+  const pdf = pdfBodyChars(body)
+  const closed = pageSaysFilesClosed(body) || pageSaysFullTextUnavailable(body)
+  if (pdf > 0 && !pageSaysFilesClosed(body)) return `Full text included (${pdf} chars from PDF)`
+  if (closed) return "Full text unavailable"
+  const chars = body.trim().length
+  if (chars >= 80) return `Full text included (${chars} chars)`
+  return "Full text unavailable"
+}
+
+export function withFullTextUnavailable(prompt: string): string {
+  return `${FULL_TEXT_PANEL_NOTE}. The public page is record metadata, so this review must not treat it as the paper.\n\n${prompt}`
+}
+
+/** Drop the closed-files sentence once a PDF body is present, so the reviewer is not told the paper is missing. */
+export function paperForReviewer(body: string): string {
+  if (pdfBodyChars(body) === 0) return body.trim()
+  return body
+    .split("\n")
+    .filter((line) => !FILES_CLOSED.test(line) && !new RegExp(`^${FULL_TEXT_UNAVAILABLE}\\.`).test(line.trim()))
+    .join("\n")
+    .trim()
+}
+
+const READ_THE_PAGE = "The paper is on the public text page named above. Read that page. Do not ask for an attachment."
+const SCORE_THE_COPY = "The paper text is copied above. Score that text. Do not open the Zenodo record page for the paper. Do not ask for an attachment."
+
 /**
- * The link route. The paper stays on the public page.
+ * The link route. When the service text is known, it is copied into the message.
  * The system prompt is not repeated here. The instructions are the compact rubric.
  */
-export function linkReadingPrompt(url: string, instructions: string): string {
+export function linkReadingPrompt(url: string, instructions: string, paper = ""): string {
+  const copied = paper.trim()
+  const rubric = copied ? instructions.replaceAll(READ_THE_PAGE, SCORE_THE_COPY) : instructions
+  if (!copied) {
+    return [
+      "Open this public text page and read the full paper. No sign-in is required.",
+      url,
+      "",
+      "Use only the paper text on that page. Do not invent data. Do not ask for an attachment.",
+      CAREFUL_REVIEW_ENDING,
+      "Score that paper with the instructions below.",
+      "",
+      rubric,
+    ].join("\n")
+  }
   return [
-    "Open this public text page and read the full paper. No sign-in is required.",
-    url,
+    "The paper text is copied below from the public text page. Score only that text.",
+    "The Zenodo record link is the citation. It is not the paper. Do not ask for an attachment.",
+    `Public text: ${url}`,
     "",
-    "Use only the paper text on that page. Do not invent data. Do not ask for an attachment.",
+    copied,
+    "",
+    "Use only the paper text above. Do not invent data.",
     CAREFUL_REVIEW_ENDING,
     "Score that paper with the instructions below.",
     "",
-    instructions,
+    rubric,
   ].join("\n")
 }
 

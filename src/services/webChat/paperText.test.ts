@@ -11,7 +11,10 @@ import curatedIds from "../../../paper-text-ids.json" with { type: "json" }
 import { isOpenFiles } from "../zenodo.ts"
 import { collectPaperIds, documentsForOpenRecord, mergePaperIds, renderStaticPaperText } from "./paperTextFiles.ts"
 import {
+  choosePaperTextPage,
   choosePaperTextUrl,
+  fullTextPanelLine,
+  pdfBodyChars,
   couldNotReadPaper,
   formatPaperText,
   isPublicPaperTextUrl,
@@ -274,6 +277,14 @@ describe("json repair and the text page check", () => {
     const service = await choosePaperTextUrl("22826", async (url) => ({ status: url.includes("functions/v1/paper-text") ? 200 : 404, body: url.includes("functions/v1/paper-text") ? file : "missing" }))
     expect(service).toBe(paperTextFunctionUrl("22826"))
     expect(await choosePaperTextUrl("22826", async () => ({ status: 404, body: "missing" }))).toBeNull()
+    const stale = "Energy costs\nAuthors: Roeske\n\nZenodo record: https://zenodo.org/records/437445\nVersion DOI: https://doi.org/10.5281/zenodo.437445\n\nAn outline.\n\nThe files on this record are not public. This page does not include them."
+    const servicePage = "Energy costs\nAuthors: Roeske\n\nZenodo record: https://zenodo.org/records/437445\nVersion DOI: https://doi.org/10.5281/zenodo.437445\n\n## HSLU-CO2-impact-BIPV-active-interface.pdf\neconomy irradiation on facades"
+    const chosen = await choosePaperTextPage("437445", async (url) => ({ status: 200, body: url.includes("functions/v1/paper-text") ? servicePage : stale }))
+    expect(chosen?.url).toContain("functions/v1/paper-text?id=437445")
+    expect(chosen?.body).toContain("economy irradiation on facades")
+    expect(pdfBodyChars(servicePage)).toBe("economy irradiation on facades".length)
+    expect(fullTextPanelLine(servicePage)).toBe(`Full text included (${"economy irradiation on facades".length} chars from PDF)`)
+    expect(fullTextPanelLine(stale)).toBe("Full text unavailable")
   })
 })
 

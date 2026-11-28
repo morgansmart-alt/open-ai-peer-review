@@ -3,8 +3,9 @@ import { planDelivery, type DeliveryStep } from "./deliver.ts"
 import {
   choosePaperTextPage,
   couldNotReadPaper,
-  FULL_TEXT_PANEL_NOTE,
-  pageSaysFullTextUnavailable,
+  fullTextPanelLine,
+  linkReadingPrompt,
+  paperForReviewer,
   recordIdFromPaperTextUrl,
   TEXT_PAGE_NOTE,
   textPageHasPaper,
@@ -426,14 +427,20 @@ export async function sendFollowUp(
   return sendStep(doc, provider, step, hooks, label, expect)
 }
 
+function clipPaper(paper: string, pasteLimit: number): string {
+  const room = Math.max(2000, pasteLimit - 8000)
+  if (paper.length <= room) return paper
+  return `${paper.slice(0, room).trimEnd()}\n\n[AIR truncated this file.]`
+}
+
 async function loadedPage(
   url: string,
   load: (url: string) => Promise<{ status: number; body: string }>,
-): Promise<{ url: string; unavailable: boolean } | null> {
+): Promise<{ url: string; body: string; unavailable: boolean } | null> {
   try {
     const loaded = await load(url)
     if (!textPageHasPaper(loaded.status, loaded.body)) return null
-    return { url, unavailable: pageSaysFullTextUnavailable(loaded.body) }
+    return { url, body: loaded.body, unavailable: fullTextPanelLine(loaded.body) === "Full text unavailable" }
   } catch {
     return null
   }
@@ -450,6 +457,7 @@ export async function runTurn(doc: Document, provider: ProviderAdapter, packet: 
     let activePacket = packet
     let notice: string | undefined
     let fullTextMissing = false
+    let fetchedPaper = ""
     if (activePacket.textUrl) {
       const id = recordIdFromPaperTextUrl(activePacket.textUrl)
       const load = hooks.loadTextPage ?? ((url: string) => fetch(url).then(async (response) => ({ status: response.status, body: await response.text() })))
@@ -461,19 +469,30 @@ export async function runTurn(doc: Document, provider: ProviderAdapter, packet: 
         activePacket = rest
       } else {
         if (page.url !== activePacket.textUrl) {
-          hooks.onProgress?.("The static text file is not on the site yet. Using the text service instead.")
+          hooks.onProgress?.(
+            page.url.includes("/functions/v1/paper-text")
+              ? "Using the paper-text service so the review includes the PDF."
+              : "The paper-text service is not available. Using the static text file.",
+          )
         }
         activePacket = { ...activePacket, textUrl: page.url }
         fullTextMissing = page.unavailable
+        fetchedPaper = page.body
       }
     }
     let planned = planDelivery(activePacket, providerForPlan)
     if (planned.warning) hooks.onProgress?.(planned.warning)
     let steps = planned.steps
-    if (fullTextMissing) {
-      notice = FULL_TEXT_PANEL_NOTE
-      hooks.onProgress?.(FULL_TEXT_PANEL_NOTE)
-      steps = steps.map((step) => (step.link ? { ...step, text: withFullTextUnavailable(step.text) } : step))
+    if (fetchedPaper) {
+      const line = fullTextPanelLine(fetchedPaper)
+      notice = line
+      hooks.onProgress?.(line)
+      const copied = fullTextMissing ? "" : clipPaper(paperForReviewer(fetchedPaper), provider.pasteLimit)
+      steps = steps.map((step) => {
+        if (!step.link || !activePacket.textUrl) return step
+        const prompt = linkReadingPrompt(activePacket.textUrl, activePacket.instructions, copied)
+        return { ...step, text: fullTextMissing ? withFullTextUnavailable(prompt) : prompt }
+      })
     }
     let fellBack = false
     let linkFellBack = false

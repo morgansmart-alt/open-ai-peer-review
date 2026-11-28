@@ -3,7 +3,7 @@ import { officialCriteria } from "../../domain/officialCriteria.ts"
 import { normalizeZenodoRecord } from "../zenodo.ts"
 import { webChatModelId } from "./chatModel.ts"
 import { choosePaperTextUrl } from "./paperText.ts"
-import { classifyPublication, previewFromZenodo, resolvePublication, type FetchLike } from "./publication.ts"
+import { classifyPublication, normalizePublicationLink, previewFromZenodo, resolvePublication, type FetchLike } from "./publication.ts"
 import { storedLocalReview } from "./standalone.ts"
 import { submissionFromReview, validateWebChatSubmission } from "./submission.ts"
 
@@ -55,6 +55,9 @@ describe("publication links", () => {
     expect(classifyPublication("https://arxiv.org/pdf/2201.00001.pdf").kind).toBe("arxiv")
     expect(classifyPublication("https://example.com/paper.pdf").kind).toBe("pdf")
     expect(classifyPublication("hello").kind).toBe("unknown")
+    expect(normalizePublicationLink("https://https://zenodo.org/records/437445")).toBe("https://zenodo.org/records/437445")
+    expect(normalizePublicationLink("http://https://zenodo.org/records/437445")).toBe("https://zenodo.org/records/437445")
+    expect(classifyPublication("https://https://zenodo.org/records/437445")).toMatchObject({ kind: "zenodo", recordId: "437445" })
   })
 
   it("reads title, authors, DOI, and the PDF link from a Zenodo payload", () => {
