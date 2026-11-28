@@ -48,6 +48,9 @@ export interface WebChatPacket {
   criterionProfile?: string
   /** Public text page. When set, the first message is a short link instead of the whole paper. */
   textUrl?: string
+  /** Used to reject a fetched file that is a different paper. */
+  paperTitle?: string
+  paperAuthor?: string
 }
 
 /** Eight million characters is a guard against a runaway file, not a model context window. */
@@ -92,6 +95,8 @@ export function validatePacket(input: unknown): { ok: true; packet: WebChatPacke
         ? { criterionProfile: packet.criterionProfile.trim() }
         : {}),
       ...(typeof packet.textUrl === "string" && packet.textUrl.trim() ? { textUrl: packet.textUrl.trim() } : {}),
+      ...(typeof packet.paperTitle === "string" && packet.paperTitle.trim() ? { paperTitle: packet.paperTitle.trim() } : {}),
+      ...(typeof packet.paperAuthor === "string" && packet.paperAuthor.trim() ? { paperAuthor: packet.paperAuthor.trim() } : {}),
     },
   }
 }

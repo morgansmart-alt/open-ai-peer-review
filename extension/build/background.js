@@ -363,7 +363,9 @@
         instructions: packet.instructions,
         files,
         ...typeof packet.criterionProfile === "string" && packet.criterionProfile.trim() ? { criterionProfile: packet.criterionProfile.trim() } : {},
-        ...typeof packet.textUrl === "string" && packet.textUrl.trim() ? { textUrl: packet.textUrl.trim() } : {}
+        ...typeof packet.textUrl === "string" && packet.textUrl.trim() ? { textUrl: packet.textUrl.trim() } : {},
+        ...typeof packet.paperTitle === "string" && packet.paperTitle.trim() ? { paperTitle: packet.paperTitle.trim() } : {},
+        ...typeof packet.paperAuthor === "string" && packet.paperAuthor.trim() ? { paperAuthor: packet.paperAuthor.trim() } : {}
       }
     };
   }

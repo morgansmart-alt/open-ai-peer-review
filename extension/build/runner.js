@@ -2924,7 +2924,7 @@ ${sheet}`;
       laws: stringArray(physicsRaw?.laws, 8, 120),
       howAddressed: clip2(physicsRaw?.howAddressed, 800)
     };
-    if (physics.laws.length === 0) errors.push("physics.laws needs at least one named law or an explicit 'none used'.");
+    physics.laws = physics.laws.filter((law) => !/^(n\/a|na|none|none used|not applicable)$/i.test(law));
     const simulationRaw = isRecord3(input.simulation) ? input.simulation : null;
     const reported = simulationRaw ? Number(simulationRaw.reported) : NaN;
     const passed = simulationRaw ? Number(simulationRaw.passed) : NaN;
@@ -2949,13 +2949,12 @@ ${sheet}`;
     if (includeValue && valueEstimate.assumptions.length === 0) errors.push("valueEstimate.assumptions needs at least one assumption.");
     const goals = Array.isArray(input.goals) ? input.goals.flatMap((item) => {
       if (!isRecord3(item)) return [];
-      const level = clip2(item.level, 20);
-      if (!goalLevels.has(level)) return [];
+      const stated = clip2(item.level, 20);
+      const level = goalLevels.has(stated) ? stated : "none";
       const goalId = clip2(item.goalId, 80);
       if (!goalId) return [];
       return [{ goalId, level, note: clip2(item.note, 300) }];
     }) : [];
-    if (goals.length === 0) errors.push("goals must list a level for the documented public goals you considered.");
     return {
       ontologyClass: ontology.value,
       physics,
@@ -3611,6 +3610,34 @@ ${CAREFUL_REVIEW_ENDING}` : finalText;
       notes.push(`${provider.label} will receive ${turns} messages. A thread that long can hit the site's rate limit. The tab stays in front of you.`);
     }
     return notes.join(" ") || null;
+  }
+
+  // src/services/webChat/pdfPaper.ts
+  var PDF_BYTE_CAP = 25 * 1024 * 1024;
+
+  // src/services/webChat/publication.ts
+  var FETCHED_TEXT_MISMATCH = "Fetched text did not match the paper title; full text not used.";
+  var TITLE_STOP = /* @__PURE__ */ new Set(["with", "from", "that", "this", "into", "over", "under", "between", "about", "after", "before", "their", "using", "through"]);
+  function foldMatch(value) {
+    return value.normalize("NFD").replace(new RegExp("\\p{M}", "gu"), "").toLowerCase();
+  }
+  function matchWords(value) {
+    return [...new Set(foldMatch(value).split(/[^a-z0-9]+/).filter((word) => word.length >= 4 && !TITLE_STOP.has(word)))];
+  }
+  function textMatchesPaper(text, title, surname = "") {
+    const titleWords = matchWords(title);
+    const hay = new Set(matchWords(text));
+    const folded = foldMatch(text);
+    const nameParts = foldMatch(surname).split(/[^a-z]+/).filter((part) => part.length >= 4);
+    const authorHit = nameParts.length === 0 || nameParts.some((part) => hay.has(part) || folded.includes(part));
+    if (titleWords.length === 0) return authorHit;
+    const overlap = titleWords.filter((word) => hay.has(word)).length / titleWords.length;
+    if (!authorHit) return false;
+    return titleWords.length === 1 ? overlap === 1 : overlap >= 0.4;
+  }
+  function shouldUseFetchedText(text, title, surname = "") {
+    if (text.trim().length < 1500) return true;
+    return textMatchesPaper(text, title, surname);
   }
 
   // src/services/webChat/paperFit.ts
@@ -4919,8 +4946,21 @@ ${code}
           }
           activePacket = { ...activePacket, textUrl: page.url };
           fullTextMissing = page.unavailable;
-          fetchedPaper = page.body;
-          sourceChars = page.total;
+          const title = activePacket.paperTitle ?? "";
+          const author = activePacket.paperAuthor ?? "";
+          if (title && !shouldUseFetchedText(page.body, title, author)) {
+            fullTextMissing = true;
+            fetchedPaper = "";
+            sourceChars = 0;
+            notice = FETCHED_TEXT_MISMATCH;
+            const { textUrl: droppedUrl, ...withoutPage } = activePacket;
+            void droppedUrl;
+            activePacket = withoutPage;
+            hooks.onProgress?.(FETCHED_TEXT_MISMATCH);
+          } else {
+            fetchedPaper = page.body;
+            sourceChars = page.total;
+          }
         }
       }
       let noticeSent = 0;

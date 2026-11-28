@@ -59,5 +59,7 @@ export function buildWebChatPacket(options: {
     files,
     ...(options.criterionProfile ? { criterionProfile: options.criterionProfile } : {}),
     ...(textUrl && isPublicPaperTextUrl(textUrl) ? { textUrl } : {}),
+    ...(options.record.title.trim() ? { paperTitle: options.record.title.trim() } : {}),
+    ...(options.record.creators[0]?.name ? { paperAuthor: options.record.creators[0].name } : {}),
   }
 }

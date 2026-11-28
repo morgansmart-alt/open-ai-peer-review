@@ -244,7 +244,7 @@ function readV2(input: Record<string, unknown>, errors: string[], includeValue: 
     laws: stringArray(physicsRaw?.laws, 8, 120),
     howAddressed: clip(physicsRaw?.howAddressed, 800),
   }
-  if (physics.laws.length === 0) errors.push("physics.laws needs at least one named law or an explicit 'none used'.")
+  physics.laws = physics.laws.filter((law) => !/^(n\/a|na|none|none used|not applicable)$/i.test(law))
   const simulationRaw = isRecord(input.simulation) ? input.simulation : null
   const reported = simulationRaw ? Number(simulationRaw.reported) : NaN
   const passed = simulationRaw ? Number(simulationRaw.passed) : NaN
@@ -270,14 +270,13 @@ function readV2(input: Record<string, unknown>, errors: string[], includeValue: 
   const goals: GoalAlignment[] = Array.isArray(input.goals)
     ? input.goals.flatMap((item) => {
         if (!isRecord(item)) return []
-        const level = clip(item.level, 20)
-        if (!goalLevels.has(level)) return []
+        const stated = clip(item.level, 20)
+        const level = goalLevels.has(stated) ? stated : "none"
         const goalId = clip(item.goalId, 80)
         if (!goalId) return []
         return [{ goalId, level: level as GoalLevel, note: clip(item.note, 300) }]
       })
     : []
-  if (goals.length === 0) errors.push("goals must list a level for the documented public goals you considered.")
   return {
     ontologyClass: ontology.value,
     physics,
