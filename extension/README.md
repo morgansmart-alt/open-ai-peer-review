@@ -6,6 +6,7 @@ If you do not use a terminal, follow [INSTALL.md](../INSTALL.md). The file to do
 
 ## Changelog
 
+- 0.2.33: Open Research Europe uses the journal's own XML, not an opaque download id. Fetched text that does not match the title is dropped and the abstract is used. An empty physics.laws list is accepted.
 - 0.2.32: Paper parts wait for a new OK and retry once. Open Research Europe DOIs can be looked up. A figure-only PDF warns before Send. The link field is not rebuilt while a review is running.
 - 0.2.31: The blind prose is kept when X splits it from the score sheet. A long paper is sent in parts instead of stopping at 20,000 characters, and a cut section is named so it is not held against the authors.
 - 0.2.30: The full-text line counts what the reviewer received, and says when that text was capped. Send selected posts the global goals bonus with the score. That bonus is not part of the overall. The row then says Published.

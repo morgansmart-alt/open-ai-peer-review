@@ -1,5 +1,6 @@
 import type { ProviderAdapter } from "../../../extension/adapters/index.ts"
 import { planDelivery, type DeliveryStep } from "./deliver.ts"
+import { FETCHED_TEXT_MISMATCH, shouldUseFetchedText } from "./publication.ts"
 import { GROK_X_MESSAGE_CHARS, PART_REPLY_TIMEOUT_MS, paperDeliveryPlan } from "./paperFit.ts"
 import {
   choosePaperTextPage,
@@ -484,8 +485,21 @@ export async function runTurn(doc: Document, provider: ProviderAdapter, packet: 
         }
         activePacket = { ...activePacket, textUrl: page.url }
         fullTextMissing = page.unavailable
-        fetchedPaper = page.body
-        sourceChars = page.total
+        const title = activePacket.paperTitle ?? ""
+        const author = activePacket.paperAuthor ?? ""
+        if (title && !shouldUseFetchedText(page.body, title, author)) {
+          fullTextMissing = true
+          fetchedPaper = ""
+          sourceChars = 0
+          notice = FETCHED_TEXT_MISMATCH
+          const { textUrl: droppedUrl, ...withoutPage } = activePacket
+          void droppedUrl
+          activePacket = withoutPage
+          hooks.onProgress?.(FETCHED_TEXT_MISMATCH)
+        } else {
+          fetchedPaper = page.body
+          sourceChars = page.total
+        }
       }
     }
     let noticeSent = 0

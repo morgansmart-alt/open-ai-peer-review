@@ -2860,7 +2860,7 @@ ${text2.slice(end + 1)}`;
       laws: stringArray(physicsRaw?.laws, 8, 120),
       howAddressed: clip2(physicsRaw?.howAddressed, 800)
     };
-    if (physics.laws.length === 0) errors.push("physics.laws needs at least one named law or an explicit 'none used'.");
+    physics.laws = physics.laws.filter((law) => !/^(n\/a|na|none|none used|not applicable)$/i.test(law));
     const simulationRaw = isRecord3(input.simulation) ? input.simulation : null;
     const reported = simulationRaw ? Number(simulationRaw.reported) : NaN;
     const passed = simulationRaw ? Number(simulationRaw.passed) : NaN;
@@ -2885,13 +2885,12 @@ ${text2.slice(end + 1)}`;
     if (includeValue && valueEstimate.assumptions.length === 0) errors.push("valueEstimate.assumptions needs at least one assumption.");
     const goals = Array.isArray(input.goals) ? input.goals.flatMap((item) => {
       if (!isRecord3(item)) return [];
-      const level = clip2(item.level, 20);
-      if (!goalLevels.has(level)) return [];
+      const stated = clip2(item.level, 20);
+      const level = goalLevels.has(stated) ? stated : "none";
       const goalId = clip2(item.goalId, 80);
       if (!goalId) return [];
       return [{ goalId, level, note: clip2(item.note, 300) }];
     }) : [];
-    if (goals.length === 0) errors.push("goals must list a level for the documented public goals you considered.");
     return {
       ontologyClass: ontology.value,
       physics,
@@ -3477,7 +3476,9 @@ ${text2.slice(end + 1)}`;
       ),
       files,
       ...options.criterionProfile ? { criterionProfile: options.criterionProfile } : {},
-      ...textUrl && isPublicPaperTextUrl(textUrl) ? { textUrl } : {}
+      ...textUrl && isPublicPaperTextUrl(textUrl) ? { textUrl } : {},
+      ...options.record.title.trim() ? { paperTitle: options.record.title.trim() } : {},
+      ...options.record.creators[0]?.name ? { paperAuthor: options.record.creators[0].name } : {}
     };
   }
 
@@ -3904,6 +3905,29 @@ ${text2.slice(end + 1)}`;
   }
 
   // src/services/webChat/publication.ts
+  var FETCHED_TEXT_MISMATCH = "Fetched text did not match the paper title; full text not used.";
+  var TITLE_STOP = /* @__PURE__ */ new Set(["with", "from", "that", "this", "into", "over", "under", "between", "about", "after", "before", "their", "using", "through"]);
+  function foldMatch(value) {
+    return value.normalize("NFD").replace(new RegExp("\\p{M}", "gu"), "").toLowerCase();
+  }
+  function matchWords(value) {
+    return [...new Set(foldMatch(value).split(/[^a-z0-9]+/).filter((word) => word.length >= 4 && !TITLE_STOP.has(word)))];
+  }
+  function textMatchesPaper(text2, title, surname = "") {
+    const titleWords = matchWords(title);
+    const hay = new Set(matchWords(text2));
+    const folded = foldMatch(text2);
+    const nameParts = foldMatch(surname).split(/[^a-z]+/).filter((part) => part.length >= 4);
+    const authorHit = nameParts.length === 0 || nameParts.some((part) => hay.has(part) || folded.includes(part));
+    if (titleWords.length === 0) return authorHit;
+    const overlap = titleWords.filter((word) => hay.has(word)).length / titleWords.length;
+    if (!authorHit) return false;
+    return titleWords.length === 1 ? overlap === 1 : overlap >= 0.4;
+  }
+  function shouldUseFetchedText(text2, title, surname = "") {
+    if (text2.trim().length < 1500) return true;
+    return textMatchesPaper(text2, title, surname);
+  }
   function normalizePublicationLink(value) {
     return value.trim().replace(/^(?:https?:\/\/)+/i, "https://");
   }
@@ -3989,14 +4013,29 @@ ${text2.slice(end + 1)}`;
     }
     return openAccessPreview(ref.doi, fetcher);
   }
+  function officialJournalUrl(url) {
+    return /open-research-europe\.ec\.europa\.eu/i.test(url);
+  }
+  function openResearchLinks(doi, work) {
+    if (!/openreseurope|10\.12688\//i.test(doi)) return null;
+    const links = work.link ?? [];
+    const xml = links.find((item) => officialJournalUrl(item.URL ?? "") && /xml|jats/i.test(item["content-type"] ?? ""));
+    const pdf = links.find((item) => officialJournalUrl(item.URL ?? "") && /pdf/i.test(item["content-type"] ?? ""));
+    return { xmlUrl: xml?.URL ?? "", pdfUrl: pdf?.URL ?? "" };
+  }
+  function textFromArticleXml(xml) {
+    return xml.replace(/<back[\s\S]*<\/back>/gi, " ").replace(/<ref-list[\s\S]*<\/ref-list>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code))).replace(/\s+/g, " ").trim();
+  }
   function previewFromCrossref(doi, work) {
     const title = work.title?.[0]?.replace(/\s+/g, " ").trim() || doi;
     const authors = crossrefAuthors(work).split("; ").filter(Boolean);
     const licence = openLicenceFromCrossref(work);
-    const pdf = isOpenLicence(licence) ? pdfLinkFromCrossref(work) : "";
+    const ore = openResearchLinks(doi, work);
+    const pdf = ore ? ore.pdfUrl : isOpenLicence(licence) ? pdfLinkFromCrossref(work) : "";
+    const xmlUrl = ore?.xmlUrl ?? "";
     const abstractText = stripHtml(work.abstract ?? "").replace(/\s+/g, " ").trim();
     const url = work.URL || `https://doi.org/${doi}`;
-    if (!pdf && !abstractText) {
+    if (!pdf && !xmlUrl && !abstractText) {
       throw new Error("That DOI has no open PDF and no abstract AIR can read.");
     }
     return {
@@ -4005,9 +4044,10 @@ ${text2.slice(end + 1)}`;
       doi,
       url,
       pdfUrl: pdf,
-      filename: pdf ? "paper.pdf" : "abstract.txt",
+      ...xmlUrl ? { xmlUrl } : {},
+      filename: xmlUrl ? "article.xml" : pdf ? "paper.pdf" : "abstract.txt",
       ...abstractText ? { abstractText } : {},
-      ...!pdf ? { note: "Full text was not found. The review will use the abstract only." } : {}
+      ...!pdf && !xmlUrl ? { note: "Full text was not found. The review will use the abstract only." } : {}
     };
   }
   async function openAccessPreview(doi, fetcher) {
@@ -4706,7 +4746,26 @@ ${JSON.stringify(report)}`),
       paint();
     }
   }
+  function surnameOf(author) {
+    const trimmed = author.trim();
+    if (trimmed.includes(",")) return trimmed.split(",")[0]?.trim() ?? trimmed;
+    return trimmed.split(/\s+/).pop() ?? trimmed;
+  }
+  function acceptedText(text2, preview) {
+    if (shouldUseFetchedText(text2, preview.title, surnameOf(preview.authors[0] ?? ""))) {
+      return { filename: preview.xmlUrl ? "article.txt" : preview.filename || "paper.pdf", text: text2, note: preview.note };
+    }
+    if (preview.abstractText?.trim()) return { filename: "abstract.txt", text: preview.abstractText, note: FETCHED_TEXT_MISMATCH };
+    return null;
+  }
   async function paperFromPublication(preview) {
+    if (preview.xmlUrl) {
+      const response2 = await fetch(preview.xmlUrl);
+      if (response2.ok) {
+        const accepted2 = acceptedText(textFromArticleXml(await response2.text()), preview);
+        if (accepted2) return accepted2;
+      }
+    }
     if (!preview.pdfUrl) {
       if (preview.abstractText?.trim()) return { filename: preview.filename || "abstract.txt", text: preview.abstractText, note: preview.note };
       throw new Error(preview.note || "The paper file could not be downloaded. You can save the PDF and choose the file instead.");
@@ -4719,9 +4778,15 @@ ${JSON.stringify(report)}`),
     const type = response.headers.get("content-type") || "";
     if (/\.pdf$/i.test(preview.filename) || type.includes("pdf")) {
       const bytes = await response.arrayBuffer();
-      return readPdfBytes(preview.filename, bytes);
+      const extracted = await readPdfBytes(preview.filename, bytes);
+      const accepted2 = acceptedText(extracted.text, preview);
+      if (accepted2) return { ...accepted2, note: [extracted.note, accepted2.note].filter(Boolean).join(" ") || void 0 };
+      throw new Error(FETCHED_TEXT_MISMATCH);
     }
-    return { filename: preview.filename, text: await response.text() };
+    const plain = await response.text();
+    const accepted = acceptedText(plain, preview);
+    if (accepted) return accepted;
+    throw new Error(FETCHED_TEXT_MISMATCH);
   }
   async function readPdfBytes(filename, bytes) {
     const pdfjs = await import(chrome.runtime.getURL("vendor/pdf.min.mjs"));
@@ -4755,7 +4820,7 @@ ${JSON.stringify(report)}`),
         criterionProfile: profileId,
         filename: paper.filename,
         text: paper.text,
-        source: publication?.source ?? null
+        source: publication?.source ?? (publication ? { ...localPaperRecord(paper.filename), doi: publication.doi || "local-file", title: publication.title, creators: publication.authors.map((name) => ({ name })), htmlUrl: publication.url, description: publication.abstractText || "" } : null)
       });
       status = paper.note ? `${paper.note} Opening ${provider.label}. Stay on that tab.` : `Opening ${provider.label}. Stay on that tab.`;
       paint();

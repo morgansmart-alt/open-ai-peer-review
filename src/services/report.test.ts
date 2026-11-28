@@ -145,6 +145,10 @@ describe("validateReport", () => {
     const keyed = parseModelJson(JSON.stringify({ ...base, scores: Object.fromEntries(scores.map((score) => [score.criterionId, score])) }))
     expect(keyed.ok).toBe(true)
     if (keyed.ok) expect(validateReport(keyed.value, officialCriteria).ok).toBe(true)
+    const emptyLaws = validateReport({ ...base, scores, physics: { classification: "NOT_APPLICABLE", laws: [], howAddressed: "This is not a physics paper." }, goals: [] }, officialCriteria)
+    expect(emptyLaws.ok).toBe(true)
+    const namedNone = validateReport({ ...base, scores, physics: { classification: "NOT_APPLICABLE", laws: ["n/a"], howAddressed: "This is not a physics paper." }, goals: [{ goalId: "clean-water" }] }, officialCriteria)
+    expect(namedNone.ok).toBe(true)
     const { scores: dropped, ...rest } = { ...base, scores }
     void dropped
     const top = { ...rest } as Record<string, unknown>

@@ -8,12 +8,13 @@ import { EXTENSION_SOURCE, PAGE_SOURCE, PROTOCOL_VERSION } from "../src/services
 import { globalGoalsSendNote, patchReviewProgress, recordStep, renderReviewApp, type ReviewModel, type StepLogEntry } from "../src/services/webChat/reviewView.ts"
 import { defendedFromReply } from "../src/services/webChat/defence.ts"
 import { defenceRoundCounts, runSummary } from "../src/services/webChat/runSummary.ts"
-import { normalizePublicationLink, resolvePublication, type PublicationPreview } from "../src/services/webChat/publication.ts"
+import { FETCHED_TEXT_MISMATCH, normalizePublicationLink, resolvePublication, shouldUseFetchedText, textFromArticleXml, type PublicationPreview } from "../src/services/webChat/publication.ts"
 import { reviewAnalysis } from "../src/services/jsonText.ts"
 import { publishedStatus, submissionFromReview } from "../src/services/webChat/submission.ts"
 import { postWebChatSubmission } from "../src/services/webChat/submit.ts"
 import {
   appendResult,
+  localPaperRecord,
   THIN_EXTRACT_WARNING,
   thinExtract,
   exportBundle,
@@ -245,7 +246,28 @@ async function lookup(): Promise<void> {
   }
 }
 
+function surnameOf(author: string): string {
+  const trimmed = author.trim()
+  if (trimmed.includes(",")) return trimmed.split(",")[0]?.trim() ?? trimmed
+  return trimmed.split(/\s+/).pop() ?? trimmed
+}
+
+function acceptedText(text: string, preview: PublicationPreview): { filename: string; text: string; note?: string } | null {
+  if (shouldUseFetchedText(text, preview.title, surnameOf(preview.authors[0] ?? ""))) {
+    return { filename: preview.xmlUrl ? "article.txt" : preview.filename || "paper.pdf", text, note: preview.note }
+  }
+  if (preview.abstractText?.trim()) return { filename: "abstract.txt", text: preview.abstractText, note: FETCHED_TEXT_MISMATCH }
+  return null
+}
+
 async function paperFromPublication(preview: PublicationPreview): Promise<{ filename: string; text: string; note?: string }> {
+  if (preview.xmlUrl) {
+    const response = await fetch(preview.xmlUrl)
+    if (response.ok) {
+      const accepted = acceptedText(textFromArticleXml(await response.text()), preview)
+      if (accepted) return accepted
+    }
+  }
   if (!preview.pdfUrl) {
     if (preview.abstractText?.trim()) return { filename: preview.filename || "abstract.txt", text: preview.abstractText, note: preview.note }
     throw new Error(preview.note || "The paper file could not be downloaded. You can save the PDF and choose the file instead.")
@@ -258,9 +280,15 @@ async function paperFromPublication(preview: PublicationPreview): Promise<{ file
   const type = response.headers.get("content-type") || ""
   if (/\.pdf$/i.test(preview.filename) || type.includes("pdf")) {
     const bytes = await response.arrayBuffer()
-    return readPdfBytes(preview.filename, bytes)
+    const extracted = await readPdfBytes(preview.filename, bytes)
+    const accepted = acceptedText(extracted.text, preview)
+    if (accepted) return { ...accepted, note: [extracted.note, accepted.note].filter(Boolean).join(" ") || undefined }
+    throw new Error(FETCHED_TEXT_MISMATCH)
   }
-  return { filename: preview.filename, text: await response.text() }
+  const plain = await response.text()
+  const accepted = acceptedText(plain, preview)
+  if (accepted) return accepted
+  throw new Error(FETCHED_TEXT_MISMATCH)
 }
 
 async function readPdfBytes(filename: string, bytes: ArrayBuffer): Promise<{ filename: string; text: string; note?: string }> {
@@ -299,7 +327,7 @@ async function run(): Promise<void> {
       criterionProfile: profileId,
       filename: paper.filename,
       text: paper.text,
-      source: publication?.source ?? null,
+      source: publication?.source ?? (publication ? { ...localPaperRecord(paper.filename), doi: publication.doi || "local-file", title: publication.title, creators: publication.authors.map((name) => ({ name })), htmlUrl: publication.url, description: publication.abstractText || "" } : null),
     })
     status = paper.note ? `${paper.note} Opening ${provider.label}. Stay on that tab.` : `Opening ${provider.label}. Stay on that tab.`
     paint()

@@ -10,10 +10,43 @@ export interface PublicationPreview {
   filename: string
   /** Full public record when the lookup was Zenodo. The prompt uses its ids. */
   source?: ZenodoRecord
+  /** Journal XML for an Open Research Europe / F1000 article. Preferred over an opaque download id. */
+  xmlUrl?: string
   /** Used when the DOI has no open PDF. The review can still run on this text. */
   abstractText?: string
   /** Shown in the panel. An abstract-only lookup says the full text was not found. */
   note?: string
+}
+
+export const FETCHED_TEXT_MISMATCH = "Fetched text did not match the paper title; full text not used."
+
+const TITLE_STOP = new Set(["with", "from", "that", "this", "into", "over", "under", "between", "about", "after", "before", "their", "using", "through"])
+
+function foldMatch(value: string): string {
+  return value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
+}
+
+function matchWords(value: string): string[] {
+  return [...new Set(foldMatch(value).split(/[^a-z0-9]+/).filter((word) => word.length >= 4 && !TITLE_STOP.has(word)))]
+}
+
+/** True when the fetched text shares the title's words, and the first author's surname when we know it. */
+export function textMatchesPaper(text: string, title: string, surname = ""): boolean {
+  const titleWords = matchWords(title)
+  const hay = new Set(matchWords(text))
+  const folded = foldMatch(text)
+  const nameParts = foldMatch(surname).split(/[^a-z]+/).filter((part) => part.length >= 4)
+  const authorHit = nameParts.length === 0 || nameParts.some((part) => hay.has(part) || folded.includes(part))
+  if (titleWords.length === 0) return authorHit
+  const overlap = titleWords.filter((word) => hay.has(word)).length / titleWords.length
+  if (!authorHit) return false
+  return titleWords.length === 1 ? overlap === 1 : overlap >= 0.4
+}
+
+/** A short extract is not evidence of the wrong paper. A long one must share the title. */
+export function shouldUseFetchedText(text: string, title: string, surname = ""): boolean {
+  if (text.trim().length < 1_500) return true
+  return textMatchesPaper(text, title, surname)
 }
 
 export type PublicationRef =
@@ -128,14 +161,42 @@ export async function resolvePublication(input: string, fetcher: FetchLike): Pro
   return openAccessPreview(ref.doi, fetcher)
 }
 
+function officialJournalUrl(url: string): boolean {
+  return /open-research-europe\.ec\.europa\.eu/i.test(url)
+}
+
+/** Open Research Europe keeps the article XML on its own site. Opaque ore.eu download ids are not used. */
+export function openResearchLinks(doi: string, work: CrossrefWork): { xmlUrl: string; pdfUrl: string } | null {
+  if (!/openreseurope|10\.12688\//i.test(doi)) return null
+  const links = work.link ?? []
+  const xml = links.find((item) => officialJournalUrl(item.URL ?? "") && /xml|jats/i.test(item["content-type"] ?? ""))
+  const pdf = links.find((item) => officialJournalUrl(item.URL ?? "") && /pdf/i.test(item["content-type"] ?? ""))
+  return { xmlUrl: xml?.URL ?? "", pdfUrl: pdf?.URL ?? "" }
+}
+
+export function textFromArticleXml(xml: string): string {
+  return xml
+    .replace(/<back[\s\S]*<\/back>/gi, " ")
+    .replace(/<ref-list[\s\S]*<\/ref-list>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(Number(code)))
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
 export function previewFromCrossref(doi: string, work: CrossrefWork & { abstract?: string; URL?: string }): PublicationPreview {
   const title = work.title?.[0]?.replace(/\s+/g, " ").trim() || doi
   const authors = crossrefAuthors(work).split("; ").filter(Boolean)
   const licence = openLicenceFromCrossref(work)
-  const pdf = isOpenLicence(licence) ? pdfLinkFromCrossref(work) : ""
+  const ore = openResearchLinks(doi, work)
+  const pdf = ore ? ore.pdfUrl : isOpenLicence(licence) ? pdfLinkFromCrossref(work) : ""
+  const xmlUrl = ore?.xmlUrl ?? ""
   const abstractText = stripHtml(work.abstract ?? "").replace(/\s+/g, " ").trim()
   const url = work.URL || `https://doi.org/${doi}`
-  if (!pdf && !abstractText) {
+  if (!pdf && !xmlUrl && !abstractText) {
     throw new Error("That DOI has no open PDF and no abstract AIR can read.")
   }
   return {
@@ -144,9 +205,10 @@ export function previewFromCrossref(doi: string, work: CrossrefWork & { abstract
     doi,
     url,
     pdfUrl: pdf,
-    filename: pdf ? "paper.pdf" : "abstract.txt",
+    ...(xmlUrl ? { xmlUrl } : {}),
+    filename: xmlUrl ? "article.xml" : pdf ? "paper.pdf" : "abstract.txt",
     ...(abstractText ? { abstractText } : {}),
-    ...(!pdf ? { note: "Full text was not found. The review will use the abstract only." } : {}),
+    ...(!pdf && !xmlUrl ? { note: "Full text was not found. The review will use the abstract only." } : {}),
   }
 }
 
