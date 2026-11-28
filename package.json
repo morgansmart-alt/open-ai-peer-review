@@ -12,7 +12,8 @@
     "test:e2e": "playwright test",
     "check:zenodo": "node scripts/check-zenodo.mjs",
     "build:extension": "node scripts/build-extension.mjs",
-    "vendor:submit": "node scripts/vendor-submit-web-chat.mjs"
+    "vendor:submit": "node scripts/vendor-submit-web-chat.mjs",
+    "bundle:paper-text": "node scripts/bundle-paper-text.mjs"
   },
   "dependencies": {
     "@mlc-ai/web-llm": "^0.2.89",

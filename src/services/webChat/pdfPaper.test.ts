@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
-import type { ZenodoRecord } from "../zenodo.ts"
+import { isOpenFiles, normalizeZenodoRecord, type ZenodoRecord } from "../zenodo.ts"
 import { extractPdfText } from "./pdfExtract.ts"
 import {
   PDF_BYTE_CAP,
@@ -125,5 +125,40 @@ describe("open-licence PDF text", () => {
     const missing = formatDoiPaper({ doi: "10.1000/example", title: "Open note", authors: "Ada Lovelace", text: "", unavailable: "The PDF could not be downloaded." })
     expect(missing).toContain("DOI: https://doi.org/10.1000/example")
     expect(missing).toContain("Full text unavailable. The PDF could not be downloaded.")
+  })
+
+  it("keeps the PDF body for a normalized record whose files access is public", async () => {
+    const record = normalizeZenodoRecord({
+      id: 437445,
+      conceptrecid: "437445",
+      doi: "10.5281/zenodo.437445",
+      metadata: {
+        title: "CO2 impact of a BIPV active interface",
+        publication_date: "2019-06-01",
+        description: "<p>An outline of the study.</p>",
+        access_right: "open",
+        license: { id: "cc-by-4.0" },
+        creators: [{ name: "HSLU" }],
+        resource_type: { title: "Publication", type: "publication" },
+      },
+      files: [
+        {
+          key: "HSLU-CO2-impact-BIPV-active-interface.pdf",
+          size: 3_300_000,
+          links: { self: "https://zenodo.org/api/records/437445/files/HSLU-CO2-impact-BIPV-active-interface.pdf/content" },
+        },
+      ],
+      links: { self_html: "https://zenodo.org/records/437445" },
+    })
+    expect(record.access.files).toBe("public")
+    expect(record.license).toBe("cc-by-4.0")
+    expect(isOpenFiles(record.access.files)).toBe(true)
+    const gathered = await documentsForPaper(record, async () => ({ ok: true, bytes: new Uint8Array(fixture) }), extractPdfText)
+    expect(gathered.documents[0]?.filename).toBe("HSLU-CO2-impact-BIPV-active-interface.pdf")
+    const page = formatPaperText(record, gathered.documents, gathered.unavailable)
+    expect(page).toContain("AIR fixture yield 1.8 litres")
+    expect(page).toContain("Zenodo record: https://zenodo.org/records/437445")
+    expect(page).not.toContain("are not public")
+    expect(page).not.toContain("Full text unavailable")
   })
 })

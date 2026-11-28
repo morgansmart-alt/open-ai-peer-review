@@ -1,6 +1,5 @@
 import { CAREFUL_REVIEW_ENDING } from "../prompts.ts"
-import type { ZenodoRecord } from "../zenodo.ts"
-import { stripHtml } from "../zenodo.ts"
+import { isOpenFiles, stripHtml, type ZenodoRecord } from "../zenodo.ts"
 
 /** The phrase a metadata-only page and the reviewer prompt share. */
 export const FULL_TEXT_UNAVAILABLE = "Full text unavailable"
@@ -124,7 +123,7 @@ export function formatPaperText(
   const authors = record.creators.map((creator) => creator.name.trim()).filter(Boolean)
   const versionId = paperTextRecordId(record)
   const versionUrl = versionId ? `https://zenodo.org/records/${versionId}` : ""
-  const filesOpen = record.access.files === "open" || record.access.files === ""
+  const filesOpen = isOpenFiles(record.access.files)
   const extracted = filesOpen
     ? documents
         .filter((document) => document.text.trim())

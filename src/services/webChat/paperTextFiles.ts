@@ -1,3 +1,5 @@
+import { isOpenFiles } from "../zenodo.ts"
+
 const PRIVATE_CHAT =
   /https?:\/\/(?:www\.)?(?:share\.google\/aimode\/[^\s)"']+|chatgpt\.com\/share\/[^\s)"']+|chat\.openai\.com\/share\/[^\s)"']+|claude\.ai\/share\/[^\s)"']+|grok\.com\/share\/[^\s)"']+)/gi
 
@@ -40,18 +42,13 @@ export function mergePaperIds(board: readonly string[], curated: readonly string
   return [...ids].sort()
 }
 
-export function isOpenFileAccess(access: string): boolean {
-  const value = access.trim().toLowerCase()
-  return value === "" || value === "open" || value === "public"
-}
-
 /** Open text and extracted PDF bodies, clipped to the static-file cap. Closed files contribute nothing. */
 export function documentsForOpenRecord(
   accessFiles: string,
   files: readonly { key: string; text: string }[],
   cap: number,
 ): { filename: string; text: string }[] {
-  if (!isOpenFileAccess(accessFiles)) return []
+  if (!isOpenFiles(accessFiles)) return []
   const documents: { filename: string; text: string }[] = []
   let used = 0
   for (const file of files) {

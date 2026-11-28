@@ -1,6 +1,5 @@
-import type { ZenodoFile, ZenodoRecord } from "../zenodo.ts"
+import { isOpenFiles, type ZenodoFile, type ZenodoRecord } from "../zenodo.ts"
 import { FULL_TEXT_UNAVAILABLE } from "./paperText.ts"
-import { isOpenFileAccess } from "./paperTextFiles.ts"
 
 export { FULL_TEXT_UNAVAILABLE }
 
@@ -62,7 +61,7 @@ export async function documentsForPaper(
   read: (url: string) => Promise<PaperRead | null>,
   extract: (bytes: Uint8Array) => Promise<{ text: string; truncated: boolean }>,
 ): Promise<{ documents: { filename: string; text: string }[]; unavailable: string }> {
-  if (!isOpenFileAccess(record.access.files)) return { documents: [], unavailable: "" }
+  if (!isOpenFiles(record.access.files)) return { documents: [], unavailable: "" }
   if (!isOpenLicence(record.license)) {
     return { documents: [], unavailable: "The licence is not an open licence AIR copies (cc-by or cc0)." }
   }

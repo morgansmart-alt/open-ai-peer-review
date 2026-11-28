@@ -8,7 +8,8 @@ import { planDelivery } from "./deliver.ts"
 import { buildWebChatPacket } from "./packet.ts"
 import { chooseReviewJson, parseModelJson, settleChatJson } from "../jsonText.ts"
 import curatedIds from "../../../paper-text-ids.json" with { type: "json" }
-import { collectPaperIds, documentsForOpenRecord, isOpenFileAccess, mergePaperIds, renderStaticPaperText } from "./paperTextFiles.ts"
+import { isOpenFiles } from "../zenodo.ts"
+import { collectPaperIds, documentsForOpenRecord, mergePaperIds, renderStaticPaperText } from "./paperTextFiles.ts"
 import {
   choosePaperTextUrl,
   couldNotReadPaper,
@@ -243,8 +244,10 @@ describe("json repair and the text page check", () => {
     ])).toEqual(["18916931", "22826", "611843"])
     expect(curatedIds).toEqual(["18316375", "3554320", "17651481", "18706746", "19508474"])
     expect(mergePaperIds(["22826", "sample-fog"], curatedIds)).toEqual(["17651481", "18316375", "18706746", "19508474", "22826", "3554320"])
-    expect(isOpenFileAccess("open")).toBe(true)
-    expect(isOpenFileAccess("restricted")).toBe(false)
+    expect(isOpenFiles("open")).toBe(true)
+    expect(isOpenFiles("public")).toBe(true)
+    expect(isOpenFiles("")).toBe(true)
+    expect(isOpenFiles("restricted")).toBe(false)
     expect(documentsForOpenRecord("open", [{ key: "paper.pdf", text: "extracted page from the open pdf" }], 18)).toEqual([
       { filename: "paper.pdf", text: "extracted page fro" },
     ])
